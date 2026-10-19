@@ -18,6 +18,7 @@
 		"pi:verify": "node scripts/pi-source.mjs verify",
 		"test": "node --test test/*.test.mjs",
 		"test:native": "node scripts/native-smoke.mjs",
+		"probe:native-hang": "node scripts/native-hang-probe.mjs",
 		"smoke:offline": "node apps/desktop/runtime.mjs --offline",
 		"smoke:live": "node apps/desktop/runtime.mjs --live",
 		"typecheck": "tsc --noEmit"

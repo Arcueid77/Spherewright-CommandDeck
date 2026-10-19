@@ -73,7 +73,19 @@ internal sealed class Fixture : Form
         Shown += (_, _) =>
         {
             Program.Send(new { type = "ready", pid = Environment.ProcessId, hwnd = Handle.ToInt64().ToString() });
-            _ = Task.Run(() => { while (Console.ReadLine() is { } line) if (line == "close") BeginInvoke(Close); });
+            _ = Task.Run(() =>
+            {
+                while (Console.ReadLine() is { } line)
+                {
+                    if (line == "close") BeginInvoke(Close);
+                    else if (line == "hang-ui") BeginInvoke(() =>
+                    {
+                        Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-start" });
+                        Thread.Sleep(2000); // Bounded hang injection only in our disposable UI fixture.
+                        Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-end" });
+                    });
+                }
+            });
         };
         timer.Tick += (_, _) => Program.Send(new { type = "fixture", clicks, keys, parent = Win.GetParent(Handle).ToInt64().ToString(), visible = Win.IsWindowVisible(Handle) });
         timer.Start();

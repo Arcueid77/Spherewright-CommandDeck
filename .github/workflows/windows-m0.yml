@@ -30,6 +30,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run test:native
+      - run: npm run probe:native-hang
       - run: node_modules/.bin/electron.cmd . --smoke
       - uses: actions/upload-artifact@v4
         if: always()
@@ -37,5 +38,6 @@ jobs:
           name: synthetic-m0-results
           path: |
             .local/native-smoke.json
+            .local/native-hang-probe.json
             .local/desktop-smoke.json
           if-no-files-found: ignore

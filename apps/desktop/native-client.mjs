@@ -7,11 +7,11 @@ export const nativeExecutable = fileURLToPath(
 );
 
 export class NativeClient extends EventEmitter {
-	constructor(args = []) {
+	constructor(args = [], executable = nativeExecutable) {
 		super();
 		this.sequence = 0;
 		this.pending = new Map();
-		this.child = spawn(nativeExecutable, args, {
+		this.child = spawn(executable, args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsHide: true,
 		});
@@ -43,6 +43,8 @@ export class NativeClient extends EventEmitter {
 			try {
 				const message = JSON.parse(line);
 				if (message.type === "ready") this.emit("ready", message);
+				if (message.type === "fixture-diagnostic")
+					this.emit("diagnostic", message);
 				if (message.type === "fixture") {
 					this.latest = message.state ?? message;
 					this.emit("state", this.latest);

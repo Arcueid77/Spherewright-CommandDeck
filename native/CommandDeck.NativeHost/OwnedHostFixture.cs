@@ -87,6 +87,7 @@ internal sealed class OwnedHostFixture : Form
                 "status" => Status(),
                 "exercise-input" => ExerciseFixtureInput(),
                 "exercise-backpressure" => ExerciseFixtureBackpressure(),
+                "exercise-host-resize" => ExerciseHostResize(),
                 _ => throw new InvalidOperationException("UNKNOWN_FIXTURE_METHOD")
             };
             Program.Send(new { id, ok = true, result });
@@ -179,6 +180,11 @@ internal sealed class OwnedHostFixture : Form
         string padding = new('x', 8192);
         for (int i = 0; i < 512; i++) Program.Send(new { type = "synthetic-telemetry", padding });
         return new { processedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), fixtureOnly = true };
+    }
+    private object ExerciseHostResize()
+    {
+        ClientSize = new Size(ClientSize.Width - 1, ClientSize.Height - 1);
+        return new { fixtureOnly = true };
     }
     private sealed record UiBinding(nint Hwnd, int Pid, long Started, long Style, long ExStyle, Win.Rect Rect);
     private sealed class InputViewport : Panel
