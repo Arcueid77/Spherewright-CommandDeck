@@ -1,0 +1,37 @@
+{
+	"name": "spherewright-commanddeck",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"main": "apps/desktop/main.mjs",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"start": "electron .",
+		"build:renderer": "vite build",
+		"build:native": "dotnet build native/CommandDeck.NativeHost/CommandDeck.NativeHost.csproj -c Release --nologo -o artifacts/native",
+		"build": "npm run build:native && npm run build:renderer",
+		"pi:install": "node scripts/pi-source.mjs install",
+		"pi:hydrate": "node scripts/pi-source.mjs hydrate",
+		"pi:build": "node scripts/pi-source.mjs build",
+		"pi:verify": "node scripts/pi-source.mjs verify",
+		"test": "node --test test/*.test.mjs",
+		"test:native": "node scripts/native-smoke.mjs",
+		"smoke:offline": "node apps/desktop/runtime.mjs --offline",
+		"smoke:live": "node apps/desktop/runtime.mjs --live",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"dockview-react": "8.6.0",
+		"react": "19.3.1",
+		"react-dom": "19.3.1"
+	},
+	"devDependencies": {
+		"electron": "44.9.0",
+		"vite": "8.3.4",
+		"typescript": "7.0.2",
+		"@types/react": "19.3.0",
+		"@types/react-dom": "19.3.0"
+	}
+}

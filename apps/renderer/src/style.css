@@ -1,0 +1,265 @@
+:root {
+	font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+	color: #d7e0e9;
+	background: #0b1119;
+	font-synthesis: none;
+	color-scheme: dark;
+}
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+}
+button,
+select {
+	font: inherit;
+	font-size: 12px;
+	border: 1px solid #2c3d4e;
+	border-radius: 5px;
+	padding: 8px 10px;
+	background: #172432;
+	color: #d7e0e9;
+}
+button {
+	cursor: pointer;
+}
+button:hover {
+	background: #24374a;
+}
+button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+button.accent {
+	background: #aa7532;
+	color: #fff;
+	border-color: #b98745;
+}
+select {
+	min-width: 0;
+	max-width: 100%;
+}
+.app {
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+}
+header {
+	height: 59px;
+	padding: 0 24px;
+	display: flex;
+	align-items: center;
+	gap: 24px;
+	border-bottom: 1px solid #263442;
+	background: #101a25;
+}
+.brand {
+	font-size: 12px;
+	letter-spacing: 2px;
+	color: #97a8b8;
+}
+.brand b {
+	margin-left: 12px;
+	color: #f0dfc2;
+	letter-spacing: 1.5px;
+}
+.tag {
+	font-size: 11px;
+	border: 1px solid #59462c;
+	color: #d4ae75;
+	padding: 5px 9px;
+	border-radius: 4px;
+}
+.header-note {
+	margin-left: auto;
+	font-size: 12px;
+	color: #91a5b4;
+}
+.workspace {
+	flex: 1;
+	min-height: 0;
+	padding: 10px;
+}
+.panel {
+	height: 100%;
+	overflow: auto;
+	padding: 22px;
+	background: #101923;
+}
+.eyebrow {
+	font-size: 10px;
+	letter-spacing: 1.6px;
+	color: #b18b55;
+}
+h2 {
+	font-size: 19px;
+	font-weight: 500;
+	margin: 12px 0;
+}
+h3 {
+	font-size: 13px;
+	font-weight: 500;
+	margin-top: 28px;
+}
+p {
+	font-size: 12px;
+	line-height: 1.8;
+	color: #8fa1b1;
+}
+label {
+	display: block;
+	margin: 24px 0 9px;
+	font-size: 11px;
+	color: #8fa1b1;
+}
+.agent select {
+	width: 100%;
+}
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 15px 0;
+}
+pre {
+	padding: 14px;
+	border: 1px solid #243443;
+	background: #0b131c;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 11px;
+	line-height: 1.75;
+	min-height: 190px;
+	color: #b5cfca;
+}
+.footnote,
+.muted {
+	font-size: 11px;
+	color: #778c9d;
+	line-height: 1.8;
+}
+.game-panel {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	background: #0b1119;
+}
+.toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 10px;
+	background: #111c28;
+}
+.toolbar select {
+	flex: 1;
+	min-width: 120px;
+}
+.viewport {
+	position: relative;
+	flex: 1;
+	min-height: 60px;
+	overflow: hidden;
+	background: radial-gradient(ellipse at center, #192a38 0, #0c141e 65%);
+}
+.viewport-empty {
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-direction: column;
+	text-align: center;
+	padding: 20px;
+}
+.viewport h1 {
+	font-size: 24px;
+	font-weight: 400;
+	letter-spacing: 2px;
+	margin: 16px 0 0;
+}
+.viewport span {
+	font-size: 11px;
+	color: #6f8292;
+}
+.orbit {
+	width: 100px;
+	height: 100px;
+	border: 1px solid #49615e;
+	border-radius: 50%;
+	position: relative;
+	margin-bottom: 30px;
+}
+.orbit:before,
+.orbit:after {
+	content: "";
+	position: absolute;
+	inset: 20px;
+	border: 1px solid #806944;
+	border-radius: 50%;
+	transform: rotate(-35deg) scaleX(1.65);
+}
+.orbit:after {
+	inset: 41px;
+	background: #c59c5f;
+	border: none;
+	transform: none;
+}
+.statusline {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 9px 12px;
+	font-size: 10px;
+	line-height: 1.7;
+	color: #93a5b2;
+	border-top: 1px solid #243240;
+}
+.dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #586777;
+	flex-shrink: 0;
+}
+.dot.live {
+	background: #78bbaa;
+}
+.metric {
+	display: flex;
+	justify-content: space-between;
+	border-bottom: 1px solid #263442;
+	padding: 15px 0;
+	font-size: 11px;
+	color: #8a9dac;
+}
+.metric strong {
+	font-weight: 500;
+	color: #d0b58a;
+}
+ul {
+	padding-left: 16px;
+	font-size: 11px;
+	line-height: 2.5;
+	color: #93a8b9;
+}
+.eventlog {
+	height: 100%;
+	overflow: auto;
+	padding: 12px 18px;
+	background: #0e1721;
+	font:
+		11px / 1.9 Consolas,
+		"Microsoft YaHei",
+		monospace;
+	color: #8ca59d;
+}
+.dockview-theme-abyss {
+	--dv-background-color: #0c141e;
+	--dv-activegroup-visiblepanel-tab-background-color: #1b2a38;
+	--dv-activegroup-visiblepanel-tab-color: #ead7b6;
+	--dv-group-view-background-color: #101923;
+	--dv-tabs-and-actions-container-background-color: #101923;
+	--dv-inactivegroup-visiblepanel-tab-background-color: #14212e;
+	--dv-tab-font-size: 12px;
+}

@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: repository initialization. The desktop application, native game-window hosting, Agent integration and workspace UI are not implemented yet.**
+**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned native-host simulator run locally. Actual DSP embedding and the development workspace are not implemented.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -47,7 +47,45 @@ git submodule update --init --recursive
 
 Changes to Pi are committed and pushed in spherewright-pi first. CommandDeck then records the new submodule commit in a separate integration change. Check out an explicit development branch before editing the submodule; an ordinary submodule checkout is detached.
 
-Application dependency wiring is pending. Pi is a workspace monorepo: when wiring the build, its internal packages must resolve to this fork, rather than silently mixing modified source with registry copies. A source checkout alone does not prove that build or runtime integration works. End-user packages should contain the required runtime artifacts without requiring Git, Node.js or source checkouts.
+The prototype imports the built coding-agent entry directly from the submodule. `pi:verify` checks the exact commit, compiled entries and internal workspace links. Pi source is unchanged at this baseline. Its ignored model catalog is restored from the matching versioned npm artifact using the integrity in `pi-model-data-lock.json`; only JSON catalog data is copied, not registry runtime modules. End-user packaging remains a later milestone.
+
+## Run the Windows M0 prototype
+
+Developer prerequisites: Git, Node.js 22.19 or newer, and the .NET 8 SDK with Windows desktop support. The current native fixture targets Windows x64; this is a source prototype, not an installer.
+
+After cloning recursively, run from the repository root:
+
+~~~powershell
+npm ci --ignore-scripts
+node node_modules/electron/install.js
+npm run pi:install
+npm run pi:hydrate
+npm run pi:build
+npm run pi:verify
+npm run build
+npm run typecheck
+npm test
+npm run test:native
+npm start -- --demo-fixture
+~~~
+
+The demo starts only this repository's simulated game host and embeds the Electron UI as its child. The central native grid has click, drag, wheel and key handlers. Its ownership design and remaining limitations are described in [native-window-hosting.md](docs/native-window-hosting.md). No DSP launch or arbitrary-window attachment route is present.
+
+For the desktop lifecycle smoke, close the demo first, then run `npm start -- --smoke`. It tests one offline Pi tool roundtrip, UI reload and an intentional crash of its own renderer. Synthetic results go under ignored `.local/`; private Pi sessions created by the desktop live under the application's user-data directory. Neither is committed.
+
+## CC Switch / Pi provider configuration
+
+The model selector reads provider/model metadata from Pi's `models.json`, normally under `~/.pi/agent`. Existing CC Switch Pi providers can be reused. `COMMANDDECK_PI_CONFIG_DIR`, then `PI_CODING_AGENT_DIR`, can select another configuration directory. The prototype does not rewrite shared Pi configuration or copy keys into the repository or renderer. Credential command values are rejected, including model header overrides; remote endpoints require HTTPS.
+
+Startup makes no model request. Choose a configured model and click the live probe explicitly, or use:
+
+~~~powershell
+npm run smoke:live -- --provider '<configured-provider-id>' --model '<configured-model-id>'
+~~~
+
+The fixed probe permits at most two model requests and one `deck_echo` execution, caps requested output at 512 tokens per response, disables retries, and has a wall-clock timeout. It has no game, shell or file-editing tools, project resources, extensions, skills or MCP discovery. Active and callable tool sets are both checked. `npm run smoke:offline` uses a loopback fake service without external model access.
+
+Locally verified on 2026-10-20: source builds and type checks; ten Node tests including split tool arguments, cancellation, denied tools, session reopening without execution, and failed second responses; native ownership/detach/failure tests; Electron reload/renderer-crash smoke; and one live MiniMax-M3.1-Flash roundtrip through the desktop utility process. Only that configured Chat Completions compatible endpoint has live evidence. Physical input, DPI changes, UI hangs and real DSP/Steam behavior remain unqualified; M0 as a whole has not passed.
 
 ## Planned execution boundaries
 
@@ -63,7 +101,7 @@ Application dependency wiring is pending. Pi is a workspace monorepo: when wirin
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-These are planned slices, not completed features or gameplay authorization. There is no application build, model/API test, native embedding test or game acceptance claim in this initialization.
+The simulator and Pi portions of the first two slices now have local evidence. A real game-side host adapter, actual game input and the remaining M0 gates still need separate implementation and validation. Development tools, the task ledger and all game execution remain future work.
 
 ## License
 

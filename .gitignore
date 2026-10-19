@@ -15,3 +15,5 @@ userdata/
 *.dsv
 .DS_Store
 Thumbs.db
+**/bin/
+**/obj/
