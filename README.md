@@ -4,6 +4,8 @@ A desktop workspace for playing Dyson Sphere Program with a structured Agent and
 
 **Status: repository initialization. The desktop application, native game-window hosting, Agent integration and workspace UI are not implemented yet.**
 
+Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
+
 ## Repository boundaries
 
 | Repository | Responsibility |
@@ -59,7 +61,7 @@ Application dependency wiring is pending. Pi is a workspace monorepo: when wirin
 
 1. Prove native game-window hosting and safe window detachment in an isolated prototype.
 2. Integrate the pinned Pi source with explicit tools and resource loading.
-3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence.
+3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
 These are planned slices, not completed features or gameplay authorization. There is no application build, model/API test, native embedding test or game acceptance claim in this initialization.
 
