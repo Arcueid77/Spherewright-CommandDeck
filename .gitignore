@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+artifacts/
+coverage/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.local/
+userdata/
+*.sqlite
+*.sqlite-*
+*.dsv
+.DS_Store
+Thumbs.db
