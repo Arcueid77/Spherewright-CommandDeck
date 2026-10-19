@@ -43,6 +43,14 @@ Normal simulator-host exit detaches the UI first. Test cleanup terminates only P
 
 The Electron smoke also reloads and deliberately crashes its own renderer. The simulated game retains the same owner PID, and the model probe is not submitted again. These are synthetic tests, not save/recovery or game-action evidence.
 
+## Blocking result: hung UI and host resize
+
+`npm run probe:native-hang` deliberately sleeps the disposable WinForms UI fixture's thread for two seconds. It separately measures host status and host resizing while that UI is hung. On the local 2026-10-20 run, status returned in about 1 ms, but resize took about 2005 ms. Both simulator processes survived. No actual Electron or DSP process was hung by this probe.
+
+The host's resize handler synchronously calls `SetWindowPos` on its foreign UI child. The ownership inversion therefore fixes the tested exit cases, but does not isolate the host UI from this failure. This is a qualification blocker, not a passing responsiveness test. The probe exits successfully when it obtains complete bounded evidence; read its `conclusion` in `.local/native-hang-probe.json`. A green CI job does not override a blocked conclusion.
+
+The next bounded design experiment must keep foreign-window operations off the game-owned UI thread, preserve exact UI identity and restoration evidence, and independently recheck layout, detach and input-queue behavior. It must not use a timeout to assume an unacknowledged window operation was cancelled or replay it blindly.
+
 ## Remaining real-game questions
 
 1. A game-side adapter must create the stable host within the DSP process and cooperate with Unity's actual window/message lifecycle. The WinForms simulator is not that adapter, and cannot simply be loaded into Unity.
@@ -50,6 +58,6 @@ The Electron smoke also reloads and deliberately crashes its own renderer. The s
 3. Prove native mouse/keyboard focus, capture, cursor release, Alt-Tab, resizing, docking overlays and monitor changes on DSP. Do not infer these from synthetic messages.
 4. Define native-input takeover relative to the game's action writer. Hosting ownership alone does not serialize manual input against prepare/commit.
 5. Qualify game, renderer, Deck and host failures separately under Lab rules. A restarted game or older save is not a viewport recovery strategy.
-6. Cross-process parent/child windows can couple input queues. Current process-exit tests do not prove survival of a hung UI thread, a hung host thread, or abrupt host-process death; test these separately before accepting the ownership design for DSP.
+6. Cross-process parent/child windows can couple input queues. The bounded UI-hang test above blocks current qualification. A hung host thread, indefinite UI hangs, physical input during a hang and abrupt host-process death remain untested.
 
 Real integration will require an independently reviewed, narrow game-side implementation and a supported deployment/validation cohort. Until then, DSP attachment and game-action tools stay closed.
