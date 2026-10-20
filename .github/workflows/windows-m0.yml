@@ -32,6 +32,7 @@ jobs:
       - run: dotnet build native/CommandDeck.AdapterBridge/CommandDeck.AdapterBridge.csproj -c Release -f net472 -p:RestoreLockedMode=true --nologo
       - run: npm test
       - run: npm run test:native
+      - run: npm run test:ui-watchdog
       - run: npm run probe:native-hang
       - run: npm run probe:native-focus
       - run: npm run test:native-ui-recovery
@@ -50,6 +51,7 @@ jobs:
           name: synthetic-m0-results
           path: |
             .local/native-smoke.json
+            .local/ui-watchdog-native.json
             .local/native-hang-probe.json
             .local/native-input-hang-probe.json
             .local/native-input-recovery-probe.json

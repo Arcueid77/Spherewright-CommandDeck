@@ -37,7 +37,7 @@ internal static class Program
             }
             return;
         }
-        if (args.Length == 3 && args[0] == "--inspect-ui")
+        if (args.Length == 3 && args[0] is "--inspect-ui" or "--probe-ui")
         {
             if (!long.TryParse(args[1], out long handle) || handle <= 0 ||
                 !int.TryParse(args[2], out int pid) || pid <= 0)
@@ -46,16 +46,36 @@ internal static class Program
                 return;
             }
             bool sameSession;
-            try { sameSession = System.Diagnostics.Process.GetProcessById(pid).SessionId == System.Diagnostics.Process.GetCurrentProcess().SessionId; }
-            catch (ArgumentException) { sameSession = false; }
+            try { using var target = System.Diagnostics.Process.GetProcessById(pid); using var self = System.Diagnostics.Process.GetCurrentProcess(); sameSession = target.SessionId == self.SessionId; }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { sameSession = false; }
             var hwnd = (nint)handle;
             bool exists = sameSession && Win.IsWindow(hwnd);
             bool pidMatches = exists && Win.WindowPid(hwnd) == pid;
+            bool? responding = null;
+            string probeStatus = "not_probed";
+            long probeElapsedMs = 0;
+            if (args[0] == "--probe-ui" && pidMatches)
+            {
+                // Independent inspector thread/queue, exact owned HWND, no broadcast or unbounded wait flag.
+                uint thread = Win.GetWindowThreadProcessId(hwnd, out _);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                Marshal.SetLastPInvokeError(0);
+                nint delivered = Win.SendMessageTimeout(hwnd, 0, 0, 0, 0x1 | 0x2 | 0x20, 120, out _);
+                int error = Marshal.GetLastPInvokeError();
+                probeElapsedMs = clock.ElapsedMilliseconds;
+                bool identityStable = Win.IsWindow(hwnd) && Win.GetWindowThreadProcessId(hwnd, out int afterPid) == thread && afterPid == pid;
+                probeStatus = !identityStable ? "identity_changed" : delivered != 0 ? "responsive" : error == 1460 ? "timeout" : "unknown";
+                responding = probeStatus == "responsive" ? true : probeStatus == "timeout" ? false : null;
+            }
+            else if (args[0] == "--probe-ui") probeStatus = sameSession ? "identity_changed" : "identity_unavailable";
             // Read only the exact registered UI window. This mode never creates or mutates a window.
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 exists,
                 pidMatches,
+                responding,
+                probeStatus,
+                probeElapsedMs,
                 visible = pidMatches && Win.IsWindowVisible(hwnd),
                 childStyle = pidMatches && (Win.GetStyle(hwnd) & Win.Child) != 0,
                 parentPresent = pidMatches && Win.GetParent(hwnd) != 0
@@ -152,6 +172,13 @@ internal sealed class Fixture : Form
                         Thread.Sleep(durationMs); // Bounded hang injection only in our disposable UI fixture.
                         Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-end", ticks = System.Diagnostics.Stopwatch.GetTimestamp().ToString() });
                     });
+                    else if (line == "pump-ui") BeginInvoke(() =>
+                    {
+                        Program.Send(new { type = "fixture-diagnostic", phase = "native-pump-start" });
+                        var clock = System.Diagnostics.Stopwatch.StartNew();
+                        while (clock.ElapsedMilliseconds < 2500) { Application.DoEvents(); Thread.Sleep(5); }
+                        Program.Send(new { type = "fixture-diagnostic", phase = "native-pump-end" });
+                    });
                 }
             });
         });
@@ -223,6 +250,7 @@ internal static class Win
     [DllImport("gdi32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool DeleteObject(nint obj);
     [DllImport("user32.dll")] internal static extern int SetWindowRgn(nint hwnd, nint region, [MarshalAs(UnmanagedType.Bool)] bool redraw);
     [DllImport("user32.dll")] internal static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)] internal static extern nint SendMessageTimeout(nint hwnd, uint message, nint wParam, nint lParam, uint flags, uint timeout, out nuint result);
     [DllImport("user32.dll", EntryPoint = "SetPropW", CharSet = CharSet.Unicode, SetLastError = true)][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetProp(nint hwnd, string name, nint value);
     [DllImport("user32.dll", EntryPoint = "GetPropW", CharSet = CharSet.Unicode)] internal static extern nint GetProp(nint hwnd, string name);
     [DllImport("user32.dll", EntryPoint = "RemovePropW", CharSet = CharSet.Unicode)] internal static extern nint RemoveProp(nint hwnd, string name);

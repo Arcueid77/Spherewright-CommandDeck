@@ -12,6 +12,7 @@ import { runDesktopSmoke } from "./desktop-smoke.mjs";
 import { inspectOwnedUi } from "./inspect-ui.mjs";
 import { runAdapterDesktopSmoke } from "./adapter-desktop-smoke.mjs";
 import { runWorkbenchSmoke } from "./workbench-smoke.mjs";
+import { createUiWatchdog } from "./ui-watchdog.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -23,6 +24,14 @@ const native = new WindowHost();
 const events = new EventEmitter();
 const runtimePending = new Map(),
 	tests = new Map();
+const lifecycle = [];
+let lifecycleWrite = Promise.resolve();
+function recordUiLifecycle(value) {
+	lifecycle.push({ utc: new Date().toISOString(), ...value });
+	if (lifecycle.length > 40) lifecycle.shift();
+	const snapshot = JSON.stringify(lifecycle, null, 2);
+	lifecycleWrite = lifecycleWrite.then(() => writeFile(join(privateDirectory, "ui-lifecycle.private.json"), snapshot)).catch(() => {});
+}
 let runtime,
 	workbenchReady = false,
 	ui,
@@ -125,6 +134,8 @@ async function probe(config) {
 	}
 }
 async function api(action, args) {
+	if (ui?.nativeProbePending && ["viewport", "focus-ui"].includes(action)) return { deferred: true };
+	if (ui?.nativeProbePending && ["attach", "start-fixture", "probe"].includes(action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 	if (stopping && ["viewport", "focus-ui"].includes(action))
 		return { deferred: true };
 	if (
@@ -148,6 +159,7 @@ async function api(action, args) {
 	if (action === "snapshot") return { ...state, events: [...state.events] };
 	if (action === "workbench") {
 		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
+		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		return workbenchCall(args.action, args.args ?? {});
 	}
 	if (action === "profiles") {
@@ -286,6 +298,10 @@ function startUi() {
 		) {
 			record.lastBeatSequence = message.sequence;
 			record.lastHeartbeat = performance.now();
+			record.nativeResponsiveSince = undefined;
+			record.nativeDelayReported = false;
+			record.nativeProbePending = false;
+			record.nativeProbeUnknowns = 0;
 		} else if (message.type === "ui-loaded" && record.registered) {
 			record.loaded++;
 			record.lastHeartbeat = performance.now();
@@ -347,11 +363,12 @@ async function waitNativeDetached() {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 }
-async function recoverUi(reason) {
-	if (stopping || recovering) return;
+async function recoverUi(reason, expected = ui) {
+	if (stopping || recovering || expected !== ui) return;
 	recovering = true;
 	const old = ui;
 	const heartbeatAgeMs = performance.now() - old.lastHeartbeat;
+	recordUiLifecycle({ kind: "recovery", reason, epoch: old.epoch, heartbeatAgeMs, exited: old.child.exitCode !== null || old.child.signalCode !== null, nativeProbe: old.lastNativeProbe });
 	clearUiTests(old);
 	let exitResult;
 	if (old.child.exitCode === null && old.child.signalCode === null) {
@@ -371,6 +388,7 @@ async function recoverUi(reason) {
 	const record = {
 		reason,
 		heartbeatAgeMs,
+		nativeProbe: old.lastNativeProbe,
 		oldEpoch: old.epoch,
 		exitConfirmed: true,
 		exitResult,
@@ -476,6 +494,7 @@ async function shutdown(exitCode = 0) {
 		}
 	}
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
+	await lifecycleWrite;
 	runtime?.kill();
 	allowQuit = true;
 	app.exit(exitCode);
@@ -521,6 +540,7 @@ if (!app.requestSingleInstanceLock()) {
 	app
 		.whenReady()
 		.then(async () => {
+			recordUiLifecycle({ kind: "supervisor-start" });
 			const env = safeEnvironment();
 			env.PI_OFFLINE = "1";
 			runtime = utilityProcess.fork(
@@ -573,15 +593,10 @@ if (!app.requestSingleInstanceLock()) {
 			workbenchReady = true;
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
 			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
-			watchdog = setInterval(() => {
-				if (
-					!stopping &&
-					!recovering &&
-					ui?.loaded &&
-					performance.now() - ui.lastHeartbeat > watchdogMs
-				)
-					void recoverUi("ui-heartbeat-timeout").catch(recoveryFailed);
-			}, 100);
+			const checkUi = createUiWatchdog({ current: () => ui, unavailable: () => stopping || recovering,
+				inspect: (record) => inspectOwnedUi(record, { responsiveness: true }), recover: recoverUi,
+				notice: (facts) => { recordUiLifecycle({ kind: "probe", epoch: ui?.epoch, ...facts }); emit({ type: "ui-health", text: facts.blocked ? "窗口响应检查未确认，自动替换已停止；任务未重放。" : "正在核对本机窗口响应；任务未重放。", ...facts }); }, thresholdMs: watchdogMs });
+			watchdog = setInterval(() => { void checkUi().catch(recoveryFailed); }, 100);
 			await startUi();
 			await attachFromCommandLine(process.argv);
 			if (process.argv.includes("--demo-fixture")) {

@@ -24,6 +24,7 @@
 		"test:native-ui-recovery": "node scripts/native-input-hang-probe.mjs --recover-own-ui",
 		"test:desktop": "node scripts/run-desktop-smoke.mjs",
 		"test:workbench": "node scripts/run-desktop-smoke.mjs --smoke-workbench",
+		"test:ui-watchdog": "node scripts/ui-watchdog-native.mjs",
 		"test:desktop-host-exit": "node scripts/run-desktop-smoke.mjs --smoke-host-exit",
 		"test:desktop-recovery-limit": "node scripts/run-desktop-smoke.mjs --smoke-recovery-limit",
 		"test:adapter-native": "node scripts/adapter-native-smoke.mjs",

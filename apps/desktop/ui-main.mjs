@@ -174,6 +174,8 @@ if (typeof process.send !== "function") {
 			}))
 				handle(channel, (args) => request(action, args));
 			handle("deck:focus-ui", async () => {
+				// Preserve Chromium's active editor/drag operation when this UI already owns focus.
+				if (window.webContents.isFocused()) return { alreadyFocused: true };
 				const result = await request("focus-ui");
 				window.webContents.focus();
 				return result;

@@ -168,6 +168,7 @@ export async function runDesktopSmoke(driver) {
 	assert.equal(activeResult.executed, 1);
 	assert.equal(activeResult.requestCount, 2);
 	assert.equal(recovered.reason, "ui-heartbeat-timeout");
+	assert.equal(recovered.nativeProbe?.probeStatus, "timeout");
 	assert.equal(recovered.exitConfirmed, true);
 	assert.ok(
 		activeProbeCompletedAt > recovered.exitConfirmedAt,
@@ -209,6 +210,7 @@ export async function runDesktopSmoke(driver) {
 		inputRequestLatencyMs: Math.round(inputCompletedAt - enteredAt),
 		watchdogThresholdMs: driver.watchdogMs,
 		heartbeatAgeAtDecisionMs: Math.round(recovered.heartbeatAgeMs),
+		nativeProbe: recovered.nativeProbe,
 		inputTrace: input.trace,
 		uiReplacements: 1,
 		samePiRuntime: true,
