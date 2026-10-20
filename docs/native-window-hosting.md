@@ -155,6 +155,8 @@ Window diagnostics distinguish native game-window focus from Unity's main-thread
 
 The implementation decision keeps input delivery native and fixes the missing child-window focus handling. It retains the game-owned parent, independent supervisor, exact endpoint binding and bounded recovery policy. Development decisions follow the design's functional and long-term goals; individual commits, explicit opt-in and exact candidate hashes provide rollback without choosing an inferior architecture merely because it is easier to undo.
 
+The user then selected manual development mode: source work, builds and automated checks continue, while real GUI clicks, dragging, keyboard and focus checks are performed by the user. The user can explicitly select automatic mode to resume computer-use testing. The active collaboration rule is recorded in the Roadmap; earlier computer-use observations retain their historical scope.
+
 ### Unqualified scope
 
 1. The real empty-menu cohort proves one normal native hosting cycle. Physical input, correct pixels, long-running operation and failure behavior still require separate evidence; a successful local compile or simulator cannot supply it.
