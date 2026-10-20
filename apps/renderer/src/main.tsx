@@ -8,8 +8,8 @@ import {
 import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout } from "./workbench";
+import { ProviderSettings, type Profile } from "./providers";
 
-type Profile = { providerId: string; modelId: string; api: string };
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
 	attached: boolean;
@@ -52,6 +52,7 @@ declare global {
 			focusUi(): Promise<unknown>;
 			snapshot(): Promise<UiSnapshot>;
 			profiles(): Promise<Profile[]>;
+			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			targets(): Promise<Target[]>;
 			attach(id: string): Promise<NativeState>;
 			detach(): Promise<unknown>;
@@ -95,6 +96,7 @@ function AgentPanel() {
 			else if (snapshot.probeText) setOutput(snapshot.probeText);
 		});
 		void window.deck.profiles().then((items) => {
+			items = items.filter((profile) => profile.source !== "protected");
 			setProfiles(items);
 			let saved: Partial<Profile> = {};
 			try {
@@ -213,6 +215,7 @@ function GamePanel(props: IDockviewPanelProps) {
 					width: Math.max(1, rect.width),
 					height: Math.max(1, rect.height),
 					visible:
+						!document.body.dataset.deckOverlay &&
 						rect.width > 1 &&
 						rect.height > 1 &&
 						document.visibilityState === "visible",
@@ -231,6 +234,7 @@ function GamePanel(props: IDockviewPanelProps) {
 		const observer = new ResizeObserver(update);
 		observer.observe(node);
 		window.addEventListener("resize", update);
+		window.addEventListener("deck-overlay", update);
 		document.addEventListener("visibilitychange", update);
 		update();
 		return () => {
@@ -239,6 +243,7 @@ function GamePanel(props: IDockviewPanelProps) {
 			visibility.dispose();
 			observer.disconnect();
 			window.removeEventListener("resize", update);
+			window.removeEventListener("deck-overlay", update);
 			document.removeEventListener("visibilitychange", update);
 			void window.deck.viewport({
 				x: 0,
@@ -428,23 +433,27 @@ async function ready(event: DockviewReadyEvent) {
 	});
 }
 function App() {
+	const [settings, setSettings] = useState(false);
+	useEffect(() => { if (settings) document.body.dataset.deckOverlay = "settings"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings]);
 	return (
 		<div className="app">
-			<header>
+			<header inert={settings}>
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
 				<div className="tag">M1 · 开发工作台</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
+				<button onClick={() => setSettings(true)}>模型设置</button>
 				<div className="header-note">游戏动作未接入 · 中央点击暂缓</div>
 			</header>
-			<div className="workspace">
+			<div className="workspace" inert={settings}>
 				<DockviewReact
 					className="dockview-theme-abyss"
 					components={components}
 					onReady={ready}
 				/>
 			</div>
+			{settings && <ProviderSettings close={() => setSettings(false)} />}
 		</div>
 	);
 }

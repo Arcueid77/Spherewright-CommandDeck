@@ -31,6 +31,7 @@ jobs:
       - run: dotnet build native/CommandDeck.Windowing/CommandDeck.Windowing.csproj -c Release -f net472 -p:RestoreLockedMode=true --nologo
       - run: dotnet build native/CommandDeck.AdapterBridge/CommandDeck.AdapterBridge.csproj -c Release -f net472 -p:RestoreLockedMode=true --nologo
       - run: npm test
+      - run: npm run test:vault
       - run: npm run test:native
       - run: npm run test:ui-watchdog
       - run: npm run probe:native-hang
@@ -64,4 +65,5 @@ jobs:
             .local/adapter-route-smoke.json
             .local/desktop-smoke-adapter.json
             .local/desktop-smoke-workbench.json
+            .local/credential-vault-smoke.json
           if-no-files-found: ignore

@@ -164,6 +164,7 @@ if (typeof process.send !== "function") {
 			for (const [channel, action] of Object.entries({
 				"deck:status": "status",
 				"deck:profiles": "profiles",
+				"deck:profiles-manage": "profiles-manage",
 				"deck:targets": "targets",
 				"deck:attach": "attach",
 				"deck:start-fixture": "start-fixture",

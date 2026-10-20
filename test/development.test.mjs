@@ -129,6 +129,22 @@ test("drain invalidates pending admission even if a failed close later reopens t
 	assert.equal(calls, 0); assert.equal(f.workbench.store.activeTask(), null);
 });
 
+test("an in-flight admission cannot pass a newly established unknown-execution gate", windows, async (t) => {
+	const f = await fixture(t), original = f.workbench.workspace.refresh.bind(f.workbench.workspace);
+	let release, entered, calls = 0, reads = 0; const barrier = new Promise((done) => { entered = done; });
+	t.mock.method(f.workbench.workspace, "refresh", async (...args) => { const value = await original(...args); if (++reads === 1) { entered(); await new Promise((done) => { release = done; }); } return value; });
+	const pending = f.workbench.start({ rootId: f.rootId, kind: "agent" }, async () => { calls++; });
+	const rejected = assert.rejects(pending, /DEVELOPMENT_EXECUTION_BLOCKED/);
+	await barrier;
+	const other = await f.workbench.start({ rootId: f.rootId, kind: "check" }, async (task) => {
+		f.workbench.store.saveUi("execution-blocked", { reason: "SYNTHETIC_COMMAND_OUTCOME_UNKNOWN", taskId: task.id });
+		const error = new Error("SYNTHETIC_COMMAND_OUTCOME_UNKNOWN"); error.unknown = true; throw error;
+	});
+	await f.workbench.operation.done; assert.equal(f.workbench.store.task(other.id).state, "failed");
+	release(); await rejected;
+	assert.equal(calls, 0); assert.equal(f.workbench.store.activeTask(), null);
+});
+
 test("file reverts retain history and refuse to discard later external changes", windows, async (t) => {
 	const f = await fixture(t), before = await f.workbench.workspace.read(f.rootId, "code.mjs");
 	const edit = await f.workbench.request("save", { rootId: f.rootId, path: "code.mjs", expectedSha256: before.sha256, content: "edited\r\n" }); await f.workbench.operation.done;

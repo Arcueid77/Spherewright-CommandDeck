@@ -1,0 +1,12 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import assert from "node:assert/strict";
+const execute = promisify(execFile), root = fileURLToPath(new URL("../", import.meta.url)), runId = randomUUID();
+for (const phase of ["write", "read"]) await execute(join(root, "node_modules/electron/dist/electron.exe"), [root, "--vault-smoke", phase], { cwd: root, windowsHide: true, timeout: 20000, env: { ...process.env, COMMANDDECK_VAULT_SMOKE_ID: runId } });
+const result = JSON.parse(await readFile(join(root, ".local/credential-vault-smoke.json"), "utf8"));
+assert.equal(result.runId, runId); assert.equal(result.separateProcessReopen, true);
+console.log(JSON.stringify({ credentialVaultSmoke: "passed", syntheticOnly: true, modelRequests: 0, gameCalls: 0 }));

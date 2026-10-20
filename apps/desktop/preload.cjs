@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld(
 		focusUi: () => ipcRenderer.invoke("deck:focus-ui"),
 		snapshot: () => ipcRenderer.invoke("deck:snapshot"),
 		profiles: () => ipcRenderer.invoke("deck:profiles"),
+		manageProfiles: (action, args = {}) => ipcRenderer.invoke("deck:profiles-manage", { action, args }),
 		targets: () => ipcRenderer.invoke("deck:targets"),
 		attach: (targetId) => ipcRenderer.invoke("deck:attach", targetId),
 		detach: () => ipcRenderer.invoke("deck:detach"),

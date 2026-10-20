@@ -1,4 +1,4 @@
-import { app, utilityProcess } from "electron";
+import { app, utilityProcess, safeStorage } from "electron";
 import { EventEmitter, once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -13,6 +13,8 @@ import { inspectOwnedUi } from "./inspect-ui.mjs";
 import { runAdapterDesktopSmoke } from "./adapter-desktop-smoke.mjs";
 import { runWorkbenchSmoke } from "./workbench-smoke.mjs";
 import { createUiWatchdog } from "./ui-watchdog.mjs";
+import { CredentialVault, protectedProvider } from "./credential-vault.mjs";
+import { resolveTaskProfile } from "./profile-access.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -20,6 +22,12 @@ const watchdogMs = 1000;
 const privateDirectory = join(app.getPath("userData"), "supervisor");
 mkdirSync(privateDirectory, { recursive: true });
 app.setPath("userData", privateDirectory); // The disposable UI keeps its original, separate Chromium profile.
+const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID] : []), "profiles.vault.json"), {
+	available: () => process.platform === "win32" && safeStorage.isEncryptionAvailable(),
+	encrypt: (text) => safeStorage.encryptStringAsync(text), decrypt: async (bytes) => (await safeStorage.decryptStringAsync(bytes)).result,
+});
+let changingProfiles = false;
+function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
 const native = new WindowHost();
 const events = new EventEmitter();
 const runtimePending = new Map(),
@@ -82,6 +90,7 @@ async function probe(config) {
 		!config ||
 		!["offline", "live"].includes(config.mode) ||
 		state.busy ||
+		changingProfiles ||
 		[...runtimePending.keys()].some((id) => !id.startsWith("workbench:"))
 	)
 		throw new Error("INVALID_OR_BUSY_PROBE");
@@ -160,14 +169,28 @@ async function api(action, args) {
 	if (action === "workbench") {
 		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
+		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
 		return workbenchCall(args.action, args.args ?? {});
 	}
 	if (action === "profiles") {
-		try {
-			return publicProfiles();
-		} catch {
-			return [];
+		let profiles = []; try { profiles = (await vault.list()).profiles; } catch {}
+		return [...externalProfiles(), ...profiles];
+	}
+	if (action === "profiles-manage") {
+		if (!args || !["list", "describe", "save", "remove"].includes(args.action)) throw new Error("INVALID_PROFILE_ACTION");
+		if (args.action === "list") {
+			if (!vault.available()) return { available: false, revision: null, profiles: [], external: externalProfiles() };
+			return { ...await vault.list(), external: externalProfiles() };
 		}
+		if (args.action === "describe") return vault.describe(args.args?.id);
+		if (ui?.nativeProbePending || changingProfiles || state.busy || !workbenchReady) throw new Error("MODEL_CONFIGURATION_BUSY");
+		changingProfiles = true;
+		try {
+			await workbenchCall("configuration-begin");
+			if (stopping) throw new Error("SUPERVISOR_CLOSING");
+			const result = args.action === "save" ? await vault.save(args.args ?? {}) : await vault.remove(args.args ?? {});
+			emit({ type: "profiles-changed" }); return result;
+		} finally { await workbenchCall("configuration-end").catch(() => {}); changingProfiles = false; }
 	}
 	if (action === "status") return native.request("status");
 	if (action === "targets") return native.request("list");
@@ -493,6 +516,7 @@ async function shutdown(exitCode = 0) {
 			await withDeadline(exited, 3000, "UI_EXIT_TIMEOUT");
 		}
 	}
+	await vault.tail;
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
 	runtime?.kill();
@@ -556,6 +580,17 @@ if (!app.requestSingleInstanceLock()) {
 			runtime.stdout.on("data", () => {});
 			runtime.stderr.on("data", () => {});
 			runtime.on("message", (message) => {
+				if (message.type === "credential-request") {
+					void (async () => {
+						try {
+							if (stopping || changingProfiles || !workbenchReady || typeof message.id !== "string" || !/^credential:[0-9a-f-]{36}$/.test(message.id)) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
+							const profile = await resolveTaskProfile(vault, (taskId) => workbenchCall("task", { taskId }), message);
+							if (stopping || changingProfiles || !workbenchReady) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
+							runtime.postMessage({ type: "credential-response", id: message.id, ok: true, profile });
+						} catch { runtime.postMessage({ type: "credential-response", id: message.id, ok: false }); }
+					})().catch(() => {});
+					return;
+				}
 				if (
 					message.type === "event" &&
 					message.event.type === "tool_execution_end"

@@ -53,6 +53,18 @@ textarea {
 .receipt { max-height: 45%; overflow: auto; padding: 9px 12px; border-top: 1px solid #243443; font-size: 11px; color: #91a5b4; }
 .receipt summary { cursor: pointer; }
 .receipt pre { padding: 10px 0; }
+.settings-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 30px; background: #050a10cc; }
+.provider-settings { background: #101c28; border: 1px solid #465566; border-radius: 8px; padding: 24px; width: min(690px, 100%); max-height: 100%; overflow: auto; box-shadow: 0 10px 60px #0009; }
+.settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-heading h2 { margin: 0; }
+.provider-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.provider-list b { width: 100%; font-size: 12px; margin: 8px 0; }
+.provider-settings fieldset { border: 1px solid #2d4052; padding: 18px; margin: 0; min-width: 0; }
+.provider-settings label { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; font-size: 12px; }
+.provider-limits { display: flex; gap: 16px; }
+.provider-limits label { flex: 1; min-width: 0; }
+.provider-limits input { width: 100%; }
+.external-providers { border-top: 1px solid #2c3d4e; margin-top: 20px; padding-top: 20px; font-size: 12px; }
 button {
 	cursor: pointer;
 }

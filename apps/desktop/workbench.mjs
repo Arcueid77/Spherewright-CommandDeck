@@ -22,8 +22,9 @@ async function executable(name) {
 }
 
 export class Workbench {
-	constructor({ directory, helperSource, emit = () => {} }) {
+	constructor({ directory, helperSource, emit = () => {}, resolveProfile }) {
 		this.directory = directory; this.helperSource = helperSource; this.emit = emit;
+		this.resolveProfile = resolveProfile; this.configurationBlocked = false;
 		this.store = new WorkbenchStore(join(directory, "workbench.sqlite"));
 		this.workspace = new WorkspaceService(this.store);
 		this.store.recoverInterrupted();
@@ -43,7 +44,7 @@ export class Workbench {
 				return { ...root, metadata: { ...metadata, dirtyCount: dirtyPaths?.length ?? 0, protectedCount: protectedPaths?.length ?? 0 } };
 			}),
 			tasks: this.store.tasks().map(({ response, prompt, ...task }) => ({ ...task, prompt: prompt.slice(0, 240) })),
-			activeTask: this.store.activeTask()?.id ?? null,
+			activeTask: this.store.activeTask()?.id ?? this.operation?.id ?? null,
 			gameWriteAccess: "not_connected", executionBlocked: Boolean(this.store.ui("execution-blocked")),
 		};
 	}
@@ -88,11 +89,14 @@ export class Workbench {
 	}
 	async start({ rootId, kind, prompt = "", provider, model, parentId }, action) {
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
+		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
 		if (kind === "agent" && this.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_EXECUTION_BLOCKED");
 		if (this.operation || this.store.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");
 		const generation = this.admissionGeneration;
 		await this.workspace.refresh(rootId);
 		if (this.closing || generation !== this.admissionGeneration) throw new Error("WORKBENCH_ADMISSION_EXPIRED");
+		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
+		if (kind === "agent" && this.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_EXECUTION_BLOCKED");
 		if (this.operation || this.store.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");
 		if (kind === "agent") {
 			this.workspace.protectCurrentChanges(rootId);

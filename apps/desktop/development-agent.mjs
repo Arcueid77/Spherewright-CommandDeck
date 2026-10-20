@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager } from "../../vendor/pi/packages/coding-agent/dist/index.js";
 import { readProfiles } from "./profiles.mjs";
+import { protectedProvider } from "./credential-vault.mjs";
+import { createProtectedRuntime } from "./protected-runtime.mjs";
 
 const errorCode = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_TOOL_FAILED";
 const schema = (properties, required = Object.keys(properties)) => ({ type: "object", properties, required, additionalProperties: false });
@@ -11,16 +13,21 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 	const { workspace, store } = workbench, root = workspace.root(task.rootId);
 	const directory = join(workbench.directory, "agent", task.id);
 	await mkdir(directory, { recursive: true });
-	let modelsPath;
-	if (testModelsPath && task.provider === "commanddeck-fixture") modelsPath = testModelsPath;
+	let modelsPath, protectedProfile;
+	if (protectedProvider(task.provider)) {
+		if (!workbench.resolveProfile) throw new Error("PROTECTED_PROFILE_UNAVAILABLE");
+		protectedProfile = await workbench.resolveProfile(task, signal);
+		if (signal.aborted) throw new Error("DEVELOPMENT_TASK_CANCELLED");
+		if (protectedProfile.id !== task.provider || protectedProfile.modelId !== task.model) throw new Error("PROTECTED_PROFILE_BINDING_MISMATCH");
+	} else if (testModelsPath && task.provider === "commanddeck-fixture") modelsPath = testModelsPath;
 	else {
 		const profiles = readProfiles();
 		if (!profiles.profiles.some((profile) => profile.providerId === task.provider && profile.modelId === task.model)) throw new Error("EXPLICIT_CONFIGURED_MODEL_REQUIRED");
 		modelsPath = profiles.path;
 	}
 	const rules = await workspace.rules(root.id), knownRules = new Set(rules.map((rule) => rule.path + ":" + rule.sha256));
-	const runtime = await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath, modelsStorePath: join(directory, "models-store.json"), allowModelNetwork: false });
-	let requests = 0, calls = 0, unknown = false, response = "", session;
+	const runtime = protectedProfile ? await createProtectedRuntime(protectedProfile, signal) : await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath, modelsStorePath: join(directory, "models-store.json"), allowModelNetwork: false });
+	let requests = 0, calls = 0, unknown = false, credentialEchoRejected = false, response = "", session;
 	const stream = runtime.streamSimple.bind(runtime);
 	runtime.streamSimple = (model, context, options) => {
 		if (signal.aborted) throw new Error("DEVELOPMENT_TASK_CANCELLED");
@@ -97,6 +104,7 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 		session.subscribe((event) => {
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 				const delta = event.assistantMessageEvent.delta;
+				if (protectedProfile && (response + delta).includes(protectedProfile.key)) { credentialEchoRejected = true; abort(); return; }
 				if (response.length + delta.length > 120000) { unknown = true; abort(); return; }
 				response += delta; pending += delta;
 			}
@@ -104,6 +112,7 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 		try { if (!signal.aborted) await session.prompt(task.prompt); }
 		finally { clearInterval(timer); flush(); }
 		if (unknown) { const error = new Error("DEVELOPMENT_EFFECT_OUTCOME_UNKNOWN"); error.unknown = true; throw error; }
+		if (credentialEchoRejected) throw new Error("PROVIDER_CREDENTIAL_ECHO_REJECTED");
 		const last = session.messages.filter((message) => message.role === "assistant").at(-1);
 		if (!signal.aborted && last?.stopReason !== "stop") throw new Error("DEVELOPMENT_MODEL_DID_NOT_FINISH");
 		return { requestCount: requests, toolCalls: calls, tools: names, changedFiles: store.changes(task.id).filter((change) => change.state === "applied").map(({ path, afterHash }) => ({ path, sha256: afterHash })), cost: "unknown", gameCalls: 0 };

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { DocumentLease } from "./document-state";
+import { profileToken, type Profile } from "./providers";
 
 type Root = { id: string; label: string; path: string; canWrite: boolean; canExecute: boolean; metadata: { branch: string | null; sha: string | null; submodule: boolean; dirtyCount: number; protectedCount: number; changes: { path: string; code: string }[] } };
 type Task = { id: string; rootId: string; prompt: string; response?: string; kind: string; state: string; error?: string; result?: unknown; events?: { sequence: number; kind: string; value: { text?: string; stream?: string } }[]; changes?: { id: string; path: string; state: string; afterHash: string; beforeHash: string | null }[] };
@@ -115,9 +116,17 @@ export function EditorPanel() {
 	</div>;
 }
 export function DevelopmentPanel() {
-	const c = useWorkbench(), [profiles, setProfiles] = useState<{ providerId: string; modelId: string; api: string }[]>([]), [model, setModel] = useState(""), [prompt, setPrompt] = useState("");
+	const c = useWorkbench(), [profiles, setProfiles] = useState<Profile[]>([]), [model, setModel] = useState(""), [prompt, setPrompt] = useState("");
 	const [task, setTask] = useState<Task | null>(null), [checks, setChecks] = useState<{ id: string; label: string }[]>([]), [checkId, setCheckId] = useState("");
-	useEffect(() => { void window.deck.profiles().then(setProfiles).catch(c.report); void wb<{ prompt?: string; model?: string } | null>("ui-get", { key: "draft" }).then((draft) => { setPrompt(draft?.prompt ?? ""); setModel(draft?.model ?? ""); }).catch(c.report); }, []);
+	useEffect(() => {
+		async function refreshProfiles() { setProfiles(await window.deck.profiles()); }
+		void Promise.all([window.deck.profiles(), wb<{ prompt?: string; model?: string } | null>("ui-get", { key: "draft" })]).then(([items, draft]) => {
+			setProfiles(items); setPrompt(draft?.prompt ?? "");
+			const matches = items.filter((item) => item.providerId + "/" + item.modelId === draft?.model);
+			setModel(items.some((item) => profileToken(item) === draft?.model) ? draft!.model! : matches.length === 1 ? profileToken(matches[0]) : "");
+		}).catch(c.report);
+		return window.deck.onEvent((event) => { if (event.type === "profiles-changed") void refreshProfiles().catch(c.report); });
+	}, []);
 	useEffect(() => { if (!c.rootId) return; void wb<typeof checks>("checks", { rootId: c.rootId }).then((items) => { setChecks(items); setCheckId(items[0]?.id ?? ""); }).catch(c.report); }, [c.rootId]);
 	useEffect(() => {
 		let current = true, running = false;
@@ -127,12 +136,12 @@ export function DevelopmentPanel() {
 		return () => { current = false; clearInterval(timer); };
 	}, [c.taskId]);
 	function draft(text: string, selectedModel = model) { setPrompt(text); setModel(selectedModel); void wb("ui-save", { key: "draft", value: { prompt: text, model: selectedModel } }).catch(c.report); }
-	async function start() { const selected = profiles.find((profile) => profile.providerId + "/" + profile.modelId === model); if (!selected) return; const task = await wb<Task>("agent", { rootId: c.rootId, prompt, providerId: selected.providerId, modelId: selected.modelId }); c.selectTask(task.id); await c.refresh(); }
+	async function start() { const selected = profiles.find((profile) => profileToken(profile) === model); if (!selected) return; const task = await wb<Task>("agent", { rootId: c.rootId, prompt, providerId: selected.providerId, modelId: selected.modelId }); c.selectTask(task.id); await c.refresh(); }
 	return <div className="panel development-panel">
 		<div className="eyebrow">PI · DEVELOPMENT</div><h2>开发 Agent</h2><p>当前仓库：{c.root?.label ?? "未选择"}。每项任务最多 5 分钟。</p>
-		<select aria-label="开发模型" value={model} disabled={Boolean(c.activeTask)} onChange={(event) => draft(prompt, event.target.value)}><option value="">选择模型</option>{profiles.map((profile) => <option key={profile.providerId + profile.modelId} value={profile.providerId + "/" + profile.modelId}>{profile.modelId}</option>)}</select>
+		<select aria-label="开发模型" value={model} disabled={Boolean(c.activeTask)} onChange={(event) => draft(prompt, event.target.value)}><option value="">选择模型</option>{profiles.map((profile) => <option key={profileToken(profile)} value={profileToken(profile)}>{profile.label ? `${profile.label} · ` : ""}{profile.modelId}</option>)}</select>
 		<textarea aria-label="开发任务" className="task-input" maxLength={16000} placeholder="描述一个有限改动，或让 Agent 先检查代码…" value={prompt} onChange={(event) => draft(event.target.value)} />
-		<div className="actions"><button className="accent" disabled={!c.rootId || !model || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
+		<div className="actions"><button className="accent" disabled={!c.rootId || !profiles.some((profile) => profileToken(profile) === model) || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
 		<div className="check-row"><select aria-label="仓库检查" value={checkId} onChange={(event) => setCheckId(event.target.value)}>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}</select><button disabled={!checkId || !c.root?.canExecute || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void wb<Task>("check", { rootId: c.rootId, checkId }).then((task) => { c.selectTask(task.id); return c.refresh(); }).catch(c.report)}>运行检查</button></div>
 		<p className="muted">构建和测试会运行该仓库代码。游戏动作未接入，模型费用未知。</p>
 		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{taskText(task)}</pre></>}
