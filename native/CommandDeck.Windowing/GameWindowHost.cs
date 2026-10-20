@@ -60,6 +60,7 @@ public sealed class GameWindowHost
     public GameWindowHost() { wndProc = WindowMessage; }
     public static nint FindCurrentUnityWindow() => Desktop.FindOwnUnityWindow();
     public static bool IsCurrentProcessWindow(nint hwnd) => hwnd != 0 && Desktop.IsWindow(hwnd) && Desktop.Pid(hwnd) == Process.GetCurrentProcess().Id;
+    public static bool IsCurrentSessionProcess(int pid) => Desktop.InCurrentSession(pid);
     public nint HostHandle => host;
     public nint GameHandle => game?.Hwnd ?? 0;
     public Task Completion => ended.Task;

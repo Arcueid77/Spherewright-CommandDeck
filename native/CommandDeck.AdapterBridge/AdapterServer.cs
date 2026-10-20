@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
 using CommandDeck.Windowing;
 using Newtonsoft.Json;
@@ -71,21 +69,9 @@ public sealed class AdapterServer
     public void Start()
     {
         if (listener != null || Volatile.Read(ref facts).Hwnd == 0) throw new InvalidOperationException("WINDOW_FACTS_REQUIRED");
-        using (var identity = WindowsIdentity.GetCurrent())
         {
-            var sid = identity.User ?? throw new InvalidOperationException("USER_IDENTITY_REQUIRED");
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Spherewright", "CommandDeck", "hosts");
-            Directory.CreateDirectory(directory);
-            var acl = new DirectorySecurity();
-            acl.SetAccessRuleProtection(true, false);
-            acl.SetOwner(sid);
-            acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-#if NET472
-            Directory.SetAccessControl(directory, acl);
-#else
-            new DirectoryInfo(directory).SetAccessControl(acl);
-#endif
+            WindowsCurrentUserSecurity.EnsureSecureDirectory(directory);
             using (var process = Process.GetCurrentProcess())
             {
                 if (kind == "dsp" && !string.Equals(process.ProcessName, "DSPGAME", StringComparison.OrdinalIgnoreCase))
@@ -110,17 +96,7 @@ public sealed class AdapterServer
 
     private NamedPipeServerStream CreatePipe()
     {
-        using (var identity = WindowsIdentity.GetCurrent())
-        {
-            var security = new PipeSecurity();
-            security.SetAccessRuleProtection(true, false);
-            security.AddAccessRule(new PipeAccessRule(identity.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
-#if NET472
-            return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 8192, 8192, security);
-#else
-            return NamedPipeServerStreamAcl.Create(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 8192, 8192, security);
-#endif
-        }
+        return WindowsCurrentUserSecurity.CreateSecurePipe(pipeName, 8192, 8192);
     }
 
     private async Task Listen()
@@ -132,7 +108,8 @@ public sealed class AdapterServer
                 using (var connection = pipe ?? CreatePipe())
                 {
                     pipe = connection;
-                    await connection.WaitForConnectionAsync(lifetime.Token).ConfigureAwait(false);
+                    using (lifetime.Token.Register(() => connection.Dispose()))
+                        await connection.WaitForConnectionAsync().ConfigureAwait(false);
                     try { await Serve(connection).ConfigureAwait(false); }
                     catch (Exception) { } // A malformed/expired client ends only this connection.
                     finally
@@ -155,9 +132,8 @@ public sealed class AdapterServer
     {
         if (!GetNamedPipeClientProcessId(connection.SafePipeHandle.DangerousGetHandle(), out uint clientPid) || clientPid == 0)
             throw new InvalidOperationException("LOCAL_CLIENT_REQUIRED");
-        using (var client = Process.GetProcessById(checked((int)clientPid)))
-        using (var current = Process.GetCurrentProcess())
-            if (client.SessionId != current.SessionId) throw new InvalidOperationException("SAME_SESSION_REQUIRED");
+        if (!GameWindowHost.IsCurrentSessionProcess(checked((int)clientPid)))
+            throw new InvalidOperationException("SAME_SESSION_REQUIRED");
         JObject hello;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
         {

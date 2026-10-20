@@ -26,6 +26,14 @@ internal static class Desktop
     [StructLayout(LayoutKind.Sequential)] internal struct Message { internal nint Hwnd; internal uint Id; internal nuint WParam; internal nint LParam; internal uint Time; internal Point Point; }
     [StructLayout(LayoutKind.Sequential)] internal struct Placement { internal int Length, Flags, Show; internal Point Min, Max; internal Rect Normal; }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] internal static extern nint GetModuleHandle(string? name);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint pid, out uint session);
+    internal static bool InCurrentSession(int pid)
+    {
+        if (pid <= 0 || !ProcessIdToSessionId((uint)pid, out uint target) ||
+            !ProcessIdToSessionId((uint)Process.GetCurrentProcess().Id, out uint current))
+            throw new InvalidOperationException("PROCESS_SESSION_UNAVAILABLE");
+        return target == current;
+    }
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern ushort RegisterClass(ref WindowClass value);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern bool UnregisterClass(string name, nint instance);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern nint CreateWindowEx(uint exStyle, string className, string title, uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint data);
@@ -119,7 +127,7 @@ internal sealed class WindowSnapshot
         Desktop.Require(pid > 0 && Desktop.IsWindow(hwnd) && Desktop.Pid(hwnd) == pid, "WINDOW_IDENTITY_MISMATCH");
         using (var process = Process.GetProcessById(pid))
         {
-            Desktop.Require(process.SessionId == Process.GetCurrentProcess().SessionId, "WINDOW_SESSION_MISMATCH");
+            Desktop.Require(Desktop.InCurrentSession(pid), "WINDOW_SESSION_MISMATCH");
             Started = process.StartTime.ToUniversalTime().Ticks;
         }
         Hwnd = hwnd; Pid = pid; Parent = Desktop.GetParent(hwnd);

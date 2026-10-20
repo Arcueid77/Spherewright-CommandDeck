@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned host simulators run locally. A separate BepInEx window adapter now compiles against the installed Unity references; it has not been deployed or validated in DSP. The development workspace is not implemented.**
+**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned host simulators run locally. The first BepInEx adapter cohort loaded in DSP but hit an unsupported Mono identity API before endpoint/hosting creation; a native Windows compatibility fix is under validation. Real DSP embedding has not passed. The development workspace is not implemented.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -102,7 +102,7 @@ pwsh -File scripts/sync-unity-refs.ps1 -DspDir '<DSP installation>'
 npm run build:unity-adapter
 ~~~
 
-Game DLLs stay under ignored `.local/game-refs` and are never shipped. The candidate output is under ignored `artifacts/unity-adapter`; it has not been installed. CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it cannot compile the Unity plugin without those private references. The plugin's actual local compile is a separate result.
+Game DLLs stay under ignored `.local/game-refs` and are never shipped. Candidate output is under ignored `artifacts/unity-adapter`. The first exact cohort was installed separately and loaded at normal DSP startup, but Mono's unimplemented `WindowsIdentity.User` prevented endpoint creation. It did not create a game-window host. The fix uses native current-user SID/ACL and session queries; runtime verification of that fix remains separate. CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it cannot compile the Unity plugin without those private references. A local compile is not a Unity runtime pass.
 
 `test:adapter-layout` checks both completion/request orderings; `test:adapter-native` checks the shared Win32 source, including an unexpected host-thread quit; `test:adapter-bridge` checks authentication, OS peer identity before sending the credential, malformed clients, EOF, restoration quarantine and descriptor ownership. `test:adapter-route` verifies that helper exit cannot clear an unreconciled host. `test:desktop-adapter` runs the real Electron UI through the same pipe protocol against a fake game, including UI replacement with an in-flight Pi probe. None starts or calls DSP.
 
