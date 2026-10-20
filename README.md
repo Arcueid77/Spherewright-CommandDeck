@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M0 prototype in progress. The desktop shell and pinned Pi source integration run locally. The Mono compatibility fix now runs in DSP: one empty-menu cohort completed native embedding, normal restoration and explicit re-embedding while keeping the original game process. Physical input, rendered pixels and the remaining display/docking gates are unqualified, so M0 has not passed. The development workspace is not implemented.**
+**Status: M0 prototype in progress. The desktop shell and pinned Pi source integration run locally. The Mono compatibility fix now runs in DSP: one empty-menu cohort completed native embedding, normal restoration and explicit re-embedding while keeping the original game process. The first human check reports a DSP cursor but no menu hover or settings-button click response. This input failure blocks M0; pixels, display/docking and real failures remain unqualified. The development workspace is not implemented.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 

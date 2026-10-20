@@ -141,6 +141,10 @@ Raw logs and process/window identities remain private and ignored. The following
 | Explicit reattachment | `.local/m0-window-reattach.private.json` | `DD4CEDE903BC8E30F6E1238A8FA818D4295D0D94D79D9A563C103ED126D9F8B3` |
 | Second cold-start BepInEx log | `.local/m0-second-menu-bep.private.log` | `39155346B785B58A7C79EA1C9D9E74B8FAF791F10E74FC79BA543D29ACAEF8A6` |
 
+### Human menu-input failure: 2026-10-20
+
+After the user closed the initial windows, the same installed candidate was reopened at a fresh empty menu and explicitly embedded for inspection. The user reports that the pointer has DSP's cursor style, but menu buttons do not respond to hover and Settings cannot be clicked. This is a failed physical-input result and blocks M0. The native parent, visibility, layout and Unity-update checks remain evidence for their narrower scope only. The user's general impression that other aspects look normal does not pass individual focus, resize or docking checks. The cause is not established; hit testing, native focus and coordinate mapping need focused diagnosis before another input acceptance claim.
+
 ### Unqualified scope
 
 1. The real empty-menu cohort proves one normal native hosting cycle. Physical input, correct pixels, long-running operation and failure behavior still require separate evidence; a successful local compile or simulator cannot supply it.
@@ -148,6 +152,6 @@ Raw logs and process/window identities remain private and ignored. The following
 3. Prove native mouse/keyboard focus, capture, cursor release, Alt-Tab, resizing, docking overlays and monitor changes on DSP. Do not infer these from synthetic messages.
 4. Define native-input takeover relative to the game's action writer. Hosting ownership alone does not serialize manual input against prepare/commit.
 5. Qualify game, renderer, Deck and host failures separately under Lab rules. A restarted game or older save is not a viewport recovery strategy.
-6. Focused children still share input queues despite the resize fix. The test controller and actual Electron supervisor demonstrate finite recovery by ending a known owned UI; a hung real game thread, indefinite failures, physical input during a hang and real DSP host death remain unqualified. The user explicitly has not performed the manual input check; this is not a passing result.
+6. Focused children still share input queues despite the resize fix. The test controller and actual Electron supervisor demonstrate finite recovery by ending a known owned UI; a hung real game thread, indefinite failures, physical input during a hang and real DSP host death remain unqualified. The first real manual menu check fails hover/click response as recorded above.
 
-Real adoption requires independent review and an exact deployment/validation cohort. The first installed cohort failed before endpoint creation; the second passed the normal menu lifecycle above. These results leave M0's physical-input, display/docking and failure gates open. Game-action tools stay closed.
+Real adoption requires independent review and an exact deployment/validation cohort. The first installed cohort failed before endpoint creation; the second passed the normal native menu lifecycle above. The subsequent physical-input failure blocks M0, and the display/docking and failure gates remain open. Game-action tools stay closed.
