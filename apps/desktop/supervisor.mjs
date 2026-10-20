@@ -1,7 +1,7 @@
 import { app, utilityProcess } from "electron";
 import { EventEmitter, once } from "node:events";
 import { mkdirSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -172,6 +172,29 @@ async function api(action, args) {
 		return { closed: true };
 	}
 	throw new Error("UNKNOWN_SUPERVISOR_ACTION");
+}
+async function attachFromCommandLine(args) {
+	const index = args.indexOf("--attach-adapter");
+	if (index < 0) return false;
+	const target = args[index + 1];
+	if (typeof target !== "string" || !/^adapter:[0-9]+-[0-9]+$/.test(target))
+		throw new Error("INVALID_ADAPTER_TARGET");
+	await api("attach", target);
+	emit({ type: "native-state", text: "已按本次启动参数嵌入选定窗口；游戏动作工具未接入。" });
+	if (args.includes("--window-probe")) {
+		const first = await api("status");
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		const last = await api("status");
+		const proof = {
+			target, first, last,
+			updatesAdvance: Number.isSafeInteger(last.unityUpdateSequence) && last.unityUpdateSequence > first.unityUpdateSequence,
+			renderSizeAvailable: last.renderWidth > 0 && last.renderHeight > 0,
+			gameWorldCalls: 0, physicalInput: "not_tested", renderedPixels: "not_tested",
+		};
+		await mkdir(join(root, ".local"), { recursive: true });
+		await writeFile(join(root, ".local/m0-window-runtime.private.json"), JSON.stringify(proof, null, 2));
+	}
+	return true;
 }
 function clearUiTests(record) {
 	for (const [id, operation] of tests)
@@ -438,6 +461,10 @@ if (!app.requestSingleInstanceLock()) {
 			void shutdown().catch(() => {});
 			return;
 		}
+		if (args.includes("--attach-adapter")) {
+			void attachFromCommandLine(args).catch(() => emit({ type: "notice", text: "本次窗口连接未通过，原状态保留，未自动重试。" }));
+			return;
+		}
 		if (
 			recovering &&
 			restarts > 1 &&
@@ -516,6 +543,7 @@ if (!app.requestSingleInstanceLock()) {
 					void recoverUi("ui-heartbeat-timeout").catch(recoveryFailed);
 			}, 100);
 			await startUi();
+			await attachFromCommandLine(process.argv);
 			if (process.argv.includes("--demo-fixture")) {
 				await api("start-fixture");
 				await api("attach", "owned-fixture");

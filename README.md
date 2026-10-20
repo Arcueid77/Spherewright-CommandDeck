@@ -93,6 +93,8 @@ Locally verified on 2026-10-20: source builds and type checks; ten Node tests in
 
 The new `native/CommandDeck.UnityAdapter` is a separate, window-only BepInEx plugin, not a Spherewright game-control change. It is inactive without the per-launch `--commanddeck-host` argument. It exposes only native hosting, layout, focus and restoration over a protected local pipe; it has no game-world, save, input-injection or process-termination operation. The first display profile accepts a windowed game and UI on the same 100% scale monitor; changing that profile requests detachment. Other display profiles remain unsupported.
 
+The desktop window selector is the normal entry. For a controlled runtime check, `--attach-adapter <exact-listed-id> --window-probe` performs the same explicit selection once and writes only window/Unity-loop observations to ignored `.local/m0-window-runtime.private.json`. It does not reattach after UI recovery, start a model request or infer menu/world state from those observations.
+
 For a local compile, copy only the private BepInEx/Unity references from an explicitly supplied installation, then build:
 
 ~~~powershell
