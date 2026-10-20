@@ -10,6 +10,16 @@ type ContextValue = State & { rootId: string; root?: Root; taskId: string; docum
 const Context = createContext<ContextValue>(null!);
 const useWorkbench = () => useContext(Context);
 const labels: Record<string, string> = { queued: "等待", running: "进行中", cancelling: "正在停止", succeeded: "完成", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
+const changeLabels: Record<string, string> = { applied: "已写入", reverted: "已撤回", failed: "失败", unknown: "待核对" };
+function taskText(task: Task) {
+	if (task.response || task.error) return task.response || task.error;
+	if (["queued", "running", "cancelling"].includes(task.state)) return "任务进行中，等待输出。";
+	if (task.state !== "succeeded") return labels[task.state] ?? task.state;
+	if (task.kind === "edit") return "文件已保存。可查看代码差异，或在检查输出中撤回此次修改。";
+	if (task.kind === "revert") return "文件修改已撤回。";
+	if (task.kind === "check") return "检查已完成，详细结果见检查输出。";
+	return "任务已完成。";
+}
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
 	const [state, setState] = useState<State>({ roots: [], tasks: [], activeTask: null, executionBlocked: false });
 	const [rootId, setRootId] = useState(""), [taskId, setTaskId] = useState(""), [document, setDocumentState] = useState<Document | null>(null), [notice, setNotice] = useState("");
@@ -125,7 +135,7 @@ export function DevelopmentPanel() {
 		<div className="actions"><button className="accent" disabled={!c.rootId || !model || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
 		<div className="check-row"><select aria-label="仓库检查" value={checkId} onChange={(event) => setCheckId(event.target.value)}>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}</select><button disabled={!checkId || !c.root?.canExecute || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void wb<Task>("check", { rootId: c.rootId, checkId }).then((task) => { c.selectTask(task.id); return c.refresh(); }).catch(c.report)}>运行检查</button></div>
 		<p className="muted">构建和测试会运行该仓库代码。游戏动作未接入，模型费用未知。</p>
-		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{task.response || task.error || "任务已记录，等待输出。"}</pre></>}
+		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{taskText(task)}</pre></>}
 		{c.notice && <p className="notice">{c.notice}</p>}
 	</div>;
 }
@@ -141,7 +151,9 @@ export function OutputPanel() {
 		setTask(null); void refresh(); const timer = setInterval(() => void refresh(), 800);
 		return () => { current = false; clearInterval(timer); };
 	}, [c.taskId]);
-	return <div className="output-panel"><div className="statusline">{task ? `${task.id.slice(0, 8)} · ${labels[task.state] ?? task.state}` : "选择一项任务查看日志"}</div><pre>{task?.events?.filter((event) => event.kind === "command-output").map((event) => event.value.text).join("") || "尚无命令输出。"}{task?.result ? "\n\n" + JSON.stringify(task.result, null, 2) : ""}{task?.error ? "\n" + task.error : ""}</pre>{task?.changes?.map((change) => <div className="statusline" key={change.id}>{change.path} · {change.state}<button disabled={Boolean(c.activeTask) || change.state !== "applied" || !c.roots.find((root) => root.id === task.rootId)?.canWrite} onClick={() => void wb<Task>("revert", { sourceTaskId: task.id, changeId: change.id }).then((next) => { c.selectTask(next.id); return c.refresh(); }).catch(c.report)}>撤回此文件修改</button></div>)}</div>;
+	const result = task?.result && typeof task.result === "object" ? task.result as Record<string, unknown> : null;
+	const output = task?.events?.filter((event) => event.kind === "command-output").map((event) => event.value.text).join("");
+	return <div className="output-panel"><div className="statusline">{task ? `${task.id.slice(0, 8)} · ${labels[task.state] ?? task.state}` : "选择一项任务查看日志"}{typeof result?.exitCode === "number" ? ` · 退出码 ${result.exitCode}` : ""}</div><pre>{output || (task ? taskText(task) : "尚未选择任务。")}</pre>{task?.changes?.map((change) => <div className="statusline" key={change.id}>{change.path} · {changeLabels[change.state] ?? change.state}<button disabled={Boolean(c.activeTask) || change.state !== "applied" || !c.roots.find((root) => root.id === task.rootId)?.canWrite} onClick={() => void wb<Task>("revert", { sourceTaskId: task.id, changeId: change.id }).then((next) => { c.selectTask(next.id); return c.refresh(); }).catch(c.report)}>撤回此文件修改</button></div>)}{result && <details className="receipt"><summary>详细回执</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}</div>;
 }
 
 export const persistedLayout = { load: () => wb<Record<string, unknown> | null>("ui-get", { key: "layout" }), save: (value: unknown) => wb("ui-save", { key: "layout", value }) };

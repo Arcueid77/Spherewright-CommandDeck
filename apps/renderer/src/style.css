@@ -50,6 +50,9 @@ textarea {
 .task-row strong { font-weight: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-row small { color: #8fa1b1; }
 .task-row.selected { border-color: #ae8d5b; }
+.receipt { max-height: 45%; overflow: auto; padding: 9px 12px; border-top: 1px solid #243443; font-size: 11px; color: #91a5b4; }
+.receipt summary { cursor: pointer; }
+.receipt pre { padding: 10px 0; }
 button {
 	cursor: pointer;
 }
