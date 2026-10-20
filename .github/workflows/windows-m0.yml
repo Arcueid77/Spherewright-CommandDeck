@@ -1,4 +1,4 @@
-name: Windows M0 prototypes
+name: Windows desktop prototypes
 on:
   push:
     branches: [main]
@@ -43,6 +43,7 @@ jobs:
       - run: node scripts/run-desktop-smoke.mjs --smoke-host-exit
       - run: node scripts/run-desktop-smoke.mjs --smoke-recovery-limit
       - run: npm run test:desktop-adapter
+      - run: npm run test:workbench
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -60,4 +61,5 @@ jobs:
             .local/adapter-layout-smoke.json
             .local/adapter-route-smoke.json
             .local/desktop-smoke-adapter.json
+            .local/desktop-smoke-workbench.json
           if-no-files-found: ignore

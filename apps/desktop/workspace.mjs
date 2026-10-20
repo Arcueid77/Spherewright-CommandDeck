@@ -70,7 +70,7 @@ function parseStatus(text) {
 
 export class WorkspaceService {
 	constructor(store) { this.store = store; this.index = new Map(); this.mutationTail = Promise.resolve(); }
-	async register({ path, label, canWrite = false, canExecute = false }) {
+	async register({ path, label, canWrite = false, canExecute = false }, { beforeCommit = () => {} } = {}) {
 		if (typeof path !== "string" || !isAbsolute(path) || typeof label !== "string" || !label.trim() || label.length > 80 || /[\x00-\x1f]/.test(label) || typeof canWrite !== "boolean" || typeof canExecute !== "boolean") throw new Error("INVALID_WORKSPACE_GRANT");
 		const canonical = await realpath(path);
 		if (!(await stat(canonical)).isDirectory()) throw new Error("WORKSPACE_DIRECTORY_REQUIRED");
@@ -79,7 +79,9 @@ export class WorkspaceService {
 		const previous = this.store.roots().find((root) => pathKey(root.path) === pathKey(canonical));
 		const metadata = await this.inspect(canonical);
 		metadata.protectedPaths = [...new Set([...(previous?.metadata.protectedPaths ?? []), ...metadata.dirtyPaths])];
+		metadata.protectionGeneration = (previous?.metadata.protectionGeneration ?? 0) + 1;
 		if (metadata.submodule) { canWrite = false; canExecute = false; }
+		beforeCommit();
 		return this.store.upsertRoot({ pathKey: pathKey(canonical), path: canonical, label: label.trim(), canWrite, canExecute, metadata });
 	}
 	async inspect(path) {
@@ -102,9 +104,16 @@ export class WorkspaceService {
 		const root = this.root(id);
 		const metadata = await this.inspect(root.path);
 		const dirty = new Set(metadata.dirtyPaths.map(pathKey));
-		metadata.protectedPaths = (root.metadata.protectedPaths ?? []).filter((path) => dirty.has(pathKey(path)));
+		const current = this.root(id), active = this.store.activeTask()?.rootId === id;
+		metadata.protectionGeneration = current.metadata.protectionGeneration ?? 0;
+		const changed = metadata.protectionGeneration !== (root.metadata.protectionGeneration ?? 0);
+		metadata.protectedPaths = (current.metadata.protectedPaths ?? []).filter((path) => active || changed || dirty.has(pathKey(path)));
 		this.index.delete(id);
 		return this.store.updateRootMetadata(id, metadata);
+	}
+	protectCurrentChanges(id) {
+		const root = this.root(id);
+		return this.store.updateRootMetadata(id, { ...root.metadata, protectionGeneration: (root.metadata.protectionGeneration ?? 0) + 1, protectedPaths: [...new Set([...(root.metadata.protectedPaths ?? []), ...root.metadata.dirtyPaths])] });
 	}
 	async tracked(root) {
 		const cached = this.index.get(root.id);
@@ -205,7 +214,37 @@ export class WorkspaceService {
 		this.mutationTail = operation.catch(() => {});
 		return operation;
 	}
-	async writeLocked({ taskId, rootId, path, expectedSha256, content, actor = "agent" }) {
+	removeCreated(args) {
+		const operation = this.mutationTail.then(() => this.removeCreatedLocked(args));
+		this.mutationTail = operation.catch(() => {});
+		return operation;
+	}
+	async removeCreatedLocked({ taskId, rootId, original }) {
+		const task = this.store.task(taskId);
+		if (task.state !== "running" || task.rootId !== rootId || original.rootId !== rootId || original.beforeText !== null || original.state !== "applied") throw new Error("INVALID_CREATED_FILE_REVERT");
+		const file = await this.resolveFile(rootId, original.path, { write: true, actor: "user" });
+		await this.assertReadable(file.root, file.path);
+		await this.assertTaskRevision(taskId, rootId);
+		const invocation = this.store.beginInvocation(taskId, "remove_created_file", { originalChangeId: original.id, path: file.path, expectedSha256: original.afterHash });
+		let submitted = false;
+		try {
+			await this.resolveFile(rootId, original.path, { write: true, actor: "user" });
+			await this.assertTaskRevision(taskId, rootId);
+			const latest = await readFile(file.absolute);
+			if (digest(latest) !== original.afterHash) throw new Error("STALE_FILE_CONTENT");
+			if (this.store.task(taskId).state !== "running" || !this.root(rootId).canWrite) throw new Error("WORKSPACE_TASK_OR_PERMISSION_CHANGED");
+			submitted = true; await unlink(file.absolute);
+			try { await lstat(file.absolute); throw new Error("FILE_REVERT_READBACK_MISMATCH"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+			this.store.finishInvocation(invocation, { result: { removed: true, originalChangeId: original.id } });
+			this.store.finishChange(original.id, "reverted");
+			return { removed: true, path: file.path, originalChangeId: original.id };
+		} catch (error) {
+			this.store.finishInvocation(invocation, { error: /^[A-Z_]+$/.test(error.message) ? error.message : "FILE_REVERT_FAILED", unknown: submitted });
+			if (submitted) { this.store.finishChange(original.id, "unknown"); error.unknown = true; }
+			throw error;
+		}
+	}
+	async writeLocked({ taskId, rootId, path, expectedSha256, content, actor = "agent", normalizeUserLineEndings = true }) {
 		const task = this.store.task(taskId);
 		if (task.state !== "running" || task.rootId !== rootId) throw new Error("WORKSPACE_TASK_SCOPE_MISMATCH");
 		if (typeof content !== "string" || Buffer.byteLength(content) > MAX_FILE || content.includes("\0")) throw new Error("INVALID_FILE_CONTENT");
@@ -225,7 +264,7 @@ export class WorkspaceService {
 		}
 		if (before?.length > MAX_FILE) throw new Error("WORKSPACE_FILE_TOO_LARGE");
 		const beforeText = before === null ? null : decode(before);
-		if (actor === "user" && beforeText?.includes("\r\n") && !beforeText.replaceAll("\r\n", "").includes("\n")) content = content.replace(/\r?\n/g, "\r\n");
+		if (normalizeUserLineEndings && actor === "user" && beforeText?.includes("\r\n") && !beforeText.replaceAll("\r\n", "").includes("\n")) content = content.replace(/\r?\n/g, "\r\n");
 		const bytes = Buffer.from(content, "utf8"), afterHash = digest(bytes);
 		const changeId = this.store.prepareChange({ taskId, rootId, path: file.path, beforeText, beforeHash: before === null ? null : digest(before), afterText: content, afterHash });
 		const temporary = join(dirname(file.absolute), `.commanddeck-${randomUUID()}.tmp`);
@@ -258,6 +297,7 @@ export class WorkspaceService {
 			return { changeId, rootId, path: file.path, sha256: afterHash, created: create };
 		} catch (error) {
 			this.store.finishChange(changeId, mutationStarted ? "unknown" : "failed");
+			if (mutationStarted) error.unknown = true;
 			throw error;
 		} finally { try { await unlink(temporary); } catch {} }
 	}

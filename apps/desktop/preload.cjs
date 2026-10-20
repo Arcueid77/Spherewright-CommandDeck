@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld(
 		viewport: (rect) => ipcRenderer.invoke("deck:viewport", rect),
 		probe: (config) => ipcRenderer.invoke("deck:probe", config),
 		abort: () => ipcRenderer.invoke("deck:abort"),
+		workbench: (action, args = {}) => ipcRenderer.invoke("deck:workbench", { action, args }),
+		addWorkspace: () => ipcRenderer.invoke("deck:add-workspace"),
 		onEvent: (callback) => {
 			const handler = (_event, data) => callback(data);
 			ipcRenderer.on("deck:event", handler);

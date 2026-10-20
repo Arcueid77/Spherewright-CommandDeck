@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M1 development is in progress. The desktop shell, pinned Pi source integration and one real DSP menu hosting/restoration cycle run locally. The subsequent focus candidate receives native clicks and transfers Windows focus, but Unity still reports no focus and the menu remains unresponsive. The owner has deferred that interaction issue and requested progress on the development workbench. M0 interaction acceptance remains open; this behavior is not an input lock.**
+**Status: the M1 development workbench is implemented and has software regression evidence; manual UI acceptance is pending. It includes approved repository roots, an editor/diff view, a bounded Pi development Agent, managed checks and persistent task receipts. The owner has deferred the unresponsive embedded DSP menu. M0 interaction acceptance remains open; this behavior is not an input lock.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -15,7 +15,7 @@ Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP
 | [spherewright-commanddeck](https://github.com/Arcueid77/spherewright-commanddeck) | Desktop UI, native game-window host, development workspaces, task permissions and the game-action ledger. |
 | [spherewright-pi](https://github.com/Arcueid77/spherewright-pi) | Source fork of the Pi Agent runtime, included here as the vendor/pi submodule. |
 
-Lab belongs in a Spherewright **development workspace**, alongside the game-control source and CommandDeck. It is an independent repository and is not a required dependency of the CommandDeck application build or installed runtime. Existing checkouts can stay in their current locations; the planned workspace UI should support multiple explicitly authorized roots.
+Lab belongs in a Spherewright **development workspace**, alongside the game-control source and CommandDeck. It is an independent repository and is not a required dependency of the CommandDeck application build or installed runtime. Existing checkouts can stay in their current locations; the workspace UI supports multiple explicitly authorized roots.
 
 Conceptual layout, rather than a requirement to move existing repositories:
 
@@ -49,7 +49,7 @@ Changes to Pi are committed and pushed in spherewright-pi first. CommandDeck the
 
 The prototype imports the built coding-agent entry directly from the submodule. `pi:verify` checks the exact commit, compiled entries and internal workspace links. Pi source is unchanged at this baseline. Its ignored model catalog is restored from the matching versioned npm artifact using the integrity in `pi-model-data-lock.json`; only JSON catalog data is copied, not registry runtime modules. End-user packaging remains a later milestone.
 
-## Run the Windows M0 prototype
+## Run the Windows development prototype
 
 Developer prerequisites: Git, Node.js 22.19 or newer, and the .NET 8 SDK with Windows desktop support. The current native fixture targets Windows x64; this is a source prototype, not an installer.
 
@@ -73,7 +73,23 @@ The demo starts only this repository's simulated game host and embeds the Electr
 
 `npm run probe:native-focus` records a remaining focused-UI hang; its normal exit is not an input-isolation pass. `npm run test:native-ui-recovery` separately proves a bounded rescue with WinForms fixtures. The desktop now uses an independent supervisor for the actual Electron UI process, native connection and Pi utility process. Its main-thread heartbeat expires after one second; it confirms the registered UI has exited before creating at most one automatic replacement. The simulated game remains standalone until explicitly reattached.
 
-Close the demo before running `npm run test:desktop`, `npm run test:desktop-host-exit` or `npm run test:desktop-recovery-limit`. These tests cover reload/renderer crash, an actual Electron UI-thread hang, a model round already in flight, abrupt simulator-host exit, and a second UI failure that stops automatic replacement. The wrapper requires the new process's run ID and completed proof, so an old artifact cannot pass a new run. Synthetic results go under ignored `.local/`; private Pi sessions live under the application's `userData/supervisor/m0-probes` directory. The disposable UI has a separate Chromium profile. Neither is committed. Probe snapshots survive UI replacement only while the supervisor stays alive; a durable task ledger is not implemented.
+Close the demo before running `npm run test:desktop`, `npm run test:desktop-host-exit`, `npm run test:desktop-recovery-limit` or `npm run test:workbench`. The M0 tests cover reload/renderer crash, an actual Electron UI-thread hang, a model round already in flight, abrupt simulator-host exit, and a second UI failure that stops automatic replacement. The workbench test separately checks editing, a command running across reload, UI replacement, restored drafts and no command replay. Each wrapper requires its own new run ID and completed proof. Synthetic results go under ignored `.local/`. M0 probe snapshots remain in memory; M1 development tasks use a versioned SQLite ledger under the application's private `userData/supervisor/workbench` directory. Private Pi histories stay there too, outside renderer storage and Git. The disposable UI has a separate Chromium profile.
+
+## M1 development workspace
+
+Start without a game, then use **添加仓库**, or seed approved roots explicitly:
+
+~~~powershell
+npm start -- --workspace '<Spherewright checkout>' --workspace '<Lab checkout>'
+~~~
+
+Each root begins read-only. Enable editing and/or checks for that root in the workspace panel. Pinned submodules remain read-only, including Lab's product dependency and the pinned Pi baseline. Select an independent source checkout for development. Git status and single-file diffs are read-only; automatic commits, pushes and arbitrary shell commands are not exposed to the Agent.
+
+Open tracked text files from the file tree, or create a new file in the editor. Saves check the observed content hash and retain before images. **撤回此文件修改** restores only the matching current after image; it refuses later external edits. Initial dirty files are protected from Agent edits. Layout, task drafts and editor drafts persist locally. Tasks survive panel closure and UI replacement; restarting the application marks interrupted work instead of replaying it.
+
+The development Agent uses only explicitly registered workspace tools and applicable repository rules. Each task has one selected root, a five-minute limit, at most six model requests and 24 tool calls. Named checks come from `typecheck`, `test`, `build` and `lint` package scripts or tracked .NET solution/test projects. Output, exit code and ordinary descendant-process termination are recorded. This runs repository code with the current user's permissions; the Windows Job is process lifecycle management, not an OS sandbox. An unknown command outcome blocks further managed execution pending reconciliation. No game tools are connected.
+
+The model menu references the existing CC Switch/Pi configuration. Deck does not copy its keys into the editor, renderer or repository; an in-app credential editor and separate protected credential store are not implemented. Cost is shown as unknown. On 2026-10-21, MiniMax completed a bounded read/edit/test task in a new owned fixture repository with one successful check and zero game calls. Automated desktop checks prove state recovery, not physical mouse/keyboard behavior or visual acceptance; image capture was unavailable on this machine. M1 manual acceptance remains pending.
 
 ## CC Switch / Pi provider configuration
 

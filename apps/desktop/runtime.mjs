@@ -1,10 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { resolve, join } from "node:path";
 import { runPiProbe } from "./pi-probe.mjs";
+import { Workbench } from "./workbench.mjs";
 
-let controller;
+let controller, workbench;
 export async function dispatchProbe(command, emit) {
-	if (controller) throw new Error("PROBE_ALREADY_RUNNING");
+	if (controller || workbench?.store.activeTask()) throw new Error("PROBE_ALREADY_RUNNING");
 	controller = new AbortController();
 	const timer = setTimeout(
 		() => controller?.abort(),
@@ -23,6 +24,26 @@ export async function dispatchProbe(command, emit) {
 }
 if (process.parentPort) {
 	process.parentPort.on("message", async ({ data }) => {
+		if (data.type === "workbench" && typeof data.id === "string") {
+			try {
+				let result;
+				if (data.action === "initialize") {
+					if (workbench) throw new Error("WORKBENCH_ALREADY_INITIALIZED");
+					workbench = new Workbench({ directory: data.args.directory, helperSource: data.args.helperSource, emit: (event) => process.parentPort.postMessage({ type: "event", event }) });
+					for (const root of data.args.roots ?? []) if (!workbench.store.roots().some((existing) => existing.path.toLowerCase() === root.path.toLowerCase())) await workbench.add(root);
+					result = workbench.state();
+				} else {
+					if (!workbench) throw new Error("WORKBENCH_NOT_INITIALIZED");
+					if (controller && ["agent", "check", "save"].includes(data.action)) throw new Error("PROBE_ALREADY_RUNNING");
+					if (data.action === "drain") result = await workbench.drain();
+					else if (data.action === "close-store") { await workbench.close(); result = { closed: true }; }
+					else if (data.action === "resume-after-close-failure") { workbench.closing = false; result = { resumed: true }; }
+					else result = await workbench.request(data.action, data.args);
+				}
+				process.parentPort.postMessage({ type: "result", id: data.id, result });
+			} catch (error) { process.parentPort.postMessage({ type: "error", id: data.id, code: /^[A-Z0-9_]+$/.test(error.message) ? error.message : "WORKBENCH_OPERATION_FAILED" }); }
+			return;
+		}
 		if (data.type === "abort") {
 			controller?.abort();
 			return;

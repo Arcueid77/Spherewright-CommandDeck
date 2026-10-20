@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { ChildProcess, spawn } from "node:child_process";
@@ -111,11 +111,19 @@ test("wrapper reports unknown when its own running helper is lost", windows, asy
 	const f = await fixture(t), original = ChildProcess.prototype.spawn;
 	t.mock.method(ChildProcess.prototype, "spawn", function (options) {
 		const result = original.call(this, options);
-		if (options.file === f.host) {
+		if (options.file === toNamespacedPath(f.host)) {
 			let buffer = "";
 			this.stdout.on("data", (chunk) => { buffer += chunk.toString(); if (buffer.includes('"type":"started"')) { buffer = ""; this.kill(); } });
 		}
 		return result;
 	});
 	await assert.rejects(runManagedCommand({ ...f, cwd: f.directory, executable: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] }), (error) => error.message === "COMMAND_OUTCOME_UNKNOWN" && error.unknown === true);
+});
+
+test("a long real cache path remains launchable after Store-app path redirection", windows, async (t) => {
+	const f = await fixture(t);
+	const host = await prepareCommandHost(source, join(f.directory, "long-" + "a".repeat(90), "nested-" + "b".repeat(90)));
+	assert.ok(host.executable.length > 260);
+	const result = await runManagedCommand({ host: host.executable, cwd: f.directory, executable: process.execPath, args: ["-e", "process.exitCode=0"] });
+	assert.equal(result.exitCode, 0); assert.equal(result.treeConfirmed, true);
 });

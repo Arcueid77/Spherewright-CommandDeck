@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { once } from "node:events";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const rendererFile = join(root, "dist/renderer/index.html");
@@ -24,7 +25,7 @@ function request(action, args) {
 				pending.delete(id);
 				reject(new Error("SUPERVISOR_TIMEOUT"));
 			},
-			action === "probe" ? 105000 : 12000,
+			action === "probe" ? 105000 : action === "close" ? 45000 : action === "workbench" ? 30000 : 12000,
 		);
 		pending.set(id, { resolve, reject, timer });
 		send({ type: "request", id, action, args });
@@ -48,6 +49,15 @@ async function testCommand(message) {
 			window.webContents.reload();
 			await loaded;
 			result = true;
+		} else if (message.name === "capture-workbench") {
+			let captureTimer;
+			try {
+				const capture = await Promise.race([window.webContents.capturePage(undefined, { stayAwake: true }), new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error("CAPTURE_TIMEOUT")), 1000); })]);
+				await mkdir(join(root, ".local"), { recursive: true });
+				await writeFile(join(root, ".local/m1-smoke-workbench.private.png"), capture.toPNG());
+				result = { captured: true };
+			} catch { result = { captured: false, code: "CAPTURE_UNAVAILABLE" }; }
+			finally { clearTimeout(captureTimer); }
 		} else if (message.name === "renderer-crash") {
 			const loaded = once(window.webContents, "did-finish-load");
 			window.webContents.forcefullyCrashRenderer();
@@ -68,7 +78,8 @@ async function testCommand(message) {
 			result = true;
 		} else throw new Error("UNKNOWN_UI_TEST");
 		send({ type: "test-result", id: message.id, ok: true, result });
-	} catch {
+	} catch (error) {
+		if (smoke) console.error("UI_TEST_DETAIL", message.name, error.message);
 		send({
 			type: "test-result",
 			id: message.id,
@@ -167,6 +178,16 @@ if (typeof process.send !== "function") {
 				window.webContents.focus();
 				return result;
 			});
+			handle("deck:workbench", (args) => {
+				if (!args || args.action === "add") throw new Error("USE_WORKSPACE_PICKER");
+				return request("workbench", args);
+			});
+			handle("deck:add-workspace", async () => {
+				const selected = await dialog.showOpenDialog(window, { title: "添加开发仓库", properties: ["openDirectory"] });
+				if (selected.canceled || selected.filePaths.length !== 1) return { cancelled: true };
+				const path = selected.filePaths[0], label = path.replaceAll("\\", "/").split("/").at(-1);
+				return request("workbench", { action: "add", args: { path, label, canWrite: false, canExecute: false } });
+			});
 			handle("deck:detach", async () => {
 				const result = await request("detach");
 				window.show();
@@ -190,7 +211,7 @@ if (typeof process.send !== "function") {
 					if (!window.isDestroyed())
 						await dialog.showMessageBox(window, {
 							type: "warning",
-							message: "未能证明宿主已正常脱离，工作台保持打开。",
+							message: "任务收尾或窗口还原尚未确认，工作台保持打开。",
 						});
 				});
 			});

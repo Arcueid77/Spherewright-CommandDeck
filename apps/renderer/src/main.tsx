@@ -7,6 +7,7 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
+import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout } from "./workbench";
 
 type Profile = { providerId: string; modelId: string; api: string };
 type Target = { id: string; pid: number; kind: string; title: string };
@@ -34,8 +35,11 @@ type RuntimeEvent = {
 	tool?: string;
 	busy?: boolean;
 	result?: ProbeResult;
+	taskId?: string;
+	kind?: string;
 };
 type UiSnapshot = {
+	layoutMode: "m0" | "development";
 	busy: boolean;
 	probeText: string;
 	lastProbeResult: ProbeResult | null;
@@ -65,6 +69,8 @@ declare global {
 				modelId?: string;
 			}): Promise<ProbeResult>;
 			abort(): Promise<unknown>;
+			workbench<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			addWorkspace(): Promise<{ cancelled?: boolean }>;
 			onEvent(callback: (event: RuntimeEvent) => void): () => void;
 		};
 	}
@@ -175,7 +181,7 @@ function AgentPanel() {
 				</button>
 			</div>
 			<pre>{output}</pre>
-			<div className="footnote">本原型没有 shell、文件修改或游戏动作工具。</div>
+			<div className="footnote">本连接验证仅允许 deck_echo；开发工具位于独立的开发 Agent 面板。</div>
 		</div>
 	);
 }
@@ -376,9 +382,28 @@ const components = {
 	game: GamePanel,
 	evidence: EvidencePanel,
 	events: EventPanel,
+	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 };
-function ready(event: DockviewReadyEvent) {
+async function ready(event: DockviewReadyEvent) {
 	const api = event.api;
+	const snapshot = await window.deck.snapshot();
+	if (snapshot.layoutMode === "development") {
+		let restored = false;
+		try { const saved = await persistedLayout.load(); if (saved) { api.fromJSON(saved as unknown as Parameters<typeof api.fromJSON>[0]); restored = true; } } catch { api.clear(); }
+		if (!restored) {
+			api.addPanel({ id: "editor", component: "editor", title: "代码 / 差异" });
+			api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口", position: { referencePanel: "editor", direction: "within" }, inactive: true });
+			api.addPanel({ id: "files", component: "files", title: "工作区", position: { referencePanel: "editor", direction: "left" }, initialWidth: 280 });
+			api.addPanel({ id: "development", component: "development", title: "开发 Agent", position: { referencePanel: "editor", direction: "right" }, initialWidth: 370 });
+			api.addPanel({ id: "agent", component: "agent", title: "M0 连接验证", position: { referencePanel: "development", direction: "within" }, inactive: true });
+			api.addPanel({ id: "evidence", component: "evidence", title: "能力与证据", position: { referencePanel: "development", direction: "within" }, inactive: true });
+			api.addPanel({ id: "output", component: "output", title: "检查输出", position: { referencePanel: "editor", direction: "below" }, initialHeight: 230 });
+			api.addPanel({ id: "tasks", component: "tasks", title: "任务记录", position: { referencePanel: "output", direction: "within" }, inactive: true });
+			api.addPanel({ id: "events", component: "events", title: "运行事件", position: { referencePanel: "output", direction: "within" }, inactive: true });
+		}
+		api.onDidLayoutChange(() => { void persistedLayout.save(api.toJSON()).catch(() => {}); });
+		return;
+	}
 	api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口" });
 	api.addPanel({
 		id: "agent",
@@ -409,8 +434,9 @@ function App() {
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
-				<div className="tag">M0 · 技术原型</div>
-				<div className="header-note">只读实验 · 游戏写入 0</div>
+				<div className="tag">M1 · 开发工作台</div>
+				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
+				<div className="header-note">游戏动作未接入 · 中央点击暂缓</div>
 			</header>
 			<div className="workspace">
 				<DockviewReact
@@ -430,4 +456,4 @@ document.addEventListener(
 	},
 	{ capture: true },
 );
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<WorkbenchProvider><App /></WorkbenchProvider>);

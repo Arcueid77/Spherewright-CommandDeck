@@ -3,7 +3,7 @@ import { EventEmitter, once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WindowHost } from "./window-host.mjs";
 import { spawnOwnedUi, registerOwnedUi } from "./owned-ui-process.mjs";
@@ -11,6 +11,7 @@ import { publicProfiles } from "./profiles.mjs";
 import { runDesktopSmoke } from "./desktop-smoke.mjs";
 import { inspectOwnedUi } from "./inspect-ui.mjs";
 import { runAdapterDesktopSmoke } from "./adapter-desktop-smoke.mjs";
+import { runWorkbenchSmoke } from "./workbench-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -23,6 +24,7 @@ const events = new EventEmitter();
 const runtimePending = new Map(),
 	tests = new Map();
 let runtime,
+	workbenchReady = false,
 	ui,
 	watchdog,
 	epoch = 0,
@@ -37,6 +39,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
+	layoutMode: smoke && !process.argv.includes("--smoke-workbench") ? "m0" : "development",
 	events: [],
 };
 const safeEnvironment = () =>
@@ -57,12 +60,20 @@ function emit(event) {
 	else state.events = [...state.events.slice(-39), event];
 	send(ui, { type: "event", event });
 }
+function workbenchCall(action, args = {}) {
+	const id = "workbench:" + String(++testSequence);
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("WORKBENCH_RESPONSE_TIMEOUT")); }, 25000);
+		runtimePending.set(id, { resolve, reject, timer });
+		runtime.postMessage({ type: "workbench", id, action, args });
+	});
+}
 async function probe(config) {
 	if (
 		!config ||
 		!["offline", "live"].includes(config.mode) ||
 		state.busy ||
-		runtimePending.size
+		[...runtimePending.keys()].some((id) => !id.startsWith("workbench:"))
 	)
 		throw new Error("INVALID_OR_BUSY_PROBE");
 	if (
@@ -121,8 +132,9 @@ async function api(action, args) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action);
 	if (
-		recovering &&
+		recovering && !recoveryRead &&
 		![
 			"status",
 			"profiles",
@@ -134,6 +146,10 @@ async function api(action, args) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, events: [...state.events] };
+	if (action === "workbench") {
+		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
+		return workbenchCall(args.action, args.args ?? {});
+	}
 	if (action === "profiles") {
 		try {
 			return publicProfiles();
@@ -435,11 +451,13 @@ async function shutdown(exitCode = 0) {
 	stopping = true;
 	runtime?.postMessage({ type: "abort" });
 	try {
+		if (workbenchReady) await workbenchCall("drain");
 		await native.request("detach");
 		await native.request("close");
 	} catch (error) {
 		if (exitCode === 0) {
 			stopping = false;
+			if (workbenchReady) await workbenchCall("resume-after-close-failure").catch(() => {});
 			throw error;
 		}
 		// Only the test-created simulator can be cleaned up here. The DSP client has no child/kill route.
@@ -457,6 +475,7 @@ async function shutdown(exitCode = 0) {
 			await withDeadline(exited, 3000, "UI_EXIT_TIMEOUT");
 		}
 	}
+	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	runtime?.kill();
 	allowQuit = true;
 	app.exit(exitCode);
@@ -533,6 +552,7 @@ if (!app.requestSingleInstanceLock()) {
 				}
 			});
 			runtime.on("exit", () => {
+				workbenchReady = false;
 				for (const operation of runtimePending.values()) {
 					clearTimeout(operation.timer);
 					operation.reject(new Error("RUNTIME_STOPPED"));
@@ -540,9 +560,17 @@ if (!app.requestSingleInstanceLock()) {
 				runtimePending.clear();
 				emit({
 					type: "notice",
-					text: "Pi runtime 已停止，没有启用游戏动作接口。",
+					text: "开发运行时已停止；未自动重放任务。游戏动作接口未接入。",
 				});
 			});
+			const workspaceRoots = [];
+			for (let index = 0; index < process.argv.length; index++) if (process.argv[index] === "--workspace") {
+				const path = process.argv[++index];
+				if (!path || !isAbsolute(path) || workspaceRoots.length >= 8) throw new Error("INVALID_WORKSPACE_ARGUMENT");
+				workspaceRoots.push({ path, label: basename(path), canWrite: false, canExecute: false });
+			}
+			await workbenchCall("initialize", { directory: join(privateDirectory, smoke ? "m1-smoke-" + (process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID()) : "workbench"), helperSource: join(root, "artifacts/commands"), roots: workspaceRoots });
+			workbenchReady = true;
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
 			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
 			watchdog = setInterval(() => {
@@ -562,7 +590,7 @@ if (!app.requestSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),

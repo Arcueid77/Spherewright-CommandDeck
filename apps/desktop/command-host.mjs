@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, copyFile, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, toNamespacedPath } from "node:path";
 
 const files = ["CommandDeck.CommandHost.exe", "CommandDeck.CommandHost.dll", "CommandDeck.CommandHost.deps.json", "CommandDeck.CommandHost.runtimeconfig.json"];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -27,8 +27,9 @@ export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs 
 	if (signal?.aborted) return Promise.reject(new Error("COMMAND_CANCELLED_BEFORE_START"));
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:API_?KEY|TOKEN|SECRET|PASSWORD|^PI_|^NODE_OPTIONS$|^ELECTRON_)/i.test(key)));
 	return new Promise((resolve, reject) => {
-		const child = spawn(host, [], { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-		let buffer = "", receipt, created = false, started = false, protocolFailed = false, ownedTermination = false;
+		// Store-app redirection can make the real cache path exceed MAX_PATH even when its logical path is short.
+		const child = spawn(toNamespacedPath(host), [], { cwd, env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+		let buffer = "", receipt, created = false, started = false, protocolFailed = false, ownedTermination = false, launchError;
 		const abort = () => { if (!child.stdin.destroyed) child.stdin.write("cancel\n", () => {}); };
 		const fail = () => { protocolFailed = true; abort(); };
 		child.stdin.on("error", () => {});
@@ -52,7 +53,7 @@ export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs 
 			}
 		});
 		child.stderr.on("data", () => {});
-		child.on("error", () => fail());
+		child.on("error", (error) => { launchError = error.code; fail(); });
 		const deadline = setTimeout(() => { ownedTermination = true; child.kill(); }, timeoutMs + 15000);
 		signal?.addEventListener("abort", abort, { once: true });
 		child.stdin.write(JSON.stringify({ executable, arguments: args, directory: cwd, timeoutMs }) + "\n");
@@ -62,6 +63,7 @@ export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs 
 			if (protocolFailed || ownedTermination || !receipt || receipt.type !== "result" || receipt.treeConfirmed !== true || receipt.streamsDrained !== true || code !== 0) {
 				const error = new Error(receipt?.type === "error" ? receipt.code : "COMMAND_OUTCOME_UNKNOWN");
 				error.unknown = created || started || !receipt?.treeConfirmed;
+				error.diagnostic = { created, started, protocolFailed, ownedTermination, helperExitCode: code, launchError, receipt };
 				reject(error);
 			} else resolve({ exitCode: receipt.exitCode, reason: receipt.reason, treeConfirmed: true, streamsDrained: true, outputTruncated: receipt.outputTruncated === true });
 		});
