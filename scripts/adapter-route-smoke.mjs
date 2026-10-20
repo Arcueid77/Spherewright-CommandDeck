@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { NativeClient } from "../apps/desktop/native-client.mjs";
 import { WindowHost } from "../apps/desktop/window-host.mjs";
+import { registerOwnedUi } from "../apps/desktop/owned-ui-process.mjs";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check) {
@@ -15,11 +16,13 @@ function restored(state) {
 }
 const game = new NativeClient(["--adapter-pipe-fixture"]);
 const ui = new NativeClient(["--fixture"]);
+let uiLease;
 const router = new WindowHost();
 let descriptorPath;
 const proof = { fixtureOnly: true, actualUnity: false, gameCalls: 0 };
 try {
 	const [gameReady, uiReady] = await Promise.all([game.ready, ui.ready]);
+	uiLease = registerOwnedUi(ui.child);
 	descriptorPath = gameReady.descriptor;
 	router.bindUi({ pid: uiReady.pid, hwnd: uiReady.hwnd });
 	const target = (await router.request("list")).find((item) => item.id.startsWith("adapter:") && item.pid === game.child.pid);
@@ -76,5 +79,15 @@ try {
 	try { await router.request("detach"); } catch {}
 	if (!game.stopped) { try { await game.request("close"); } catch { game.child.kill(); } }
 	if (game.stopped && descriptorPath) { try { await unlink(descriptorPath); } catch (error) { if (error.code !== "ENOENT") throw error; } }
-	if (!ui.stopped) { const exited = once(ui.child, "exit"); ui.child.stdin.write("close\n"); await exited; }
+	if (!ui.stopped) {
+		const exited = once(ui.child, "exit");
+		ui.child.stdin.write("close\n");
+		// Parent death may invalidate the fixture's HWND without ending its message loop.
+		// Cleanup only this registered, test-created UI; never wait indefinitely for its dead HWND.
+		if (!(await Promise.race([exited.then(() => true), delay(2000).then(() => false)]))) {
+			uiLease ??= registerOwnedUi(ui.child);
+			assert.equal(uiLease.terminate(), true);
+			assert.equal(await Promise.race([exited.then(() => true), delay(3000).then(() => false)]), true, "Owned UI cleanup exit not confirmed");
+		}
+	}
 }
