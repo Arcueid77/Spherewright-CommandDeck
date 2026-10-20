@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned host simulators run locally. The first BepInEx adapter cohort loaded in DSP but hit an unsupported Mono identity API before endpoint/hosting creation; a native Windows compatibility fix is under validation. Real DSP embedding has not passed. The development workspace is not implemented.**
+**Status: M0 prototype in progress. The desktop shell and pinned Pi source integration run locally. The Mono compatibility fix now runs in DSP: one empty-menu cohort completed native embedding, normal restoration and explicit re-embedding while keeping the original game process. Physical input, rendered pixels and the remaining display/docking gates are unqualified, so M0 has not passed. The development workspace is not implemented.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -87,7 +87,7 @@ npm run smoke:live -- --provider '<configured-provider-id>' --model '<configured
 
 The fixed probe permits at most two model requests and one `deck_echo` execution, caps requested output at 512 tokens per response, disables retries, and has a wall-clock timeout. It has no game, shell or file-editing tools, project resources, extensions, skills or MCP discovery. Active and callable tool sets are both checked. `npm run smoke:offline` uses a loopback fake service without external model access.
 
-Locally verified on 2026-10-20: source builds and type checks; ten Node tests including split tool arguments, cancellation, denied tools, session reopening without execution, and failed second responses; native ownership/detach/failure tests; and one live MiniMax-M3.1-Flash roundtrip through the desktop utility process. Only that configured Chat Completions compatible endpoint has live evidence. Foreign-window mutations run serially off the host UI thread; focused child windows still share input queues. In the actual Electron hang test, the supervisor ends only its registered UI after roughly one second, the original native input request resumes, the same Pi process finishes the in-flight offline probe after UI exit, and a replacement displays its result without resubmission. Abrupt simulator-host exit recreates one visible top-level UI while keeping Pi and never restarting the host. A second UI failure stops automatic replacement. These are finite simulator tests; physical input, DPI changes and real DSP/Steam behavior remain unqualified. M0 as a whole has not passed.
+Locally verified on 2026-10-20: source builds and type checks; ten Node tests including split tool arguments, cancellation, denied tools, session reopening without execution, and failed second responses; native ownership/detach/failure tests; and one live MiniMax-M3.1-Flash roundtrip through the desktop utility process. Only that configured Chat Completions compatible endpoint has live evidence. Foreign-window mutations run serially off the host UI thread; focused child windows still share input queues. In the actual Electron hang test, the supervisor ends only its registered UI after roughly one second, the original native input request resumes, the same Pi process finishes the in-flight offline probe after UI exit, and a replacement displays its result without resubmission. Abrupt simulator-host exit recreates one visible top-level UI while keeping Pi and never restarting the host. A second UI failure stops automatic replacement. These are finite simulator tests; the separate DSP menu evidence below does not qualify physical input, DPI changes or real-game failure recovery. M0 as a whole has not passed.
 
 ## Game-side window adapter candidate
 
@@ -102,7 +102,9 @@ pwsh -File scripts/sync-unity-refs.ps1 -DspDir '<DSP installation>'
 npm run build:unity-adapter
 ~~~
 
-Game DLLs stay under ignored `.local/game-refs` and are never shipped. Candidate output is under ignored `artifacts/unity-adapter`. The first exact cohort was installed separately and loaded at normal DSP startup, but Mono's unimplemented `WindowsIdentity.User` prevented endpoint creation. It did not create a game-window host. The fix uses native current-user SID/ACL and session queries; runtime verification of that fix remains separate. CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it cannot compile the Unity plugin without those private references. A local compile is not a Unity runtime pass.
+Game DLLs stay under ignored `.local/game-refs` and are never shipped. Candidate output is under ignored `artifacts/unity-adapter`. The first exact cohort was installed separately and loaded at normal DSP startup, but Mono's unimplemented `WindowsIdentity.User` prevented endpoint creation. It did not create a game-window host. The fix uses native current-user SID/ACL and session queries. The subsequent `e00f56c` cohort, after its exact-SHA CI passed, published its endpoint in Unity `2022.3.62f3c1` and completed embedding, normal restoration and explicit re-embedding at the empty DSP menu. Native parent/visibility/layout checks and advancing Unity updates passed at 96 DPI; these do not prove correct pixels or physical input. Published session reads reported no loaded world; no save/load or game-action call was made. The original Spherewright DLL hashes stayed unchanged. Detailed scope and private evidence hashes are recorded in [native-window-hosting.md](docs/native-window-hosting.md).
+
+CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it cannot compile the Unity plugin without those private references. A local compile, simulator pass and exact real-runtime check remain separate results.
 
 `test:adapter-layout` checks both completion/request orderings; `test:adapter-native` checks the shared Win32 source, including an unexpected host-thread quit; `test:adapter-bridge` checks authentication, OS peer identity before sending the credential, malformed clients, EOF, restoration quarantine and descriptor ownership. `test:adapter-route` verifies that helper exit cannot clear an unreconciled host. `test:desktop-adapter` runs the real Electron UI through the same pipe protocol against a fake game, including UI replacement with an in-flight Pi probe. None starts or calls DSP.
 
@@ -112,7 +114,7 @@ Game DLLs stay under ignored `.local/game-refs` and are never shipped. Candidate
 - Game mode exposes controlled Spherewright tools. It does not inherit development shell or file permissions.
 - Switching modes does not authorize a pending game action. Approvals, budgets, commit intents, original action identities and receipts belong to CommandDeck's task ledger, independently of Pi conversation history.
 - Game writes continue through Spherewright prepare/commit and original-action reconciliation. Unknown outcomes stop further writes; a resumed conversation never authorizes replay.
-- Native game-window embedding is the preferred technical experiment for direct human input. Compatibility with DSP, Steam startup, focus, DPI, docking and host shutdown remains unverified. Agent game control remains on the structured MCP path.
+- Native game-window embedding has one real DSP menu lifecycle check. Physical input, focus, DPI changes, docking and real failures still need acceptance. Agent game control remains on the structured MCP path.
 
 ## Initial implementation priorities
 
@@ -120,7 +122,7 @@ Game DLLs stay under ignored `.local/game-refs` and are never shipped. Candidate
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-The simulator and Pi portions of the first two slices now have local evidence. The game-side window adapter is a compiled candidate; deployment, Unity runtime compatibility, actual game input and the remaining M0 gates still need separate validation. Development tools, the task ledger and all game execution remain future work.
+The simulator, Pi and one real DSP menu hosting cycle now have local evidence. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. Development tools, the task ledger and all game execution remain future work.
 
 ## License
 

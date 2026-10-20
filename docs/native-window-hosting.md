@@ -4,7 +4,7 @@
 
 Keep the directly interactive native viewport as the target. The current prototype uses a simulated game process that owns the stable top-level host and its native viewport. The Electron UI is a disposable foreign child of that host, with a native window-region hole exposing the viewport.
 
-This is a real HWND parent/child composition, not video capture or an independently positioned game window. Automated runtime evidence uses our own simulators. A separate game-side adapter is now compiled, but DSP, Unity's actual message loop and Steam startup are not qualified by these tests.
+This is a real HWND parent/child composition, not video capture or an independently positioned game window. Automated fault evidence uses our own simulators. A separate game-side adapter has also completed one real DSP empty-menu embedding/restoration/re-embedding cycle, detailed below. Those native checks do not qualify rendered pixels, physical input or real-game fault recovery.
 
 ## Why the first experiment was rejected
 
@@ -15,7 +15,7 @@ The user selected continued research into true embedding, initially using simula
 ## Ownership and failure behavior
 
 ~~~text
-Simulated game process
+Game process (simulator, or explicitly enabled DSP adapter)
   stable top-level host
     native game viewport (same process)
     Electron UI window (foreign, replaceable process)
@@ -90,7 +90,7 @@ After a one-second heartbeat deadline, the supervisor terminates only that regis
 
 Read-only installation checks match the Lab native lock's `Assembly-CSharp.dll` SHA-256 `EF314425DADE51F529F184F07BE136CD3C2660A6A81515603C7226FBE7AB1D8C`. The executable and `UnityPlayer.dll` file version are `2022.3.62.1451004`; BepInEx's file version is `5.4.17.0`. Metadata inspection finds `Application.get_unityVersion/get_platform/get_isEditor` and `Screen.get_fullScreenMode/get_width/get_height/SetResolution` in the installed CoreModule. These are file/metadata facts, not a running-game check or permission to change display settings.
 
-The integration candidate is a separate CommandDeck BepInEx window adapter, with no game-world API or save access. The WinForms fixture itself cannot be loaded into Unity. A shared raw Win32 core now builds for net472 and net8; the Unity wrapper compiles locally against the private installed BepInEx/Unity references, with no Assembly-CSharp or Spherewright reference. Steam startup, graphics readiness and restoration still require exact-version runtime proof. No adapter was deployed and no DSP process was started for these checks.
+The integration candidate is a separate CommandDeck BepInEx window adapter, with no game-world API or save access. The WinForms fixture itself cannot be loaded into Unity. A shared raw Win32 core builds for net472 and net8; the Unity wrapper compiles locally against the private installed BepInEx/Unity references, with no Assembly-CSharp or Spherewright reference. The initial metadata checks did not deploy or start DSP. The later exact-version menu cohort below separately records deployment, Steam startup, Unity updates and restoration; it still does not qualify rendered pixels or input.
 
 ### Compiled game-side adapter and protocol
 
@@ -116,15 +116,38 @@ The candidate build is `npm run build:unity-adapter`, after `scripts/sync-unity-
 
 That first real attempt loaded and opted in, then failed before publishing its endpoint with `NotImplementedException`. Read-only metadata inspection of the installed Mono libraries proves `WindowsIdentity.get_User` is a six-byte unconditional exception stub; its managed `Process.SessionId` is also a constant-return stub, so it cannot enforce the session boundary. The compatibility change uses the established Spherewright Windows SID/DACL/pipe implementation as independent MIT source, with no product/game dependency. It obtains the process token and protected user ACL through Win32, creates a remote-client-rejecting pipe with that ACL, and queries sessions with `ProcessIdToSessionId`. No permissive ACL fallback is allowed. These code changes and simulator results do not qualify the fix in Mono until a separate cold run.
 
-The published Plugin session read for the first process reports `gameLoaded=false` and no game tick. No window adoption, save or load was requested. Subsequent cold testing must fresh-prove no world before normal close, preserve exact cohort hashes and recheck the actual runtime; it must not load a save to test geometry.
+The published Plugin session read for the first process reports `gameLoaded=false` and no game tick. No window adoption, save or load was requested. A second fresh no-world read preceded its normal window close; the process exited without forced termination. Subsequent cold testing must preserve exact cohort hashes and recheck the actual runtime; it must not load a save to test geometry.
+
+### Real DSP empty-menu cohort: 2026-10-20
+
+The second cohort used implementation commit `e00f56ce5441e3a707a4445a88fd07641a0b8c08`, after [CI 39427237164](https://github.com/Arcueid77/spherewright-commanddeck/actions/runs/39427237164) completed successfully. The locally compiled plugin records that full source revision. Only the four candidate DLLs in the separate CommandDeck addon folder were replaced; the original four Spherewright plugin DLLs still matched their recorded hashes. Neither the product source checkout nor its mixed worktree was changed.
+
+Steam started DSP normally with the per-launch opt-in/window arguments. The loaded Unity runtime reported `2022.3.62f3c1`; the private descriptor, native pipe peer and exact process/start generation matched. The endpoint became readable in this same process without descriptor modification or a game restart. No window host existed before explicit desktop selection. Published `get_session_state` reads immediately before both attachments and the intervening desktop shutdown reported `gameLoaded=false` with no game tick.
+
+The bounded sequence was:
+
+1. Explicit desktop attachment created the game-owned parent and adopted the real Unity window plus disposable Electron UI. Native game/UI parent checks, host/UI visibility, 96 DPI and requested/applied layout revision `7/7` passed with no pending operation or fault. Unity updates advanced across the one-second observation; its render size was `1398×954`.
+2. Normal Deck shutdown restored the original windows before exiting. A fresh authenticated connection reported `restorationProven=true`, no active host, no attached UI, no quarantine and no fault. The same DSP process generation remained alive and Unity updates advanced; render size returned to `2556×1440`. The adapter requires original parent/styles/bounds readback and a successful placement-restoration call before destroying its host; placement is not separately read back. This was not an independent pixel or human-input check.
+3. One new, explicit attachment of that same endpoint again passed both parent checks, native visibility, settled layout `2/2`, 96 DPI and advancing Unity updates, with render size `1398×954` and no fault. Deck and DSP were left open for human inspection. No automatic reattachment or operation retry was used.
+
+Apart from the published read-only session checks, the validation entries issued no game action, save/load or model call. No game input, process hang, crash or forced game termination was injected. This qualifies the compatibility fix and one normal native menu lifecycle on this machine, not physical focus, pixels, world controls, monitor changes, arbitrary docking or real DSP failures.
+
+Raw logs and process/window identities remain private and ignored. The following SHA-256 values identify the sealed local observations without publishing their contents:
+
+| Observation | Private file | SHA-256 |
+| --- | --- | --- |
+| First attachment | `.local/m0-window-first-attach.private.json` | `C7347F86FDE86805B5E9F551F80733F09ECCD8C8ACDBABEA00B2834FC1CE4965` |
+| Normal restoration | `.local/m0-normal-window-restore.private.json` | `322FD3178A547F8F25C5D9FE58393A296BE3757D550478DDEB3FFF3F7DC6F070` |
+| Explicit reattachment | `.local/m0-window-reattach.private.json` | `DD4CEDE903BC8E30F6E1238A8FA818D4295D0D94D79D9A563C103ED126D9F8B3` |
+| Second cold-start BepInEx log | `.local/m0-second-menu-bep.private.log` | `39155346B785B58A7C79EA1C9D9E74B8FAF791F10E74FC79BA543D29ACAEF8A6` |
 
 ### Unqualified scope
 
-1. The compiled game-side adapter must still prove its stable host and original Unity HWND cooperate with DSP's actual window/message lifecycle. A successful local compile and shared-source fixture do not prove Mono or Unity graphics behavior.
-2. Determine the supported startup, window-style, DPI and graphics-ready sequence from the exact current Unity/runtime. Do not alter game assemblies or use an external memory/injection route.
+1. The real empty-menu cohort proves one normal native hosting cycle. Physical input, correct pixels, long-running operation and failure behavior still require separate evidence; a successful local compile or simulator cannot supply it.
+2. Qualify further startup, window-style, DPI and graphics profiles against the exact runtime. The proven native cycle is limited to a windowed game and same-monitor 100% scale. Do not alter game assemblies or use an external memory/injection route.
 3. Prove native mouse/keyboard focus, capture, cursor release, Alt-Tab, resizing, docking overlays and monitor changes on DSP. Do not infer these from synthetic messages.
 4. Define native-input takeover relative to the game's action writer. Hosting ownership alone does not serialize manual input against prepare/commit.
 5. Qualify game, renderer, Deck and host failures separately under Lab rules. A restarted game or older save is not a viewport recovery strategy.
 6. Focused children still share input queues despite the resize fix. The test controller and actual Electron supervisor demonstrate finite recovery by ending a known owned UI; a hung real game thread, indefinite failures, physical input during a hang and real DSP host death remain unqualified. The user explicitly has not performed the manual input check; this is not a passing result.
 
-Real adoption requires independent review and an exact deployment/validation cohort. The source has an explicit opt-in attachment route; its first installed cohort failed before endpoint creation. Real DSP attachment and the Mono fix remain unqualified. Game-action tools stay closed.
+Real adoption requires independent review and an exact deployment/validation cohort. The first installed cohort failed before endpoint creation; the second passed the normal menu lifecycle above. These results leave M0's physical-input, display/docking and failure gates open. Game-action tools stay closed.
