@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Diagnostics;
 
 namespace CommandDeck.NativeHost;
 
@@ -16,18 +17,28 @@ internal sealed class OwnedHostFixture : Form
     private bool adopting, detaching, closing, allowClose, restoreFailed;
     private long layoutRequested, layoutApplied;
     private string? layoutError;
+    private long uiHeartbeatCount;
     private bool connected = true;
     private int clicks, keys, wheel;
     private Point lastMouse;
     private Point pan;
     private bool dragging;
+    private List<InputStep>? inputTrace;
+    private long inputStarted;
     private Rectangle requestedViewport;
     internal OwnedHostFixture()
     {
         Text = "CommandDeck game-owned host fixture — NO DSP"; Width = 1440; Height = 940;
         Controls.Add(viewport); viewport.Dock = DockStyle.Fill;
         viewport.Paint += PaintGame;
-        viewport.MouseDown += (_, e) => { clicks++; lastMouse = e.Location; viewport.Focus(); dragging = true; viewport.Capture = true; viewport.Invalidate(); };
+        viewport.MouseDown += (_, e) =>
+        {
+            clicks++; lastMouse = e.Location;
+            MarkInput("before-focus"); viewport.Focus(); MarkInput("after-focus");
+            dragging = true;
+            MarkInput("before-capture"); viewport.Capture = true; MarkInput("after-capture");
+            viewport.Invalidate();
+        };
         viewport.MouseUp += (_, _) => { dragging = false; viewport.Capture = false; };
         viewport.MouseCaptureChanged += (_, _) => { if (!viewport.Capture) dragging = false; };
         viewport.MouseMove += (_, e) => { if (dragging) { pan.Offset(e.X - lastMouse.X, e.Y - lastMouse.Y); lastMouse = e.Location; viewport.Invalidate(); } };
@@ -44,6 +55,7 @@ internal sealed class OwnedHostFixture : Form
         });
         timer.Tick += (_, _) =>
         {
+            uiHeartbeatCount++;
             if (ui != null && !ForeignUi.Alive(ui) && !adopting && !detaching && !restoreFailed) _ = RestoreAfterDisconnect("Deck exit");
             Program.Send(new { type = "fixture", state = Status() });
         };
@@ -108,6 +120,7 @@ internal sealed class OwnedHostFixture : Form
                 "rect" => await SetViewport(message),
                 "detach" => await DetachUi(),
                 "status" => Status(),
+                "fixture-identity" => new { hostHwnd = Handle.ToInt64().ToString(), gameHwnd = viewport.Handle.ToInt64().ToString() },
                 "exercise-input" => ExerciseFixtureInput(),
                 "exercise-backpressure" => ExerciseFixtureBackpressure(),
                 "exercise-host-resize" => ExerciseHostResize(),
@@ -232,6 +245,7 @@ internal sealed class OwnedHostFixture : Form
     private void ClearUi()
     {
         ui = null;
+        requestedViewport = Rectangle.Empty;
         layoutRequested = layoutApplied = 0;
         layoutError = null;
         restoreFailed = false;
@@ -259,6 +273,9 @@ internal sealed class OwnedHostFixture : Form
             layoutApplied,
             layoutError,
             restoreFailed,
+            uiHeartbeatCount,
+            clientWidth = ClientSize.Width,
+            clientHeight = ClientSize.Height,
             clicks,
             keys,
             wheel,
@@ -273,14 +290,35 @@ internal sealed class OwnedHostFixture : Form
         // Test-only messages to this simulator's own control. Never target DSP or a foreign HWND.
         if (Win.WindowPid(viewport.Handle) != Environment.ProcessId) throw new InvalidOperationException("FIXTURE_INPUT_OWNERSHIP_FAILED");
         static nint At(int x, int y) => (nint)((y << 16) | x);
-        Win.SendMessage(viewport.Handle, 0x0201, 1, At(50, 50));
-        Win.SendMessage(viewport.Handle, 0x0200, 1, At(80, 70));
-        Win.SendMessage(viewport.Handle, 0x0202, 0, At(80, 70));
-        Win.SendMessage(viewport.Handle, 0x020A, (nint)(120 << 16), At(80, 70));
-        Win.SendMessage(viewport.Handle, 0x0100, (nint)Keys.A, 0);
-        Win.SendMessage(viewport.Handle, 0x0101, (nint)Keys.A, 0);
-        return new { clicks, keys, wheel, panX = pan.X, panY = pan.Y, syntheticInput = true, gameCalls = 0 };
+        inputTrace = new(); inputStarted = Stopwatch.GetTimestamp();
+        try
+        {
+            MarkInput("request-entered");
+            Win.SendMessage(viewport.Handle, 0x0201, 1, At(50, 50)); MarkInput("mouse-down-returned");
+            Win.SendMessage(viewport.Handle, 0x0200, 1, At(80, 70)); MarkInput("mouse-move-returned");
+            Win.SendMessage(viewport.Handle, 0x0202, 0, At(80, 70)); MarkInput("mouse-up-returned");
+            Win.SendMessage(viewport.Handle, 0x020A, (nint)(120 << 16), At(80, 70)); MarkInput("wheel-returned");
+            Win.SendMessage(viewport.Handle, 0x0100, (nint)Keys.A, 0); MarkInput("key-down-returned");
+            Win.SendMessage(viewport.Handle, 0x0101, (nint)Keys.A, 0); MarkInput("key-up-returned");
+            return new
+            {
+                clicks,
+                keys,
+                wheel,
+                panX = pan.X,
+                panY = pan.Y,
+                syntheticInput = true,
+                gameCalls = 0,
+                clockFrequency = Stopwatch.Frequency,
+                startedTicks = inputStarted.ToString(),
+                finishedTicks = Stopwatch.GetTimestamp().ToString(),
+                trace = inputTrace.ToArray()
+            };
+        }
+        finally { inputTrace = null; }
     }
+    private void MarkInput(string phase) => inputTrace?.Add(new InputStep(phase, Stopwatch.GetElapsedTime(inputStarted).TotalMilliseconds));
+    private sealed record InputStep(string Phase, double ElapsedMs);
     private object ExerciseFixtureBackpressure()
     {
         // Only our simulator emits this bounded burst. It carries no game-action receipts.

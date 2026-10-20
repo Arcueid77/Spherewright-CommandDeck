@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
+import { spawnOwnedUi } from "./owned-ui-process.mjs";
 export const nativeExecutable = fileURLToPath(
 	new URL("../../artifacts/native/CommandDeck.NativeHost.exe", import.meta.url),
 );
@@ -11,7 +12,9 @@ export class NativeClient extends EventEmitter {
 		super();
 		this.sequence = 0;
 		this.pending = new Map();
-		this.child = spawn(executable, args, {
+		const launch =
+			args.length === 1 && args[0] === "--fixture" ? spawnOwnedUi : spawn;
+		this.child = launch(executable, args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsHide: true,
 		});

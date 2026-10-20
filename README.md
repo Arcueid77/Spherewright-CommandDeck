@@ -71,6 +71,8 @@ npm start -- --demo-fixture
 
 The demo starts only this repository's simulated game host and embeds the Electron UI as its child. The central native grid has click, drag, wheel and key handlers. Its ownership design and remaining limitations are described in [native-window-hosting.md](docs/native-window-hosting.md). No DSP launch or arbitrary-window attachment route is present.
 
+`npm run probe:native-focus` records a remaining focused-UI hang; its normal exit is not an input-isolation pass. `npm run test:native-ui-recovery` separately proves a bounded rescue by an independent test controller, using only its own spawned UI fixture, then one UI replacement. Actual Electron process supervision remains the next implementation step.
+
 For the desktop lifecycle smoke, close the demo first, then run `npm start -- --smoke`. It tests one offline Pi tool roundtrip, UI reload and an intentional crash of its own renderer. Synthetic results go under ignored `.local/`; private Pi sessions created by the desktop live under the application's user-data directory. Neither is committed.
 
 ## CC Switch / Pi provider configuration

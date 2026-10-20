@@ -19,6 +19,8 @@
 		"test": "node --test test/*.test.mjs",
 		"test:native": "node scripts/native-smoke.mjs",
 		"probe:native-hang": "node scripts/native-hang-probe.mjs",
+		"probe:native-focus": "node scripts/native-input-hang-probe.mjs",
+		"test:native-ui-recovery": "node scripts/native-input-hang-probe.mjs --recover-own-ui",
 		"smoke:offline": "node apps/desktop/runtime.mjs --offline",
 		"smoke:live": "node apps/desktop/runtime.mjs --live",
 		"typecheck": "tsc --noEmit"

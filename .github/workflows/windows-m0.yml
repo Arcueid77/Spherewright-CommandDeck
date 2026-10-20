@@ -31,6 +31,8 @@ jobs:
       - run: npm test
       - run: npm run test:native
       - run: npm run probe:native-hang
+      - run: npm run probe:native-focus
+      - run: npm run test:native-ui-recovery
       - run: node_modules/.bin/electron.cmd . --smoke
       - uses: actions/upload-artifact@v4
         if: always()
@@ -39,5 +41,7 @@ jobs:
           path: |
             .local/native-smoke.json
             .local/native-hang-probe.json
+            .local/native-input-hang-probe.json
+            .local/native-input-recovery-probe.json
             .local/desktop-smoke.json
           if-no-files-found: ignore

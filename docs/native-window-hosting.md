@@ -60,11 +60,31 @@ The choice is consistent with [SetWindowPos](https://learn.microsoft.com/en-us/w
 
 ## Remaining real-game questions
 
+### Focused UI hang and bounded test-supervisor recovery
+
+`npm run probe:native-focus` adds one responsive baseline, then focuses the UI fixture on its own thread before a two-second hang. The input command reaches the simulated game during that declared hang. Per-call monotonic timings locate about 2018 ms between the markers immediately before and after `viewport.Focus()`; capture and the remaining synthetic messages are fast. This is a focused-fixture counterexample, not a physical-input test. The collector may exit normally while its `conclusion` remains `focused_foreign_ui_stalls_native_input`.
+
+This matches the documented [automatic input-queue attachment for cross-thread parent/child windows](https://devblogs.microsoft.com/oldnewthing/20130607-00/?p=4143). Moving explicit layout calls off the UI thread does not change which thread owns its HWND.
+
+`npm run test:native-ui-recovery` injects a five-second focused UI hang and leaves an old layout pending. An independent Node test controller terminates only its registered UI creation handle after one second. It waits for the actual exit event, retains the original input promise, observes the host UI timer resume, then replaces and adopts one UI. The original host/viewport HWNDs remain unchanged; the new UI independently reports native parent/bounds matching the host after layout completion. The local hang-start-to-input-completion sample is about 1023 ms. Signed exit-relative timing, exit result and pending layout revisions are retained in the synthetic JSON artifact.
+
+`owned-ui-process.mjs` accepts registration only for children created by its UI launcher. Ordinary game-fixture children, forged PID objects and attempts to retarget an existing termination capability are rejected. This is a trusted application launch boundary, not operating-system isolation from editable code. No arbitrary adopted PID gains termination authority.
+
+The recovery test supports bounded recovery after ending the known UI; it does not demonstrate uninterrupted input while that UI remains hung. Its independent controller is currently a test harness. Before a real DSP adapter, the actual Electron HWND-owning process must be disposable independently of Pi and host control. A heartbeat must represent its UI loop, and rescue cannot wait for the blocked host UI thread or the layout gate. Only one replacement is in this experiment; persistent task storage is still a later milestone.
+
+### Current local native references
+
+Read-only installation checks match the Lab native lock's `Assembly-CSharp.dll` SHA-256 `EF314425DADE51F529F184F07BE136CD3C2660A6A81515603C7226FBE7AB1D8C`. The executable and `UnityPlayer.dll` file version are `2022.3.62.1451004`; BepInEx's file version is `5.4.17.0`. Metadata inspection finds `Application.get_unityVersion/get_platform/get_isEditor` and `Screen.get_fullScreenMode/get_width/get_height/SetResolution` in the installed CoreModule. These are file/metadata facts, not a running-game check or permission to change display settings.
+
+The candidate integration boundary is a separate CommandDeck game-side BepInEx window adapter, with no game-world API or save access. The current WinForms fixture cannot be loaded into Unity. Steam startup, graphics readiness and restoration still require their own exact-version proof. No adapter was deployed and no DSP process was started for these checks.
+
+### Unqualified scope
+
 1. A game-side adapter must create the stable host within the DSP process and cooperate with Unity's actual window/message lifecycle. The WinForms simulator is not that adapter, and cannot simply be loaded into Unity.
 2. Determine the supported startup, window-style, DPI and graphics-ready sequence from the exact current Unity/runtime. Do not alter game assemblies or use an external memory/injection route.
 3. Prove native mouse/keyboard focus, capture, cursor release, Alt-Tab, resizing, docking overlays and monitor changes on DSP. Do not infer these from synthetic messages.
 4. Define native-input takeover relative to the game's action writer. Hosting ownership alone does not serialize manual input against prepare/commit.
 5. Qualify game, renderer, Deck and host failures separately under Lab rules. A restarted game or older save is not a viewport recovery strategy.
-6. Cross-process parent/child windows can couple input queues. The bounded resize regression above is locally fixed. A hung host thread, indefinite UI hangs, physical input during a hang and abrupt host-process death remain untested. The user explicitly has not performed the manual input check; this is not a passing result.
+6. The focused fixture proves a remaining input wait despite the resize fix. The test controller demonstrates one finite recovery; actual Electron process supervision, a hung host thread, indefinite UI hangs, physical input during a hang and abrupt host-process death remain unqualified. The user explicitly has not performed the manual input check; this is not a passing result.
 
 Real integration will require an independently reviewed, narrow game-side implementation and a supported deployment/validation cohort. Until then, DSP attachment and game-action tools stay closed.

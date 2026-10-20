@@ -63,6 +63,7 @@ internal sealed class Fixture : Form
     private int clicks, keys;
     private long originalStyle, originalExStyle;
     private Win.Rect originalRect;
+    private long frameSequence;
 
     internal Fixture()
     {
@@ -85,21 +86,34 @@ internal sealed class Fixture : Form
                 while (Console.ReadLine() is { } line)
                 {
                     if (line == "close") BeginInvoke(Close);
-                    else if (line == "hang-ui") BeginInvoke(() =>
+                    else if (line is "hang-ui" or "focus-and-hang-ui" or "focus-and-hang-ui-long") BeginInvoke(() =>
                     {
-                        Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-start" });
-                        Thread.Sleep(2000); // Bounded hang injection only in our disposable UI fixture.
-                        Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-end" });
+                        bool requireFocus = line != "hang-ui";
+                        int durationMs = line == "focus-and-hang-ui-long" ? 5000 : 2000;
+                        if (requireFocus) Win.SetFocus(Handle); // Only this fixture's own HWND/thread.
+                        Program.Send(new
+                        {
+                            type = "fixture-diagnostic",
+                            phase = "ui-hang-start",
+                            focused = Win.GetFocus() == Handle,
+                            durationMs,
+                            clockFrequency = System.Diagnostics.Stopwatch.Frequency,
+                            ticks = System.Diagnostics.Stopwatch.GetTimestamp().ToString()
+                        });
+                        Thread.Sleep(durationMs); // Bounded hang injection only in our disposable UI fixture.
+                        Program.Send(new { type = "fixture-diagnostic", phase = "ui-hang-end", ticks = System.Diagnostics.Stopwatch.GetTimestamp().ToString() });
                     });
                 }
             });
         });
         timer.Tick += (_, _) =>
         {
+            frameSequence++;
             Win.GetWindowRect(Handle, out var currentRect);
             Program.Send(new
             {
                 type = "fixture",
+                frameSequence,
                 clicks,
                 keys,
                 parent = Win.GetParent(Handle).ToInt64().ToString(),
@@ -107,6 +121,9 @@ internal sealed class Fixture : Form
                 styleRestored = Win.GetStyle(Handle) == originalStyle,
                 exStyleRestored = Win.GetExStyle(Handle) == originalExStyle,
                 boundsRestored = currentRect.Equals(originalRect)
+                ,
+                windowWidth = currentRect.Right - currentRect.Left,
+                windowHeight = currentRect.Bottom - currentRect.Top
             });
         };
         timer.Start();
@@ -121,6 +138,8 @@ internal static class Win
     [StructLayout(LayoutKind.Sequential)]
     internal struct Rect { internal int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] internal static extern nint GetParent(nint hwnd);
+    [DllImport("user32.dll")] internal static extern nint GetFocus();
+    [DllImport("user32.dll")] internal static extern nint SetFocus(nint hwnd);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ShowWindow(nint hwnd, int command);
     [DllImport("user32.dll", SetLastError = true)] internal static extern nint SetParent(nint hwnd, nint parent);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindow(nint hwnd);
