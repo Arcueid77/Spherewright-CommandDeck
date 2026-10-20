@@ -151,6 +151,8 @@ M0 的窗口承载与 Pi 集成可并行验证。M1 的开发工作台与 M2 的
 
 M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准确 CI [39469484842](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39469484842) 全绿，包含新增只读桌面回归；未启用或部署任何游戏写入。
 
+2026-10-21 后续 computer-use 在 `f37dae5ad59df6968e7335c12bbc8f56a2dd5aae` 的普通未连接界面，实际点击舰桥入口与科研/生产/供电/物流 tab，打开模型设置并用真实 Esc 关闭，随后恢复代码面板。原编辑器内容、任务与草稿仍在；未修改模型配置或仓库权限、未启动模型、未选择 MCP、未调用游戏。已按原进程创建身份核对并正常退出本次 Deck。此证据只覆盖普通界面的这些物理操作，不覆盖有数据的面板负载、跨组拖放、原生 DSP 视口或人类/Agent 写入互斥；之前的合成服务测试仍按各自范围保留。
+
 ## 7. M3：一项可靠的有限游戏任务
 
 交付：观察/顾问、协助执行和有界自主三种任务模式；所有游戏写入经过同一可信网关。模型可提出目标和下一步，session、hash、短 token 与真实审批事件由程序管理。
@@ -177,6 +179,8 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 内部审批依赖可信宿主持有的对象身份及精确 preview digest；它只是内部能力入口，**尚未证明真实 UI 确认来源**。原生 PreparedNormalAction 不回显 techId，因此不能用 token 哈希声称目标已被原生回显。库只经构造时固定的可信 prepare/proof port 建立不可变精确请求和本次 requestId 的关联，拒绝错目标/旧请求的回执；这些 port 仍是待实现和实机验证的可信适配器契约。成功核销要求原 action终态、普通队列追加读回、材料/科研进度保全、同范围新观察及 hash/tick/本机接收年龄约束；native unknown/recovery/failed 或错 action 必须独立审计，本片未提供自动解除入口。研究若在 fresh 读回前已完成而目标不在队列，本片保留为未证明，不自动改写成成功。
 
 16项离线测试通过：包括同stateHash的A/B请求错配、取消/过期late prepare、伪造审批、query_only真实写盘失败、丢ACK重开、旧运行审批、重复/错action、缺读回/旧时间/错hash与scope、native未知硬隔离、双实例pending、原action重开核销及私密字段不落盘。它们只证明库的准入和状态转换，未证明真实 dispatch只发送一次、MCP/Plugin绑定、UI审批、人类输入竞争或任何游戏任务完成；M3整体仍未通过。
+
+离线账本切片 `f37dae5ad59df6968e7335c12bbc8f56a2dd5aae` 的本地完整108项测试和准确 CI [39471754621](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39471754621) 全绿；Astra 的两项授权/读回 P1 已在固定可信适配器契约前提下复核闭合，未把离线结果转为真实授权证明。下一步先为明确、合法的 owned 场景取得安装态/fresh 只读证据，并补真实适配器及 UI 确认来源；没有这些前提时不启用真实写入。当前没有载入、导入、恢复或新建世界的自动许可。
 
 ## 8. M4：通过 Deck 开发并验收 Spherewright
 
