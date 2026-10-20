@@ -15,7 +15,7 @@ async function fixture(t) {
 		const absolute = await realpath(resolve(directory));
 		assert.equal(dirname(absolute).toLowerCase(), (await realpath(tmpdir())).toLowerCase());
 		assert.ok(basename(absolute).startsWith("commanddeck-command-"));
-		await rm(absolute, { recursive: true, force: true });
+		await rm(absolute, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 	});
 	const host = await prepareCommandHost(source, join(directory, "helpers"));
 	return { directory, host: host.executable };
@@ -117,15 +117,30 @@ test("missing helper receipt reports unknown and never a successful command", wi
 
 test("wrapper reports unknown when its own running helper is lost", windows, async (t) => {
 	const f = await fixture(t), original = ChildProcess.prototype.spawn;
+	let ownedRootPid, terminationSubmitted = false;
 	t.mock.method(ChildProcess.prototype, "spawn", function (options) {
 		const result = original.call(this, options);
 		if (options.file === toNamespacedPath(f.host)) {
 			let buffer = "";
-			this.stdout.on("data", (chunk) => { buffer += chunk.toString(); if (buffer.includes('"type":"started"')) { buffer = ""; this.kill(); } });
+			this.stdout.on("data", (chunk) => {
+				buffer += chunk.toString(); let end;
+				while ((end = buffer.indexOf("\n")) >= 0) {
+					const line = buffer.slice(0, end); buffer = buffer.slice(end + 1); const message = JSON.parse(line);
+					if (message.type === "created" && message.inJob === true && Number.isInteger(message.pid)) ownedRootPid = message.pid;
+					if (message.type === "started" && !terminationSubmitted) { terminationSubmitted = true; this.kill(); }
+				}
+			});
 		}
 		return result;
 	});
 	await assert.rejects(runManagedCommand({ ...f, cwd: f.directory, executable: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] }), (error) => error.message === "COMMAND_OUTCOME_UNKNOWN" && error.unknown === true);
+	assert.equal(terminationSubmitted, true); assert.ok(ownedRootPid > 0);
+	const deadline = Date.now() + 5000;
+	while (true) {
+		try { process.kill(ownedRootPid, 0); } catch (error) { if (error.code === "ESRCH") break; throw error; }
+		assert.ok(Date.now() < deadline, "owned command root did not exit after its helper was lost");
+		await new Promise((done) => setTimeout(done, 25));
+	}
 });
 
 test("a long real cache path remains launchable after Store-app path redirection", windows, async (t) => {
