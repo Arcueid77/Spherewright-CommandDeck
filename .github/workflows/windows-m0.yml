@@ -33,7 +33,9 @@ jobs:
       - run: npm run probe:native-hang
       - run: npm run probe:native-focus
       - run: npm run test:native-ui-recovery
-      - run: node_modules/.bin/electron.cmd . --smoke
+      - run: node scripts/run-desktop-smoke.mjs
+      - run: node scripts/run-desktop-smoke.mjs --smoke-host-exit
+      - run: node scripts/run-desktop-smoke.mjs --smoke-recovery-limit
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,4 +46,6 @@ jobs:
             .local/native-input-hang-probe.json
             .local/native-input-recovery-probe.json
             .local/desktop-smoke.json
+            .local/desktop-smoke-host-exit.json
+            .local/desktop-smoke-recovery-limit.json
           if-no-files-found: ignore

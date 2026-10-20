@@ -3,6 +3,8 @@ contextBridge.exposeInMainWorld(
 	"deck",
 	Object.freeze({
 		status: () => ipcRenderer.invoke("deck:status"),
+		focusUi: () => ipcRenderer.invoke("deck:focus-ui"),
+		snapshot: () => ipcRenderer.invoke("deck:snapshot"),
 		profiles: () => ipcRenderer.invoke("deck:profiles"),
 		targets: () => ipcRenderer.invoke("deck:targets"),
 		attach: (targetId) => ipcRenderer.invoke("deck:attach", targetId),

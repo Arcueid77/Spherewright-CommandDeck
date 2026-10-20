@@ -120,7 +120,9 @@ internal sealed class OwnedHostFixture : Form
                 "rect" => await SetViewport(message),
                 "detach" => await DetachUi(),
                 "status" => Status(),
+                "focus-ui" => FocusUi(),
                 "fixture-identity" => new { hostHwnd = Handle.ToInt64().ToString(), gameHwnd = viewport.Handle.ToInt64().ToString() },
+                "fixture-ui-focus-info" => ui == null ? new { attached = false } : Win.FocusSnapshot(ui.Hwnd),
                 "exercise-input" => ExerciseFixtureInput(),
                 "exercise-backpressure" => ExerciseFixtureBackpressure(),
                 "exercise-host-resize" => ExerciseHostResize(),
@@ -261,6 +263,7 @@ internal sealed class OwnedHostFixture : Form
             uiChildStyle = alive && (Win.GetStyle(ui!.Hwnd) & Win.Child) != 0 && (Win.GetStyle(ui.Hwnd) & Win.Popup) == 0,
             uiVisible = alive && Win.IsWindowVisible(ui!.Hwnd),
             hostVisible = Win.IsWindowVisible(Handle),
+            uiThreadHasFocus = alive && Win.ThreadFocusInProcess(ui!.Hwnd, ui.Pid),
             gameParentMatches = Win.GetParent(viewport.Handle) == Handle,
             gameOwnerPid = Win.WindowPid(viewport.Handle),
             hostOwnerPid = Win.WindowPid(Handle),
@@ -284,6 +287,13 @@ internal sealed class OwnedHostFixture : Form
             kind = "fixture",
             targetPid = Environment.ProcessId
         };
+    }
+    private object FocusUi()
+    {
+        if (ui == null || !ForeignUi.Alive(ui) || Win.GetParent(ui.Hwnd) != Handle) return Status();
+        // Focus belongs to this attached input queue. A worker cannot safely impersonate it.
+        Win.SetFocus(ui.Hwnd);
+        return Status();
     }
     private object ExerciseFixtureInput()
     {

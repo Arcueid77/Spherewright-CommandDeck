@@ -70,7 +70,19 @@ This matches the documented [automatic input-queue attachment for cross-thread p
 
 `owned-ui-process.mjs` accepts registration only for children created by its UI launcher. Ordinary game-fixture children, forged PID objects and attempts to retarget an existing termination capability are rejected. This is a trusted application launch boundary, not operating-system isolation from editable code. No arbitrary adopted PID gains termination authority.
 
-The recovery test supports bounded recovery after ending the known UI; it does not demonstrate uninterrupted input while that UI remains hung. Its independent controller is currently a test harness. Before a real DSP adapter, the actual Electron HWND-owning process must be disposable independently of Pi and host control. A heartbeat must represent its UI loop, and rescue cannot wait for the blocked host UI thread or the layout gate. Only one replacement is in this experiment; persistent task storage is still a later milestone.
+The recovery test supports bounded recovery after ending the known UI; it does not demonstrate uninterrupted input while that UI remains hung. Its independent controller is a test harness. The desktop implementation below applies the same bounded design to the actual Electron HWND-owning process. Persistent task storage remains a later milestone.
+
+### Actual Electron UI supervision
+
+The desktop bootstrap starts a windowless Electron supervisor. It owns the native connection, Pi utility process and in-memory probe snapshot; a separately spawned Electron main process owns the BrowserWindow and renderer. The UI registers through its creation IPC channel and sends a heartbeat from its main message thread every 100 ms. The supervisor has its own user-data directory, separate from the disposable UI's Chromium profile.
+
+After a one-second heartbeat deadline, the supervisor terminates only that registered creation handle, waits for confirmed process exit, then waits for the existing native operations to settle. It clears the old binding and creates at most one automatic replacement. It does not replay a probe, restart the host or automatically reattach. A second failure ends the registered UI and stops automatic replacement; an explicit reopen is required. This is a finite application recovery policy, not operating-system isolation or a durable task service.
+
+`npm run test:desktop` first checks a healthy UI across multiple watchdog intervals, reloads the renderer and deliberately crashes that renderer. It then proves native focus belongs to the actual UI process, starts a second offline Pi probe, waits for its one echo tool completion, and freezes the UI main thread for five seconds. The local test terminates that UI around the one-second deadline; the original native input request completes in about 1026 ms, preserving the original host/viewport and Pi process. The same in-flight probe completes after UI exit, with exactly two requests and one echo, and its result appears in the replacement UI. The test explicitly reattaches once. A synthetic offline response delay establishes the in-flight interval; live provider behavior is unchanged.
+
+`npm run test:desktop-host-exit` abruptly ends only the owned simulator process. If inspection cannot prove that the original UI is a visible top-level window, the supervisor replaces that owned UI; this run observed one replacement. A separate read-only native helper checks the exact registered HWND/PID: visible, top-level and no child style. Renderer response, unchanged Pi process and no model replay are checked as well. The helper cannot enumerate or mutate windows. The host is never relaunched. Native visibility plus renderer response is not physical-input acceptance.
+
+`npm run test:desktop-recovery-limit` injects a second UI hang and verifies there is no third UI, no probe replay and the original simulator remains standalone. All three runners require their fresh run ID and completed JSON proof; process exit alone or a previous artifact cannot pass the test. CI uploads only portable synthetic summaries, not Pi sessions, HWNDs or PIDs.
 
 ### Current local native references
 
@@ -85,6 +97,6 @@ The candidate integration boundary is a separate CommandDeck game-side BepInEx w
 3. Prove native mouse/keyboard focus, capture, cursor release, Alt-Tab, resizing, docking overlays and monitor changes on DSP. Do not infer these from synthetic messages.
 4. Define native-input takeover relative to the game's action writer. Hosting ownership alone does not serialize manual input against prepare/commit.
 5. Qualify game, renderer, Deck and host failures separately under Lab rules. A restarted game or older save is not a viewport recovery strategy.
-6. The focused fixture proves a remaining input wait despite the resize fix. The test controller demonstrates one finite recovery; actual Electron process supervision, a hung host thread, indefinite UI hangs, physical input during a hang and abrupt host-process death remain unqualified. The user explicitly has not performed the manual input check; this is not a passing result.
+6. Focused children still share input queues despite the resize fix. The test controller and actual Electron supervisor demonstrate finite recovery by ending a known owned UI; a hung real game thread, indefinite failures, physical input during a hang and real DSP host death remain unqualified. The user explicitly has not performed the manual input check; this is not a passing result.
 
 Real integration will require an independently reviewed, narrow game-side implementation and a supported deployment/validation cohort. Until then, DSP attachment and game-action tools stay closed.

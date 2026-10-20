@@ -17,6 +17,31 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--inspect-ui")
+        {
+            if (!long.TryParse(args[1], out long handle) || handle <= 0 ||
+                !int.TryParse(args[2], out int pid) || pid <= 0)
+            {
+                Environment.ExitCode = 1;
+                return;
+            }
+            bool sameSession;
+            try { sameSession = System.Diagnostics.Process.GetProcessById(pid).SessionId == System.Diagnostics.Process.GetCurrentProcess().SessionId; }
+            catch (ArgumentException) { sameSession = false; }
+            var hwnd = (nint)handle;
+            bool exists = sameSession && Win.IsWindow(hwnd);
+            bool pidMatches = exists && Win.WindowPid(hwnd) == pid;
+            // Read only the exact registered UI window. This mode never creates or mutates a window.
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                exists,
+                pidMatches,
+                visible = pidMatches && Win.IsWindowVisible(hwnd),
+                childStyle = pidMatches && (Win.GetStyle(hwnd) & Win.Child) != 0,
+                parentPresent = pidMatches && Win.GetParent(hwnd) != 0
+            }, Json));
+            return;
+        }
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         if (args.Contains("--owned-host-fixture")) Application.Run(new OwnedHostFixture());
@@ -140,6 +165,25 @@ internal static class Win
     [DllImport("user32.dll")] internal static extern nint GetParent(nint hwnd);
     [DllImport("user32.dll")] internal static extern nint GetFocus();
     [DllImport("user32.dll")] internal static extern nint SetFocus(nint hwnd);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo { internal uint Size, Flags; internal nint Active, Focus, Capture, MenuOwner, MoveSize, Caret; internal Rect CaretRect; }
+    [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
+    [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsChild(nint parent, nint child);
+    internal static object FocusSnapshot(nint hwnd)
+    {
+        uint threadId = GetWindowThreadProcessId(hwnd, out int pid);
+        var info = new GuiThreadInfo { Size = (uint)Marshal.SizeOf<GuiThreadInfo>() };
+        bool available = GetGUIThreadInfo(threadId, ref info);
+        return new { available, focusPresent = info.Focus != 0, focusIsUi = info.Focus == hwnd,
+            focusIsUiDescendant = info.Focus != 0 && IsChild(hwnd, info.Focus), focusOwnerIsUi = info.Focus != 0 && WindowPid(info.Focus) == pid,
+            activeIsUi = info.Active == hwnd };
+    }
+    internal static bool ThreadFocusInProcess(nint hwnd, int pid)
+    {
+        uint threadId = GetWindowThreadProcessId(hwnd, out _);
+        var info = new GuiThreadInfo { Size = (uint)Marshal.SizeOf<GuiThreadInfo>() };
+        return threadId != 0 && GetGUIThreadInfo(threadId, ref info) && info.Focus != 0 && WindowPid(info.Focus) == pid;
+    }
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ShowWindow(nint hwnd, int command);
     [DllImport("user32.dll", SetLastError = true)] internal static extern nint SetParent(nint hwnd, nint parent);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindow(nint hwnd);

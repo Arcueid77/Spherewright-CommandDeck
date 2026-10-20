@@ -26,11 +26,25 @@ type ProbeResult = {
 	sourceCommit: string;
 	text?: string;
 };
-type RuntimeEvent = { type: string; text?: string; tool?: string };
+type RuntimeEvent = {
+	type: string;
+	text?: string;
+	tool?: string;
+	busy?: boolean;
+	result?: ProbeResult;
+};
+type UiSnapshot = {
+	busy: boolean;
+	probeText: string;
+	lastProbeResult: ProbeResult | null;
+	events: RuntimeEvent[];
+};
 declare global {
 	interface Window {
 		deck: {
 			status(): Promise<NativeState>;
+			focusUi(): Promise<unknown>;
+			snapshot(): Promise<UiSnapshot>;
 			profiles(): Promise<Profile[]>;
 			targets(): Promise<Target[]>;
 			attach(id: string): Promise<NativeState>;
@@ -62,6 +76,16 @@ function AgentPanel() {
 		"等待验证。工具仅有 deck_echo，不连接游戏。",
 	);
 	useEffect(() => {
+		void window.deck.snapshot().then((snapshot) => {
+			setBusy(snapshot.busy);
+			if (snapshot.lastProbeResult)
+				setOutput(
+					snapshot.probeText +
+						"\n\n" +
+						JSON.stringify(snapshot.lastProbeResult, null, 2),
+				);
+			else if (snapshot.probeText) setOutput(snapshot.probeText);
+		});
 		void window.deck.profiles().then((items) => {
 			setProfiles(items);
 			let saved: Partial<Profile> = {};
@@ -74,6 +98,16 @@ function AgentPanel() {
 			if (preferred) setModel(JSON.stringify(preferred));
 		});
 		return window.deck.onEvent((event) => {
+			if (event.type === "probe-state") {
+				setBusy(event.busy === true);
+				return;
+			}
+			if (event.type === "probe-result" && event.result) {
+				setOutput(
+					(text) => text + "\n\n" + JSON.stringify(event.result, null, 2),
+				);
+				return;
+			}
 			if (event.text) setOutput((text) => text + event.text);
 			else if (event.tool)
 				setOutput((text) => `${text}\n${event.type}: ${event.tool}\n`);
@@ -91,7 +125,8 @@ function AgentPanel() {
 				mode,
 				...(mode === "live" && model ? (JSON.parse(model) as Profile) : {}),
 			});
-			setOutput((text) => `${text}\n\n${JSON.stringify(result, null, 2)}`);
+			const snapshot = await window.deck.snapshot();
+			setOutput(`${snapshot.probeText}\n\n${JSON.stringify(result, null, 2)}`);
 		} catch {
 			setOutput((text) => `${text}\n验证失败或已取消；没有调用游戏。`);
 		} finally {
@@ -385,4 +420,12 @@ function App() {
 		</div>
 	);
 }
+// Pointer events here belong to the workbench; the native viewport hole bypasses the renderer.
+document.addEventListener(
+	"pointerdown",
+	() => {
+		void window.deck.focusUi().catch(() => {});
+	},
+	{ capture: true },
+);
 createRoot(document.getElementById("root")!).render(<App />);

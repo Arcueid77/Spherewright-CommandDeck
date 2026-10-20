@@ -42,6 +42,7 @@ async function fakeEndpoint(
 	forbidden = false,
 	stall = false,
 	secondLegError = false,
+	secondLegDelayMs = 0,
 ) {
 	let calls = 0;
 	const server = createServer(async (request, response) => {
@@ -66,6 +67,10 @@ async function fakeEndpoint(
 			return;
 		}
 		const hasResult = data.messages.some((message) => message.role === "tool");
+		if (hasResult && secondLegDelayMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, secondLegDelayMs));
+			if (response.destroyed) return;
+		}
 		if (hasResult && secondLegError) {
 			response.writeHead(503, { "content-type": "application/json" }).end(
 				JSON.stringify({
@@ -133,10 +138,18 @@ export async function runPiProbe({
 	forbidden = false,
 	stall = false,
 	secondLegError = false,
+	secondLegDelayMs = 0,
 	resumeFile,
 } = {}) {
 	if (!["offline", "live"].includes(mode))
 		throw new Error("EXPLICIT_PROBE_MODE_REQUIRED");
+	if (
+		!Number.isInteger(secondLegDelayMs) ||
+		secondLegDelayMs < 0 ||
+		secondLegDelayMs > 3000 ||
+		(mode === "live" && secondLegDelayMs !== 0)
+	)
+		throw new Error("INVALID_OFFLINE_DELAY");
 	const directory =
 		storageRoot ?? (await mkdtemp(join(tmpdir(), "commanddeck-pi-")));
 	await mkdir(directory, { recursive: true });
@@ -147,7 +160,12 @@ export async function runPiProbe({
 	try {
 		let modelsPath;
 		if (mode === "offline") {
-			endpoint = await fakeEndpoint(forbidden, stall, secondLegError);
+			endpoint = await fakeEndpoint(
+				forbidden,
+				stall,
+				secondLegError,
+				secondLegDelayMs,
+			);
 			providerId = "deck-offline";
 			modelId = "deck-fixture";
 			modelsPath = join(directory, "models.json");

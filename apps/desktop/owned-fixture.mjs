@@ -11,6 +11,10 @@ export class OwnedFixtureHost extends EventEmitter {
 		this.rect = undefined;
 		this.transitions = 0;
 	}
+	bindUi(binding) {
+		this.binding = binding;
+		this.rect = undefined;
+	}
 	async request(method, args = {}) {
 		if (method === "rect") this.rect = args;
 		if (method === "rect" && this.transitions > 0) return { deferred: true };
@@ -31,7 +35,7 @@ export class OwnedFixtureHost extends EventEmitter {
 		}
 		if (!this.fixture || this.fixture.stopped) {
 			if (method === "list") return [];
-			if (["status", "detach", "rect", "close"].includes(method))
+			if (["status", "detach", "rect", "close", "focus-ui"].includes(method))
 				return inactive;
 			throw new Error("START_OWNED_FIXTURE_FIRST");
 		}
@@ -49,12 +53,21 @@ export class OwnedFixtureHost extends EventEmitter {
 				throw new Error("FIXTURE_TARGET_ONLY");
 			this.transitions++;
 			try {
+				const binding =
+					this.binding ??
+					(this.window
+						? {
+								hwnd: this.window
+									.getNativeWindowHandle()
+									.readBigUInt64LE()
+									.toString(),
+								pid: process.pid,
+							}
+						: undefined);
+				if (!binding) throw new Error("UI_NOT_REGISTERED");
 				await this.fixture.request("adopt", {
-					hwnd: this.window
-						.getNativeWindowHandle()
-						.readBigUInt64LE()
-						.toString(),
-					pid: process.pid,
+					hwnd: binding.hwnd,
+					pid: binding.pid,
 				});
 			} finally {
 				this.transitions--;
