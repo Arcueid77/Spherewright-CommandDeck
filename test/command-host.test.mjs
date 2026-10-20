@@ -43,7 +43,7 @@ test("cancellation and timeout confirm the normal command tree has ended", windo
 test("a successful root does not leave a normal detached descendant behind", windows, async (t) => {
 	const f = await fixture(t), marker = join(f.directory, "heartbeat.txt");
 	const script = "require('node:fs').appendFileSync(process.argv[1],'x');setInterval(()=>require('node:fs').appendFileSync(process.argv[1],'x'),50)";
-	const root = "const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',process.argv[1],process.argv[2]],{detached:true,stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),400)";
+	const root = "const {spawn}=require('node:child_process'),fs=require('node:fs');const c=spawn(process.execPath,['-e',process.argv[1],process.argv[2]],{detached:true,stdio:'ignore'});c.unref();const start=Date.now();setInterval(()=>{if(fs.existsSync(process.argv[2])&&fs.statSync(process.argv[2]).size>0)process.exit(0);if(Date.now()-start>8000)process.exit(2)},25)";
 	const result = await runManagedCommand({ ...f, cwd: f.directory, executable: process.execPath, args: ["-e", root, script, marker] });
 	assert.equal(result.exitCode, 0); assert.equal(result.treeConfirmed, true);
 	const before = await readFile(marker, "utf8");
@@ -73,12 +73,20 @@ test("helper loss closes its job and ends its own ordinary descendants", windows
 	await writeFile(marker, "");
 	const child = spawn(f.host, [], { cwd: f.directory, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
 	child.stderr.on("data", () => {});
-	const started = new Promise((done) => child.stdout.on("data", (chunk) => { if (chunk.toString().includes('"type":"started"')) done(); }));
-	child.stdin.write(JSON.stringify({ executable: process.execPath, arguments: ["-e", "setInterval(()=>require('node:fs').appendFileSync(process.argv[1],'x'),50)", marker], directory: f.directory, timeoutMs: 3000 }) + "\n");
-	await started;
-	await new Promise((done) => setTimeout(done, 250));
-	child.kill(); // Only this test's creation handle; no adopted PID or game process.
-	await once(child, "close");
+	const closed = once(child, "close"), deadline = Date.now() + 8000;
+	child.stdout.on("data", () => {});
+	child.stdin.write(JSON.stringify({ executable: process.execPath, arguments: ["-e", "require('node:fs').appendFileSync(process.argv[1],'x');setInterval(()=>require('node:fs').appendFileSync(process.argv[1],'x'),50)", marker], directory: f.directory, timeoutMs: 10000 }) + "\n");
+	try {
+		// ResumeThread/"started" does not prove Node has initialized. Require an actual child heartbeat.
+		while (!(await readFile(marker, "utf8")).length) {
+			assert.equal(child.exitCode, null, "helper exited before its child became ready");
+			assert.ok(Date.now() < deadline, "managed child never produced its readiness heartbeat");
+			await new Promise((done) => setTimeout(done, 25));
+		}
+	} finally {
+		if (child.exitCode === null) child.kill(); // Only this test's creation handle; no adopted PID or game process.
+		await closed;
+	}
 	await new Promise((done) => setTimeout(done, 100));
 	const before = await readFile(marker, "utf8");
 	assert.ok(before.length > 0);
