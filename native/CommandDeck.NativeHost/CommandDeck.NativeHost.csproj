@@ -4,4 +4,8 @@
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <AssemblyName>CommandDeck.NativeHost</AssemblyName><TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CommandDeck.Windowing/CommandDeck.Windowing.csproj" />
+    <ProjectReference Include="../CommandDeck.AdapterBridge/CommandDeck.AdapterBridge.csproj" />
+  </ItemGroup>
 </Project>

@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned native-host simulator run locally. Actual DSP embedding and the development workspace are not implemented.**
+**Status: M0 prototype in progress. The desktop shell, pinned Pi source integration and game-owned host simulators run locally. A separate BepInEx window adapter now compiles against the installed Unity references; it has not been deployed or validated in DSP. The development workspace is not implemented.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -69,7 +69,7 @@ npm run test:native
 npm start -- --demo-fixture
 ~~~
 
-The demo starts only this repository's simulated game host and embeds the Electron UI as its child. The central native grid has click, drag, wheel and key handlers. Its ownership design and remaining limitations are described in [native-window-hosting.md](docs/native-window-hosting.md). No DSP launch or arbitrary-window attachment route is present.
+The demo starts only this repository's simulated game host and embeds the Electron UI as its child. The central native grid has click, drag, wheel and key handlers. Its ownership design and remaining limitations are described in [native-window-hosting.md](docs/native-window-hosting.md). The desktop can also discover an explicitly enabled game adapter; it never launches DSP or adopts an arbitrary selected process.
 
 `npm run probe:native-focus` records a remaining focused-UI hang; its normal exit is not an input-isolation pass. `npm run test:native-ui-recovery` separately proves a bounded rescue with WinForms fixtures. The desktop now uses an independent supervisor for the actual Electron UI process, native connection and Pi utility process. Its main-thread heartbeat expires after one second; it confirms the registered UI has exited before creating at most one automatic replacement. The simulated game remains standalone until explicitly reattached.
 
@@ -89,6 +89,21 @@ The fixed probe permits at most two model requests and one `deck_echo` execution
 
 Locally verified on 2026-10-20: source builds and type checks; ten Node tests including split tool arguments, cancellation, denied tools, session reopening without execution, and failed second responses; native ownership/detach/failure tests; and one live MiniMax-M3.1-Flash roundtrip through the desktop utility process. Only that configured Chat Completions compatible endpoint has live evidence. Foreign-window mutations run serially off the host UI thread; focused child windows still share input queues. In the actual Electron hang test, the supervisor ends only its registered UI after roughly one second, the original native input request resumes, the same Pi process finishes the in-flight offline probe after UI exit, and a replacement displays its result without resubmission. Abrupt simulator-host exit recreates one visible top-level UI while keeping Pi and never restarting the host. A second UI failure stops automatic replacement. These are finite simulator tests; physical input, DPI changes and real DSP/Steam behavior remain unqualified. M0 as a whole has not passed.
 
+## Game-side window adapter candidate
+
+The new `native/CommandDeck.UnityAdapter` is a separate, window-only BepInEx plugin, not a Spherewright game-control change. It is inactive without the per-launch `--commanddeck-host` argument. It exposes only native hosting, layout, focus and restoration over a protected local pipe; it has no game-world, save, input-injection or process-termination operation. The first display profile accepts a windowed game and UI on the same 100% scale monitor; changing that profile requests detachment. Other display profiles remain unsupported.
+
+For a local compile, copy only the private BepInEx/Unity references from an explicitly supplied installation, then build:
+
+~~~powershell
+pwsh -File scripts/sync-unity-refs.ps1 -DspDir '<DSP installation>'
+npm run build:unity-adapter
+~~~
+
+Game DLLs stay under ignored `.local/game-refs` and are never shipped. The candidate output is under ignored `artifacts/unity-adapter`; it has not been installed. CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it cannot compile the Unity plugin without those private references. The plugin's actual local compile is a separate result.
+
+`test:adapter-layout` checks both completion/request orderings; `test:adapter-native` checks the shared Win32 source, including an unexpected host-thread quit; `test:adapter-bridge` checks authentication, OS peer identity before sending the credential, malformed clients, EOF, restoration quarantine and descriptor ownership. `test:adapter-route` verifies that helper exit cannot clear an unreconciled host. `test:desktop-adapter` runs the real Electron UI through the same pipe protocol against a fake game, including UI replacement with an in-flight Pi probe. None starts or calls DSP.
+
 ## Planned execution boundaries
 
 - Development mode may expose source-editing and build tools for explicitly authorized workspace roots, while respecting each repository's instructions.
@@ -103,7 +118,7 @@ Locally verified on 2026-10-20: source builds and type checks; ten Node tests in
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-The simulator and Pi portions of the first two slices now have local evidence. A real game-side host adapter, actual game input and the remaining M0 gates still need separate implementation and validation. Development tools, the task ledger and all game execution remain future work.
+The simulator and Pi portions of the first two slices now have local evidence. The game-side window adapter is a compiled candidate; deployment, Unity runtime compatibility, actual game input and the remaining M0 gates still need separate validation. Development tools, the task ledger and all game execution remain future work.
 
 ## License
 

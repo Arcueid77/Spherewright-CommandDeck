@@ -12,6 +12,8 @@ type Profile = { providerId: string; modelId: string; api: string };
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
 	attached: boolean;
+	active?: boolean;
+	fault?: string | null;
 	kind?: string;
 	targetPid?: number;
 	nativeParentMatches: boolean;
@@ -183,7 +185,7 @@ function GamePanel(props: IDockviewPanelProps) {
 	const [selected, setSelected] = useState("");
 	const [state, setState] = useState<NativeState>();
 	const [notice, setNotice] = useState(
-		"先启动宿主替身，再嵌入 Deck；当前不连接 DSP。",
+		"刷新可发现显式启用的游戏窗口适配器，也可启动宿主替身。",
 	);
 	async function refresh() {
 		const items = await window.deck.targets();
@@ -272,14 +274,14 @@ function GamePanel(props: IDockviewPanelProps) {
 					onClick={() =>
 						void act(
 							() => window.deck.attach(selected),
-							"Deck UI 已嵌入模拟游戏宿主；尚未对接 DSP。",
+							"Deck UI 已嵌入选定宿主；Agent 游戏动作接口尚未接入。",
 						)
 					}
 				>
 					嵌入
 				</button>
 				<button
-					disabled={!state?.attached}
+					disabled={!state?.attached && !state?.active && !state?.fault}
 					onClick={() =>
 						void act(() => window.deck.detach(), "窗口已正常脱离。")
 					}
@@ -302,9 +304,9 @@ function GamePanel(props: IDockviewPanelProps) {
 					<div className="viewport-empty">
 						<div className="orbit" />
 						<div className="eyebrow">NATIVE GAME VIEWPORT</div>
-						<h1>游戏侧原生宿主替身</h1>
-						<p>模拟游戏拥有宿主，Deck UI 作为子窗口</p>
-						<span>替身验证阶段，不启动或挂接 DSP</span>
+						<h1>原生游戏视口</h1>
+						<p>选择已启用窗口适配器的游戏，或使用宿主替身</p>
+						<span>M0 开发中 · 真实游戏交互仍待验收</span>
 					</div>
 				)}
 			</div>

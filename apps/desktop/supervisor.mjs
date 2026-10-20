@@ -5,11 +5,12 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { OwnedFixtureHost } from "./owned-fixture.mjs";
+import { WindowHost } from "./window-host.mjs";
 import { spawnOwnedUi, registerOwnedUi } from "./owned-ui-process.mjs";
 import { publicProfiles } from "./profiles.mjs";
 import { runDesktopSmoke } from "./desktop-smoke.mjs";
 import { inspectOwnedUi } from "./inspect-ui.mjs";
+import { runAdapterDesktopSmoke } from "./adapter-desktop-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -17,7 +18,7 @@ const watchdogMs = 1000;
 const privateDirectory = join(app.getPath("userData"), "supervisor");
 mkdirSync(privateDirectory, { recursive: true });
 app.setPath("userData", privateDirectory); // The disposable UI keeps its original, separate Chromium profile.
-const native = new OwnedFixtureHost();
+const native = new WindowHost();
 const events = new EventEmitter();
 const runtimePending = new Map(),
 	tests = new Map();
@@ -338,7 +339,7 @@ async function recoverUi(reason) {
 	recovering = false;
 	emit({
 		type: "native-state",
-		text: "界面已重新创建；宿主与 Pi 保持运行，没有重放任务。可重新嵌入。",
+		text: "界面已重新创建，沿用原连接与 Pi；没有重放任务。请核窗口状态后重新嵌入。",
 	});
 	events.emit("recovered", { ...record, newEpoch: ui.epoch });
 }
@@ -351,7 +352,7 @@ function recoveryFailed() {
 	events.emit("recovery-failed");
 }
 async function nativeStopped() {
-	emit({ type: "native-state", text: "宿主替身已结束；未连接 DSP。" });
+	emit({ type: "native-state", text: "窗口宿主连接已结束；未重启游戏。" });
 	const record = ui;
 	if (stopping || recovering || !record?.registered) return;
 	try {
@@ -406,7 +407,7 @@ async function shutdown(exitCode = 0) {
 			stopping = false;
 			throw error;
 		}
-		// Only our test-created simulator can be cleaned up here; this facade has no DSP route.
+		// Only the test-created simulator can be cleaned up here. The DSP client has no child/kill route.
 		if (smoke && native.fixture && !native.fixture.stopped)
 			native.fixture.child.kill();
 	}
@@ -504,6 +505,7 @@ if (!app.requestSingleInstanceLock()) {
 				});
 			});
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
+			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
 			watchdog = setInterval(() => {
 				if (
 					!stopping &&
@@ -520,7 +522,8 @@ if (!app.requestSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				await runDesktopSmoke({
+				const smokeRunner = process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
 					native,

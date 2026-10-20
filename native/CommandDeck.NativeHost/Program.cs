@@ -17,6 +17,26 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length == 4 && args[0] == "--inspect-adapter-process")
+        {
+            Console.WriteLine(JsonSerializer.Serialize(AdapterPipeClient.InspectProcess(int.Parse(args[1]), args[2], args[3]), Json));
+            return;
+        }
+        if (args.Length == 1 && args[0] == "--test-layout-queue")
+        {
+            LayoutProof.Run().GetAwaiter().GetResult();
+            return;
+        }
+        if (args.Length == 6 && args[0] == "--adapter-client")
+        {
+            try { AdapterPipeClient.Run(args[1], int.Parse(args[2]), args[3], args[4], args[5]).GetAwaiter().GetResult(); }
+            catch (Exception error)
+            {
+                string code = error is InvalidOperationException && error.Message.All(c => c == '_' || c >= 'A' && c <= 'Z') ? "_" + error.Message : "";
+                Console.Error.WriteLine("ADAPTER_TRANSPORT_FAILED" + code); Environment.ExitCode = 1;
+            }
+            return;
+        }
         if (args.Length == 3 && args[0] == "--inspect-ui")
         {
             if (!long.TryParse(args[1], out long handle) || handle <= 0 ||
@@ -46,7 +66,9 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Console.WriteLine("{\"type\":\"fixture-startup\",\"phase\":\"forms-initialized\"}");
-        if (args.Contains("--owned-host-fixture")) Application.Run(new OwnedHostFixture());
+        if (args.Contains("--adapter-pipe-fixture")) Application.Run(new AdapterFixture(true));
+        else if (args.Contains("--unity-adapter-fixture")) Application.Run(new AdapterFixture());
+        else if (args.Contains("--owned-host-fixture")) Application.Run(new OwnedHostFixture());
         else if (args.Contains("--fixture")) Application.Run(new Fixture());
         else
         {

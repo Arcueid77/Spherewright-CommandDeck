@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework><LangVersion>latest</LangVersion><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors><Deterministic>true</Deterministic>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile><Version>0.0.1</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CommandDeck.AdapterBridge/CommandDeck.AdapterBridge.csproj" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="BepInEx"><HintPath>../../.local/game-refs/BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>../../.local/game-refs/UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>../../.local/game-refs/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequirePrivateReferences" BeforeTargets="CoreCompile" Condition="!Exists('../../.local/game-refs/BepInEx.dll')">
+    <Error Text="Private BepInEx/Unity references are required. No game DLLs may be published." />
+  </Target>
+</Project>

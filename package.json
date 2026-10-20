@@ -24,6 +24,12 @@
 		"test:desktop": "node scripts/run-desktop-smoke.mjs",
 		"test:desktop-host-exit": "node scripts/run-desktop-smoke.mjs --smoke-host-exit",
 		"test:desktop-recovery-limit": "node scripts/run-desktop-smoke.mjs --smoke-recovery-limit",
+		"test:adapter-native": "node scripts/adapter-native-smoke.mjs",
+		"test:adapter-bridge": "node scripts/adapter-bridge-smoke.mjs",
+		"test:adapter-layout": "node scripts/adapter-layout-smoke.mjs",
+		"test:adapter-route": "node scripts/adapter-route-smoke.mjs",
+		"test:desktop-adapter": "node scripts/run-desktop-smoke.mjs --smoke-adapter",
+		"build:unity-adapter": "dotnet build native/CommandDeck.UnityAdapter/CommandDeck.UnityAdapter.csproj -c Release --nologo -o artifacts/unity-adapter",
 		"smoke:offline": "node apps/desktop/runtime.mjs --offline",
 		"smoke:live": "node apps/desktop/runtime.mjs --live",
 		"typecheck": "tsc --noEmit"

@@ -9,7 +9,9 @@ import assert from "node:assert/strict";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 const runId = randomUUID();
-const file = args.includes("--smoke-host-exit")
+const file = args.includes("--smoke-adapter")
+	? "desktop-smoke-adapter.json"
+	: args.includes("--smoke-host-exit")
 	? "desktop-smoke-host-exit.json"
 	: args.includes("--smoke-recovery-limit")
 		? "desktop-smoke-recovery-limit.json"
@@ -33,7 +35,9 @@ assert.equal(
 	runId,
 	"This process exited without writing its own complete proof",
 );
-if (args.includes("--smoke-host-exit"))
+if (args.includes("--smoke-adapter"))
+	assert.equal(result.normalDetachRestoresBoth, true);
+else if (args.includes("--smoke-host-exit"))
 	assert.equal(result.hostExit.hostNotRelaunched, true);
 else assert.equal(result.supervision.inFlightProbeCompletedAfterUiExit, true);
 console.log(
