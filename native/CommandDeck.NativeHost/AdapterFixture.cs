@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using CommandDeck.Windowing;
 using CommandDeck.AdapterBridge;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace CommandDeck.NativeHost;
 
@@ -19,6 +20,7 @@ internal sealed class AdapterFixture : Form
     private nint brokenValue;
     private delegate int PropertyCallback(nint hwnd, nint name, nint value, nint data);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int EnumPropsEx(nint hwnd, PropertyCallback callback, nint data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint hwnd, StringBuilder text, int capacity);
 
     internal AdapterFixture(bool pipeMode = false)
     {
@@ -32,6 +34,8 @@ internal sealed class AdapterFixture : Form
             {
                 Win.ShowWindow(Handle, 5);
                 gameHwnd = Handle;
+                // Exercise the style bit that otherwise suppresses real child-pointer notifications.
+                Win.SetExStyle(gameHwnd, Win.GetExStyle(gameHwnd) | 4);
                 originalStyle = Win.GetStyle(Handle); originalExStyle = Win.GetExStyle(Handle);
                 Win.GetWindowRect(Handle, out originalBounds);
                 if (server != null)
@@ -45,7 +49,8 @@ internal sealed class AdapterFixture : Form
             }
             catch (Exception exception)
             {
-                Console.Error.WriteLine("ADAPTER_FIXTURE_START_FAILED " + exception.GetType().Name);
+                string detail = exception.Message.All(c => c == '_' || c >= 'A' && c <= 'Z') ? "_" + exception.Message : "";
+                Console.Error.WriteLine("ADAPTER_FIXTURE_START_FAILED_" + exception.GetType().Name + detail);
                 allowClose = true; Close();
             }
         };
@@ -109,7 +114,12 @@ internal sealed class AdapterFixture : Form
             switch (request["method"]?.GetValue<string>())
             {
                 case "status": result = host.Status(); break;
+                case "focus-ui": result = await host.FocusUiAsync(); break;
                 case "fixture-identity": result = Identity(); break;
+                case "fixture-host-title":
+                    var title = new StringBuilder(256);
+                    if (host.HostHandle == 0 || GetWindowText(host.HostHandle, title, title.Capacity) <= 0) throw new InvalidOperationException("FIXTURE_HOST_TITLE_UNAVAILABLE");
+                    result = new { title = title.ToString() }; break;
                 case "restored": result = Restored(); break;
                 case "fixture-windowed":
                     if (server == null) throw new InvalidOperationException("PIPE_FIXTURE_REQUIRED");

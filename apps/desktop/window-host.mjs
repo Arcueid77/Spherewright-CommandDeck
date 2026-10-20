@@ -3,11 +3,12 @@ import { GameAdapterClient, inspectAdapterProcess, listGameAdapters } from "./ga
 
 function publicState(value) {
 	const source = value.window ?? {};
-	const fields = ["active", "attached", "gameAlive", "gameParentMatches", "nativeParentMatches", "hostVisible", "uiVisible", "uiThreadHasFocus", "uiOperationPending", "targetPid", "dpi", "clientWidth", "clientHeight", "layoutRequested", "layoutApplied", "displayProfile"];
+	const fields = ["active", "attached", "gameAlive", "gameParentMatches", "nativeParentMatches", "hostVisible", "uiVisible", "uiThreadHasFocus", "gameThreadHasFocus", "gamePointerFocusRequests", "pointerDownNotifications", "gamePointerHits", "gameParentNotifyEnabled", "pointerClientPointMatchesCursor", "pointerScreenPointMatchesCursor", "uiOperationPending", "targetPid", "dpi", "clientWidth", "clientHeight", "layoutRequested", "layoutApplied", "displayProfile"];
 	return {
 		...Object.fromEntries(fields.map((key) => [key, source[key]])), ready: value.ready === true, windowed: value.windowed === true,
 		unityVersion: value.unityVersion, unityUpdateSequence: value.unityUpdateSequence,
 		renderWidth: value.renderWidth, renderHeight: value.renderHeight,
+		applicationFocused: typeof value.applicationFocused === "boolean" ? value.applicationFocused : null,
 		fault: /^[A-Z_]+$/.test(value.fault ?? source.fault ?? "") ? value.fault ?? source.fault : null,
 		kind: value.kind === "dsp" ? "dsp" : "adapter-fixture", mode: value.mode, gameCalls: 0,
 	};

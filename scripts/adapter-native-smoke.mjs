@@ -41,9 +41,12 @@ let current;
 try {
 	current = await pair();
 	const original = await current.game.request("fixture-identity");
+	assert.equal((await current.game.request("fixture-host-title")).title, "Spherewright CommandDeck — native host (close restores game)");
+	result.unicodeHostTitle = true;
 	let state = await current.game.request("status");
 	for (const key of ["active", "attached", "gameAlive", "gameParentMatches", "nativeParentMatches", "hostVisible", "uiVisible"])
 		assert.equal(state[key], true, key);
+	assert.equal(state.gameParentNotifyEnabled, true);
 	await current.game.request("rect", { x: 100, y: 80, width: 620, height: 400, visible: true });
 	await until(async () => {
 		state = await current.game.request("status");

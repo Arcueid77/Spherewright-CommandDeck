@@ -193,6 +193,18 @@ async function attachFromCommandLine(args) {
 		};
 		await mkdir(join(root, ".local"), { recursive: true });
 		await writeFile(join(root, ".local/m0-window-runtime.private.json"), JSON.stringify(proof, null, 2));
+		// Explicit, bounded window diagnostics. No focus changes or operation replay.
+		void (async () => {
+			const samples = [], started = Date.now(), observedAdapter = native.adapter;
+			for (let sample = 0; sample < 120 && !stopping; sample++) {
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				if (stopping || native.adapter !== observedAdapter) break;
+				const observedState = await api("status");
+				if (native.adapter !== observedAdapter) break;
+				samples.push({ elapsedMs: Date.now() - started, state: observedState });
+				await writeFile(join(root, ".local/m0-window-observations.private.json"), JSON.stringify({ target, startedUtc: new Date(started).toISOString(), samples }, null, 2));
+			}
+		})().catch(() => {});
 	}
 	return true;
 }

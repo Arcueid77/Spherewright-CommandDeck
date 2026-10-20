@@ -37,10 +37,10 @@ internal static class Desktop
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern ushort RegisterClass(ref WindowClass value);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern bool UnregisterClass(string name, nint instance);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern nint CreateWindowEx(uint exStyle, string className, string title, uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint data);
-    [DllImport("user32.dll")] internal static extern nint DefWindowProc(nint hwnd, uint message, nint wParam, nint lParam);
-    [DllImport("user32.dll")] internal static extern int GetMessage(out Message message, nint hwnd, uint minimum, uint maximum);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern nint DefWindowProc(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetMessage(out Message message, nint hwnd, uint minimum, uint maximum);
     [DllImport("user32.dll")] internal static extern bool TranslateMessage(ref Message message);
-    [DllImport("user32.dll")] internal static extern nint DispatchMessage(ref Message message);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern nint DispatchMessage(ref Message message);
     [DllImport("user32.dll")] internal static extern void PostQuitMessage(int code);
     [DllImport("user32.dll")] internal static extern bool PostMessage(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll")] internal static extern bool PostThreadMessage(uint thread, uint message, nint wParam, nint lParam);
@@ -62,6 +62,10 @@ internal static class Desktop
     [DllImport("shcore.dll")] private static extern int GetScaleFactorForMonitor(nint monitor, out int scale);
     internal static bool IsScale100(nint monitor) => monitor != 0 && GetScaleFactorForMonitor(monitor, out int scale) == 0 && scale == 100;
     [DllImport("user32.dll")] internal static extern nint SetFocus(nint hwnd);
+    [DllImport("user32.dll")] internal static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll")] internal static extern bool ClientToScreen(nint hwnd, ref Point point);
+    [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);
+    [DllImport("user32.dll")] internal static extern bool IsChild(nint parent, nint child);
     [StructLayout(LayoutKind.Sequential)]
     internal struct GuiInfo { internal uint Size, Flags; internal nint Active, Focus, Capture, Menu, MoveSize, Caret; internal Rect CaretRect; }
     [DllImport("user32.dll")] internal static extern bool GetGUIThreadInfo(uint thread, ref GuiInfo info);
@@ -86,6 +90,13 @@ internal static class Desktop
         uint thread = GetWindowThreadProcessId(hwnd, out _);
         var info = new GuiInfo { Size = (uint)Marshal.SizeOf(typeof(GuiInfo)) };
         return thread != 0 && GetGUIThreadInfo(thread, ref info) && info.Focus != 0 && Pid(info.Focus) == pid;
+    }
+    internal static bool WindowHasFocus(nint hwnd)
+    {
+        uint thread = GetWindowThreadProcessId(hwnd, out _);
+        var info = new GuiInfo { Size = (uint)Marshal.SizeOf(typeof(GuiInfo)) };
+        return thread != 0 && GetGUIThreadInfo(thread, ref info) &&
+            (info.Focus == hwnd || IsChild(hwnd, info.Focus));
     }
     internal static void Require(bool condition, string code) { if (!condition) throw new InvalidOperationException(code); }
     internal static void SetStyle(nint hwnd, int index, long value)
@@ -153,10 +164,11 @@ internal sealed class WindowSnapshot
         try { using (var process = Process.GetProcessById(Pid)) return process.HasExited || process.StartTime.ToUniversalTime().Ticks != Started; }
         catch (ArgumentException) { return true; }
     }
-    internal void Adopt(nint parent)
+    internal void Adopt(nint parent, bool enablePointerNotifications = false)
     {
         Desktop.Require(SameLifetime(), "WINDOW_LIFETIME_LOST");
         Desktop.SetStyle(Hwnd, -16, (Style | Desktop.Child) & ~(Desktop.Popup | Desktop.Caption | Desktop.ThickFrame));
+        if (enablePointerNotifications) Desktop.SetStyle(Hwnd, -20, (long)Desktop.GetLong(Hwnd, -20) & ~4L); // WS_EX_NOPARENTNOTIFY; restored from the snapshot.
         Desktop.SetParent(Hwnd, parent);
         Desktop.Require(Desktop.GetParent(Hwnd) == parent && SameLifetime(), "WINDOW_PARENT_NOT_APPLIED");
     }

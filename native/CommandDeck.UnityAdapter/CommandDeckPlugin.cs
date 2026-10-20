@@ -29,7 +29,7 @@ public sealed class CommandDeckPlugin : BaseUnityPlugin
             if (start) server = new AdapterServer();
             // Unity API access stays on Unity's main thread. No display preferences are written.
             server!.UpdateWindowFacts(new WindowFacts(unityWindow, Screen.fullScreenMode == FullScreenMode.Windowed, Application.unityVersion,
-                ++updateSequence, Screen.width, Screen.height));
+                ++updateSequence, Screen.width, Screen.height, Application.isFocused));
             if (start)
             {
                 server.Start();

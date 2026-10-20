@@ -22,6 +22,13 @@ public sealed class WindowHostState
     public bool HostVisible { get; set; }
     public bool UiVisible { get; set; }
     public bool UiThreadHasFocus { get; set; }
+    public bool GameThreadHasFocus { get; set; }
+    public long GamePointerFocusRequests { get; set; }
+    public long PointerDownNotifications { get; set; }
+    public long GamePointerHits { get; set; }
+    public bool GameParentNotifyEnabled { get; set; }
+    public bool? PointerClientPointMatchesCursor { get; set; }
+    public bool? PointerScreenPointMatchesCursor { get; set; }
     public bool UiOperationPending { get; set; }
     public int TargetPid { get; set; }
     public int Dpi { get; set; }
@@ -55,6 +62,10 @@ public sealed class GameWindowHost
     private TaskCompletionSource<WindowHostState>? focusPending;
     private int loopRecoveryQueued;
     private int uiExitQueued, displayStopQueued;
+    private int focusOperations;
+    private long gamePointerFocusRequests;
+    private long pointerDownNotifications, gamePointerHits;
+    private int pointerCoordinateMatches = -1;
     private bool destroyAuthorized;
 
     public GameWindowHost() { wndProc = WindowMessage; }
@@ -83,7 +94,7 @@ public sealed class GameWindowHost
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             await ready.Task.ConfigureAwait(false);
-            game.Adopt(host);
+            game.Adopt(host, enablePointerNotifications: true);
             LayoutNow();
             Desktop.ShowWindow(host, 5);
             Desktop.Require(Desktop.IsWindowVisible(host), "HOST_NOT_VISIBLE");
@@ -254,7 +265,14 @@ public sealed class GameWindowHost
             NativeParentMatches = uiAlive && Desktop.GetParent(currentUi!.Hwnd) == host,
             HostVisible = host != 0 && Desktop.IsWindowVisible(host), UiVisible = uiAlive && Desktop.IsWindowVisible(currentUi!.Hwnd),
             UiThreadHasFocus = uiAlive && Desktop.UiHasFocus(currentUi!.Hwnd, currentUi.Pid),
-            UiOperationPending = gate.CurrentCount == 0 || revisions.Running || (currentUi != null && currentUi.ProcessExited()),
+            GameThreadHasFocus = gameAlive && Desktop.WindowHasFocus(currentGame!.Hwnd),
+            GamePointerFocusRequests = Interlocked.Read(ref gamePointerFocusRequests),
+            PointerDownNotifications = Interlocked.Read(ref pointerDownNotifications),
+            GamePointerHits = Interlocked.Read(ref gamePointerHits),
+            GameParentNotifyEnabled = gameAlive && ((long)Desktop.GetLong(currentGame!.Hwnd, -20) & 4) == 0,
+            PointerClientPointMatchesCursor = Volatile.Read(ref pointerCoordinateMatches) < 0 ? null : (Volatile.Read(ref pointerCoordinateMatches) & 1) != 0,
+            PointerScreenPointMatchesCursor = Volatile.Read(ref pointerCoordinateMatches) < 0 ? null : (Volatile.Read(ref pointerCoordinateMatches) & 2) != 0,
+            UiOperationPending = gate.CurrentCount == 0 || revisions.Running || Volatile.Read(ref focusOperations) > 0 || (currentUi != null && currentUi.ProcessExited()),
             TargetPid = Process.GetCurrentProcess().Id, Dpi = (int)Desktop.GetDpiForWindow(host),
             ClientWidth = client.Right, ClientHeight = client.Bottom,
             LayoutRequested = revisions.Requested, LayoutApplied = revisions.Applied, Fault = fault
@@ -357,6 +375,32 @@ public sealed class GameWindowHost
     }
     private nint WindowMessageCore(nint hwnd, uint message, nint wParam, nint lParam)
     {
+        // A reparented standalone Unity window no longer gains top-level focus automatically.
+        // Only a real pointer-down notification hitting the bound viewport transfers focus.
+        if (message == 0x210 && ((long)wParam & 0xFFFF) is 0x201 or 0x204 or 0x207 or 0x20B)
+        {
+            Interlocked.Increment(ref pointerDownNotifications);
+            var eventPoint = new Desktop.Point { X = unchecked((short)(long)lParam), Y = unchecked((short)((long)lParam >> 16)) };
+            var screenPoint = eventPoint;
+            if (Desktop.ClientToScreen(hwnd, ref screenPoint))
+            {
+                // Cursor equality is diagnostic only. The routing decision uses the original event point.
+                if (Desktop.GetCursorPos(out var cursor))
+                    Volatile.Write(ref pointerCoordinateMatches, (screenPoint.X == cursor.X && screenPoint.Y == cursor.Y ? 1 : 0) | (eventPoint.X == cursor.X && eventPoint.Y == cursor.Y ? 2 : 0));
+                nint hit = Desktop.WindowFromPoint(screenPoint);
+                if (!closing && game?.SameLifetime() == true && Desktop.GetParent(game.Hwnd) == hwnd &&
+                    (hit == game.Hwnd || Desktop.IsChild(game.Hwnd, hit)))
+                {
+                    Interlocked.Increment(ref gamePointerHits);
+                    if (!Desktop.WindowHasFocus(game.Hwnd))
+                    {
+                        Interlocked.Increment(ref gamePointerFocusRequests);
+                        SetBoundFocus(game.Hwnd);
+                    }
+                    return 0;
+                }
+            }
+        }
         if (message == 0x10) // WM_CLOSE never reaches DefWindowProc while it owns the game.
         {
             _ = Task.Run(async () => { try { await StopAsync().ConfigureAwait(false); } catch { fault = "HOST_CLOSE_REJECTED"; } });
@@ -375,7 +419,7 @@ public sealed class GameWindowHost
         {
             TaskCompletionSource<WindowHostState>? pending;
             lock (sync) pending = focusPending;
-            if (ui?.SameLifetime() == true && Desktop.GetParent(ui.Hwnd) == hwnd) Desktop.SetFocus(ui.Hwnd);
+            if (ui?.SameLifetime() == true && Desktop.GetParent(ui.Hwnd) == hwnd) SetBoundFocus(ui.Hwnd);
             pending?.TrySetResult(Status());
             lock (sync) { if (ReferenceEquals(focusPending, pending)) focusPending = null; }
             return 0;
@@ -396,5 +440,11 @@ public sealed class GameWindowHost
             return 0;
         }
         return Desktop.DefWindowProc(hwnd, message, wParam, lParam);
+    }
+    private void SetBoundFocus(nint hwnd)
+    {
+        Interlocked.Increment(ref focusOperations);
+        try { Desktop.SetFocus(hwnd); }
+        finally { Interlocked.Decrement(ref focusOperations); }
     }
 }

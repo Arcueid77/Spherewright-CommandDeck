@@ -18,8 +18,9 @@ public sealed class WindowFacts
     public long UpdateSequence { get; }
     public int RenderWidth { get; }
     public int RenderHeight { get; }
-    public WindowFacts(nint hwnd, bool windowed, string unityVersion, long updateSequence = 0, int renderWidth = 0, int renderHeight = 0)
-    { Hwnd = hwnd; Windowed = windowed; UnityVersion = unityVersion; UpdateSequence = updateSequence; RenderWidth = renderWidth; RenderHeight = renderHeight; }
+    public bool? ApplicationFocused { get; }
+    public WindowFacts(nint hwnd, bool windowed, string unityVersion, long updateSequence = 0, int renderWidth = 0, int renderHeight = 0, bool? applicationFocused = null)
+    { Hwnd = hwnd; Windowed = windowed; UnityVersion = unityVersion; UpdateSequence = updateSequence; RenderWidth = renderWidth; RenderHeight = renderHeight; ApplicationFocused = applicationFocused; }
 }
 
 // Opt-in window-only transport. It cannot call GameMain, Save/Load, input injection or process termination.
@@ -205,6 +206,7 @@ public sealed class AdapterServer
                 unityVersion = Volatile.Read(ref facts).UnityVersion,
                 unityUpdateSequence = Volatile.Read(ref facts).UpdateSequence,
                 renderWidth = Volatile.Read(ref facts).RenderWidth, renderHeight = Volatile.Read(ref facts).RenderHeight,
+                applicationFocused = Volatile.Read(ref facts).ApplicationFocused,
                 gamePid = process.Id, gameStartedTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 window = host?.Status() ?? new WindowHostState(),
                 kind, quarantined, fault = adapterFault, gameCalls = 0, mode = "unity-game-owned-host",
