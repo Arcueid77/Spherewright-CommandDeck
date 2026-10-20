@@ -157,6 +157,12 @@ The implementation decision keeps input delivery native and fixes the missing ch
 
 The user then selected manual development mode: source work, builds and automated checks continue, while real GUI clicks, dragging, keyboard and focus checks are performed by the user. Startup, normal shutdown, deployment and preparation through existing process, CLI or API interfaces remain the agent's responsibility, subject to the existing game/save protections. The user can explicitly select automatic mode to resume computer-use testing. The active collaboration rule is recorded in the Roadmap; earlier computer-use observations retain their historical scope.
 
+The exact `f840f24400aebdb140c9f9b6b6bd55f538434ca3` candidate was subsequently cold-adopted after CI 39437850322 passed, with all four candidate hashes verified and the original Spherewright files unchanged. A fresh public session check proved no world before attachment. Its initial native parents, visibility, layout, update sequence and notification-enabled style passed. The sealed initial proof is `.local/m0-pointer-menu.attached.private.json`, SHA-256 `6230425E981EB4D311788EAB007DF08A1B8EEBE6D9D68355A21BDB3ED94AC673`.
+
+The user again reports no central Settings response. The completed 120-sample observation recorded 17 parent notifications/game hits and two focus attempts; Windows game-window focus became true, while Unity `Application.isFocused` stayed false throughout. The original event-point conversion generally matched the cursor; the later-cursor comparison is diagnostic and is not used for routing. This proves native receipt/focus handling, not Unity input recovery or a unique underlying cause. The sealed samples are `.local/m0-pointer-menu.observations.private.json`, SHA-256 `D405E0D9C32F45567FF77B04C6FF81F88E0047209408DD0BB42D0CFF49EB05E2`.
+
+The owner explicitly deferred further central-click investigation on 2026-10-20 and requested progress on M1. M0 interaction acceptance remains open. The current inability to click is an observed defect, not an enforced input-disable or writer-exclusion mechanism. The workbench was then closed normally through its existing process interface for M1 build preparation, preserving the original standalone DSP process.
+
 ### Unqualified scope
 
 1. The real empty-menu cohort proves one normal native hosting cycle. Physical input, correct pixels, long-running operation and failure behavior still require separate evidence; a successful local compile or simulator cannot supply it.
