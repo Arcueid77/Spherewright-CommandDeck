@@ -18,6 +18,7 @@ function send(message) {
 	if (process.connected) process.send(message, () => {});
 }
 function request(action, args) {
+	if (!process.connected) return Promise.reject(new Error("SUPERVISOR_DISCONNECTED"));
 	const id = String(++sequence);
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(
@@ -25,7 +26,7 @@ function request(action, args) {
 				pending.delete(id);
 				reject(new Error("SUPERVISOR_TIMEOUT"));
 			},
-			action === "probe" ? 105000 : action === "close" ? 45000 : action === "workbench" ? 30000 : 12000,
+			action === "probe" ? 105000 : ["close", "bridge-select", "bridge"].includes(action) ? 45000 : action === "workbench" ? 30000 : 12000,
 		);
 		pending.set(id, { resolve, reject, timer });
 		send({ type: "request", id, action, args });
@@ -49,12 +50,12 @@ async function testCommand(message) {
 			window.webContents.reload();
 			await loaded;
 			result = true;
-		} else if (message.name === "capture-workbench") {
+		} else if (["capture-workbench", "capture-bridge"].includes(message.name)) {
 			let captureTimer;
 			try {
 				const capture = await Promise.race([window.webContents.capturePage(undefined, { stayAwake: true }), new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error("CAPTURE_TIMEOUT")), 1000); })]);
 				await mkdir(join(root, ".local"), { recursive: true });
-				await writeFile(join(root, ".local/m1-smoke-workbench.private.png"), capture.toPNG());
+				await writeFile(join(root, message.name === "capture-bridge" ? ".local/m2-smoke-bridge.private.png" : ".local/m1-smoke-workbench.private.png"), capture.toPNG());
 				result = { captured: true };
 			} catch { result = { captured: false, code: "CAPTURE_UNAVAILABLE" }; }
 			finally { clearTimeout(captureTimer); }
@@ -121,7 +122,7 @@ if (typeof process.send !== "function") {
 		pending.clear();
 		if (window && !window.isDestroyed())
 			window.webContents.send("deck:event", {
-				type: "notice",
+				type: "supervisor-disconnected",
 				text: "控制进程已断开。未重放任务，也不会启动第二个宿主。",
 			});
 	});
@@ -165,6 +166,7 @@ if (typeof process.send !== "function") {
 				"deck:status": "status",
 				"deck:profiles": "profiles",
 				"deck:profiles-manage": "profiles-manage",
+				"deck:bridge": "bridge",
 				"deck:targets": "targets",
 				"deck:attach": "attach",
 				"deck:start-fixture": "start-fixture",
@@ -190,6 +192,11 @@ if (typeof process.send !== "function") {
 				if (selected.canceled || selected.filePaths.length !== 1) return { cancelled: true };
 				const path = selected.filePaths[0], label = path.replaceAll("\\", "/").split("/").at(-1);
 				return request("workbench", { action: "add", args: { path, label, canWrite: false, canExecute: false } });
+			});
+			handle("deck:choose-bridge", async () => {
+				const selected = await dialog.showOpenDialog(window, { title: "选择 Spherewright.Mcp.exe（会启动本机只读观察服务）", properties: ["openFile"], filters: [{ name: "Spherewright MCP", extensions: ["exe"] }] });
+				if (selected.canceled || selected.filePaths.length !== 1) return { cancelled: true };
+				return request("bridge-select", selected.filePaths[0]);
 			});
 			handle("deck:detach", async () => {
 				const result = await request("detach");

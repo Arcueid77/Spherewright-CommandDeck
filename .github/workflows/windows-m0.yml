@@ -46,6 +46,7 @@ jobs:
       - run: node scripts/run-desktop-smoke.mjs --smoke-recovery-limit
       - run: npm run test:desktop-adapter
       - run: npm run test:workbench
+      - run: npm run test:bridge
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -66,4 +67,5 @@ jobs:
             .local/desktop-smoke-adapter.json
             .local/desktop-smoke-workbench.json
             .local/credential-vault-smoke.json
+            .local/desktop-smoke-bridge.json
           if-no-files-found: ignore

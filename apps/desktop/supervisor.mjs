@@ -15,6 +15,9 @@ import { runWorkbenchSmoke } from "./workbench-smoke.mjs";
 import { createUiWatchdog } from "./ui-watchdog.mjs";
 import { CredentialVault, protectedProvider } from "./credential-vault.mjs";
 import { resolveTaskProfile } from "./profile-access.mjs";
+import { BridgeMonitor } from "./bridge-monitor.mjs";
+import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
+import { settleShutdown } from "./shutdown-drain.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -30,6 +33,8 @@ let changingProfiles = false;
 function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
 const native = new WindowHost();
 const events = new EventEmitter();
+const bridge = new BridgeMonitor({ ...(smoke && process.argv.includes("--smoke-bridge") ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), emit: () => emit({ type: "bridge-changed" }) });
+let bridgeTimer;
 const runtimePending = new Map(),
 	tests = new Map();
 const lifecycle = [];
@@ -56,7 +61,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !process.argv.includes("--smoke-workbench") ? "m0" : "development",
+	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") ? "m0" : "development",
 	events: [],
 };
 const safeEnvironment = () =>
@@ -152,7 +157,7 @@ async function api(action, args) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action);
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action) || action === "bridge" && args?.action === "snapshot";
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -166,6 +171,18 @@ async function api(action, args) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, events: [...state.events] };
+	if (action === "bridge-select") {
+		if (typeof args !== "string" || !isAbsolute(args) || args.length > 4096 || args.includes("\0")) throw new Error("INVALID_MCP_SELECTION");
+		return bridge.select(args);
+	}
+	if (action === "bridge") {
+		if (!args || !["snapshot", "refresh", "watch", "disconnect", "connect"].includes(args.action)) throw new Error("INVALID_BRIDGE_ACTION");
+		if (args.action === "snapshot") return bridge.snapshot();
+		if (args.action === "refresh") return bridge.refresh();
+		if (args.action === "watch") return bridge.watch(args.args?.itemIds);
+		if (args.action === "disconnect") return bridge.disconnect();
+		return bridge.connect();
+	}
 	if (action === "workbench") {
 		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
@@ -490,14 +507,16 @@ function testCommand(name, extra = {}) {
 async function shutdown(exitCode = 0) {
 	if (stopping) return;
 	stopping = true;
+	clearInterval(bridgeTimer);
 	runtime?.postMessage({ type: "abort" });
 	try {
-		if (workbenchReady) await workbenchCall("drain");
+		await settleShutdown([() => bridge.close(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve()]);
 		await native.request("detach");
 		await native.request("close");
 	} catch (error) {
 		if (exitCode === 0) {
 			stopping = false;
+			bridge.resumeAfterCloseFailure(); bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			if (workbenchReady) await workbenchCall("resume-after-close-failure").catch(() => {});
 			throw error;
 		}
@@ -626,6 +645,7 @@ if (!app.requestSingleInstanceLock()) {
 			}
 			await workbenchCall("initialize", { directory: join(privateDirectory, smoke ? "m1-smoke-" + (process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID()) : "workbench"), helperSource: join(root, "artifacts/commands"), roots: workspaceRoots });
 			workbenchReady = true;
+			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
 			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
 			const checkUi = createUiWatchdog({ current: () => ui, unavailable: () => stopping || recovering,
@@ -640,16 +660,19 @@ if (!app.requestSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
 					native,
 					api,
+					emit,
 					testCommand,
 					events,
 					getUi: () => ui,
 					getRuntimePid: () => runtime.pid,
+					getBridgePid: () => bridge.telemetry?.client.child.pid,
+					bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true,
 					getProbeSequence: () => probeSequence,
 					getState: () => state,
 					beginUiHang: () =>

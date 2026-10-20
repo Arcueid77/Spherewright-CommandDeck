@@ -65,6 +65,19 @@ textarea {
 .provider-limits label { flex: 1; min-width: 0; }
 .provider-limits input { width: 100%; }
 .external-providers { border-top: 1px solid #2c3d4e; margin-top: 20px; padding-top: 20px; font-size: 12px; }
+.bridge-panel details { font-size: 11px; line-height: 1.8; margin-top: 18px; }
+.bridge-panel details code { overflow-wrap: anywhere; }
+.observation-state { display: inline-block; font-size: 11px; padding: 5px 9px; border: 1px solid #3d505d; color: #a7b8c6; border-radius: 4px; }
+.observation-state.observed { color: #9bcebc; border-color: #427566; }
+.observation-state.stale, .observation-state.restricted { color: #e4b277; border-color: #826442; }
+.data-scope { color: #9caeb9; font-size: 11px; overflow-wrap: anywhere; }
+.watch-items { display: flex; gap: 8px; }
+.watch-items input { min-width: 0; flex: 1; }
+.table-scroll { overflow: auto; max-height: 70%; margin-top: 16px; }
+.bridge-panel table { border-collapse: collapse; width: 100%; font-size: 11px; text-align: left; white-space: nowrap; }
+.bridge-panel th { color: #aebac5; background: #182838; position: sticky; top: 0; }
+.bridge-panel th, .bridge-panel td { padding: 10px 12px; border-bottom: 1px solid #2a3a47; }
+.bridge-panel td small { display: block; font-size: 10px; color: #a3b4bf; }
 button {
 	cursor: pointer;
 }

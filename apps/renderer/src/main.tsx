@@ -9,6 +9,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
+import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel } from "./bridge";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -53,6 +54,8 @@ declare global {
 			snapshot(): Promise<UiSnapshot>;
 			profiles(): Promise<Profile[]>;
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			chooseBridge(): Promise<unknown>;
 			targets(): Promise<Target[]>;
 			attach(id: string): Promise<NativeState>;
 			detach(): Promise<unknown>;
@@ -388,7 +391,12 @@ const components = {
 	evidence: EvidencePanel,
 	events: EventPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
+	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
 };
+function addBridgePanels(api: DockviewReadyEvent["api"], activate = false) {
+	for (const [id, title] of [["bridge", "只读舰桥"], ["research", "科研"], ["production", "生产"], ["power", "供电"], ["logistics", "物流"]]) if (!api.getPanel(id)) api.addPanel({ id, component: id, title, ...(api.getPanel("editor") ? { position: { referencePanel: "editor", direction: "within" as const }, inactive: true } : {}) });
+	if (activate) api.getPanel("bridge")?.api.setActive();
+}
 async function ready(event: DockviewReadyEvent) {
 	const api = event.api;
 	const snapshot = await window.deck.snapshot();
@@ -405,6 +413,7 @@ async function ready(event: DockviewReadyEvent) {
 			api.addPanel({ id: "output", component: "output", title: "检查输出", position: { referencePanel: "editor", direction: "below" }, initialHeight: 230 });
 			api.addPanel({ id: "tasks", component: "tasks", title: "任务记录", position: { referencePanel: "output", direction: "within" }, inactive: true });
 			api.addPanel({ id: "events", component: "events", title: "运行事件", position: { referencePanel: "output", direction: "within" }, inactive: true });
+			addBridgePanels(api);
 		}
 		api.onDidLayoutChange(() => { void persistedLayout.save(api.toJSON()).catch(() => {}); });
 		return;
@@ -434,6 +443,7 @@ async function ready(event: DockviewReadyEvent) {
 }
 function App() {
 	const [settings, setSettings] = useState(false);
+	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
 	useEffect(() => { if (settings) document.body.dataset.deckOverlay = "settings"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings]);
 	return (
 		<div className="app">
@@ -441,16 +451,17 @@ function App() {
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
-				<div className="tag">M1 · 开发工作台</div>
+				<div className="tag">M1 / M2 · 开发与观察</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
 				<button onClick={() => setSettings(true)}>模型设置</button>
+				<button onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
 				<div className="header-note">游戏动作未接入 · 中央点击暂缓</div>
 			</header>
 			<div className="workspace" inert={settings}>
 				<DockviewReact
 					className="dockview-theme-abyss"
 					components={components}
-					onReady={ready}
+					onReady={(event) => { dock.current = event.api; void ready(event); }}
 				/>
 			</div>
 			{settings && <ProviderSettings close={() => setSettings(false)} />}
@@ -465,4 +476,4 @@ document.addEventListener(
 	},
 	{ capture: true },
 );
-createRoot(document.getElementById("root")!).render(<WorkbenchProvider><App /></WorkbenchProvider>);
+createRoot(document.getElementById("root")!).render(<WorkbenchProvider><BridgeProvider><App /></BridgeProvider></WorkbenchProvider>);

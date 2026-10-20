@@ -95,6 +95,24 @@ Protected profiles support explicit Chat Completions or Messages protocol config
 
 `npm run test:vault` uses a synthetic credential to verify Windows encryption and reopening in a separate Electron process. Node tests additionally exercise split provider echoes, rejected control fields, safe initialization errors and actual Pi session/SQLite persistence. The desktop workbench smoke covers the renderer-to-supervisor configuration whitelist and the private task-bound runtime channel against a loopback fake provider. These are zero-external-network credential tests; only the existing MiniMax Chat Completions configuration has a live-model result. A corrupt/newer vault or unavailable OS protection is never silently reset or stored as plaintext.
 
+## Read-only bridge panels (M2)
+
+Open **只读舰桥**, choose the intended `Spherewright.Mcp.exe`, and inspect its connection details. This starts one local MCP process; it does not start DSP or load a world. The selection is kept by the supervisor across UI reloads, but must be selected again after the whole application restarts. Reconnecting requires the selected executable/DLL/config cohort to retain its recorded fingerprint; changing it requires an explicit new selection. The fingerprint is a file observation at connection time, not a frozen payload, loaded-DLL proof or installed Plugin hash.
+
+Research, production, power and logistics use one background observer, with a five-second refresh cadence and one collection in flight. UI snapshots and extra panels share that observer. Tool discovery and annotations/schema checks enable only four explicitly named read tools; counts are discovered rather than assumed. There is no renderer API for arbitrary MCP calls or game writes. No model request is needed. Closing panels or reloading the UI does not start another MCP process; disconnect and application shutdown confirm the original process exit before replacement.
+
+Pages are bound to session, snapshot, game tick, item selection and coverage, with a 32-page cap per source and a thirty-second request-start budget for the complete collection, including the final context checks. A single read already in flight may take its remaining twelve-second timeout. World changes and tick regression discard candidate data. Old data is visibly stale after disconnect, read failure or fifteen seconds of monotonic receive age. The UI independently ages cached snapshots, conservatively includes RPC delivery time, and invalidates them on supervisor transport loss. Changing the connection or watched scope rejects older in-flight replies. Source expiry is retained and compared across pages, but its wall clock validity is not asserted. The whitelist removes save names and resume/checkpoint credentials before UI delivery; nothing is exported automatically.
+
+Actual production is shown only for the current source's complete inclusive 600-game-tick window. Warming/discontinuous/invalid windows show unknown actual rates. Theoretical capacity is labeled an estimate and never substituted for actual output. Power uses observed J/game-tick converted at 60 game ticks/second; current service is not proof of sustained fuel or headroom. Missing fields show `—`, not zero. The first UI exposes up to sixteen explicitly selected item IDs and at most 300 visible production rows, with coverage/truncation stated.
+
+`npm run test:bridge` runs an owned synthetic MCP through the real Electron connection/UI path: pagination, research/production/power/logistics rendering, private-field removal, reload without process restart, and stale data plus confirmed server exit after disconnect. This is zero-model and zero-real-game evidence, not physical mouse or DSP performance verification. A separate metadata-only probe can inspect an explicitly selected source-built MCP with its Bridge descriptor disabled:
+
+~~~powershell
+node scripts/probe-mcp-metadata.mjs --executable '<absolute path to Spherewright.Mcp.exe>'
+~~~
+
+The local source-built probe observed protocol `2025-06-18`, server `0.4.0.0`, 64 tools and one resource, with zero `tools/call`. Real owned-world monitoring, game frame time, panel latency under load and installed-cohort validation remain open.
+
 ## CC Switch / Pi provider configuration
 
 The model selector reads provider/model metadata from Pi's `models.json`, normally under `~/.pi/agent`. Existing CC Switch Pi providers can be reused. `COMMANDDECK_PI_CONFIG_DIR`, then `PI_CODING_AGENT_DIR`, can select another configuration directory. The prototype does not rewrite shared Pi configuration or copy keys into the repository or renderer. Credential command values are rejected, including model header overrides; remote endpoints require HTTPS.
@@ -142,7 +160,7 @@ CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it can
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-The simulator, Pi and one real DSP menu hosting cycle now have local evidence. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. Development tools, the task ledger and all game execution remain future work.
+The simulator, pinned Pi, M1 development tools/ledger/protected profiles and M2 read-only panels now have local evidence. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. M2 has synthetic UI and source-built metadata evidence; real owned-world monitoring and performance remain open. M3 game-task approvals, durable commit evidence and game execution are still separate future work.
 
 ## License
 

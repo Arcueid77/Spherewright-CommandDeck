@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 const runId = randomUUID();
-const file = args.includes("--smoke-workbench")
+const file = args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
 	: args.includes("--smoke-adapter")
 	? "desktop-smoke-adapter.json"
@@ -37,7 +37,8 @@ assert.equal(
 	runId,
 	"This process exited without writing its own complete proof",
 );
-if (args.includes("--smoke-workbench")) assert.equal(result.checkStarts, 1);
+if (args.includes("--smoke-bridge")) assert.equal(result.ownServerExitConfirmed, true);
+else if (args.includes("--smoke-workbench")) assert.equal(result.checkStarts, 1);
 else if (args.includes("--smoke-adapter"))
 	assert.equal(result.normalDetachRestoresBoth, true);
 else if (args.includes("--smoke-host-exit"))
