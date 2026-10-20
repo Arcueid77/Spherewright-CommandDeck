@@ -120,7 +120,7 @@ The published Plugin session read for the first process reports `gameLoaded=fals
 
 ### Real DSP empty-menu cohort: 2026-10-20
 
-The second cohort used implementation commit `e00f56ce5441e3a707a4445a88fd07641a0b8c08`, after [CI 39427237164](https://github.com/Arcueid77/spherewright-commanddeck/actions/runs/39427237164) completed successfully. The locally compiled plugin records that full source revision. Only the four candidate DLLs in the separate CommandDeck addon folder were replaced; the original four Spherewright plugin DLLs still matched their recorded hashes. Neither the product source checkout nor its mixed worktree was changed.
+The second cohort used implementation commit `e00f56ce5441e3a707a4445a88fd07641a0b8c08`, after [CI 39427237164](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39427237164) completed successfully. The locally compiled plugin records that full source revision. Only the four candidate DLLs in the separate CommandDeck addon folder were replaced; the original four Spherewright plugin DLLs still matched their recorded hashes. Neither the product source checkout nor its mixed worktree was changed.
 
 Steam started DSP normally with the per-launch opt-in/window arguments. The loaded Unity runtime reported `2022.3.62f3c1`; the private descriptor, native pipe peer and exact process/start generation matched. The endpoint became readable in this same process without descriptor modification or a game restart. No window host existed before explicit desktop selection. Published `get_session_state` reads immediately before both attachments and the intervening desktop shutdown reported `gameLoaded=false` with no game tick.
 

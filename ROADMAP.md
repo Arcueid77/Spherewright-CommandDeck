@@ -18,8 +18,8 @@ CommandDeck 是同时面向玩家和开发者的桌面工作台：中央承载�
 | --- | --- | --- |
 | Spherewright | Plugin、Bridge、MCP、游戏 DTO、正常原生动作与安全边界 | 产品可独立构建和发行 |
 | Spherewright-Lab | 版本锁、场景、受控实机验收和脱敏证据 | 开发工作区成员；不进入 Deck 的安装包或运行依赖 |
-| spherewright-commanddeck | 桌面 UI、原生窗口承载、开发工作区、权限、任务账本和工具网关 | 通过公开 MCP 使用 Spherewright |
-| spherewright-pi | 从上游 fork 的 Agent 内核及必要修改 | 作为 Deck 的 vendor/pi 子模块，固定精确提交 |
+| Spherewright-CommandDeck | 桌面 UI、原生窗口承载、开发工作区、权限、任务账本和工具网关 | 通过公开 MCP 使用 Spherewright |
+| Spherewright-Pi | 从上游 fork 的 Agent 内核及必要修改 | 作为 Deck 的 vendor/pi 子模块，固定精确提交 |
 
 - 桌面主线：Electron、React/TypeScript、Dockview；Windows 原生桥负责承载真实游戏窗口。
 - Agent 主线：直接维护 Pi 源码 fork，保留其模块及公开集成入口，复用模型、会话、压缩、事件和工具循环。首发不再并行自建另一套完整 Harness。
@@ -49,7 +49,7 @@ CommandDeck 是同时面向玩家和开发者的桌面工作台：中央承载�
 - [x] 独审发现的布局完成竞态、消息泵异常退出及连接失败寿命已修并有定向替身证据；失败还原保留原 host 与受限诊断入口，错误客户端不关闭监听，描述符创建冲突不删除原文件，系统层核 pipe peer 后才发送凭据。首轮显示范围限制为同一显示器 100% 缩放，不泛化为多 DPI 通过。
 - [x] helper 断开与安全脱离分开：原端点身份和 unknown/pending 保留，禁止新嵌入；仅同一 OS peer 的 fresh 双窗还原证明或原进程代次退出证明可核销。断 helper 且还原失败的路由负例、明确修复后核销、正常 EOF 和进程退出分别有替身证据。
 - [x] 首次真实冷启动采用精确 10ae8c9 候选：BepInEx 加载并读到显式启用参数，但 Mono `WindowsIdentity.User` 为直接抛 NotImplementedException 的占位方法，端点创建前失败，未发生窗口挂接。公开只读 session 证明未载入世界；无保存/加载调用。随后正常退出该空闲菜单，未强制结束 DSP。
-- [x] Mono 兼容修复的真实冷验证通过：精确 e00f56ce5441e3a707a4445a88fd07641a0b8c08 候选在 [CI 39427237164](https://github.com/Arcueid77/spherewright-commanddeck/actions/runs/39427237164) 通过后单独部署，Unity 2022.3.62f3c1 发布端点，系统身份校验及只读连接成功；原 Spherewright DLL 哈希不变。
+- [x] Mono 兼容修复的真实冷验证通过：精确 e00f56ce5441e3a707a4445a88fd07641a0b8c08 候选在 [CI 39427237164](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39427237164) 通过后单独部署，Unity 2022.3.62f3c1 发布端点，系统身份校验及只读连接成功；原 Spherewright DLL 哈希不变。
 - [x] 同一 DSP 空闲菜单进程完成首次原生嵌入、正常退出 Deck 后双窗还原、一次明确再嵌入：96 DPI 下 game/UI parent、宿主/UI 可见、布局收敛和 Unity 更新递增均通过，渲染尺寸随承载由 2556×1440 变为 1398×954，正常还原后回到 2556×1440。公开 session 在窗口操作前确认无世界，无游戏动作或保存/加载调用。该证据不包含像素正确性或人工输入。
 - [ ] 首次真实人工检查发现输入故障：指针呈 DSP 样式，但主菜单按钮无 hover 反馈、“设置”无法点击，阻断 M0。用户说其他方面感觉正常，不据此推定缩放、停靠或焦点逐项通过；世界内拖动、滚轮、按键仍未验证。
 - [x] 用户授权后以 computer-use 复现嵌入菜单失败，同一进程正常脱离后可打开并取消“设置”。新焦点候选已在偏移替身验证原始点击坐标、游戏命中与焦点转移，兼容 Unity 引用编译及共享宿主/传输/还原回归通过；真实 DSP 采用与复测仍待。
