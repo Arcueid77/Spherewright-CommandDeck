@@ -242,6 +242,8 @@ else {
 					assert.equal(result.panels, 4);
 					assert.equal(result.nodeExposed, false);
 					assert.equal(result.native.attached, true);
+					assert.equal(result.native.hostVisible, true);
+					assert.equal(result.native.uiVisible, true);
 					assert.equal(result.native.uiChildStyle, true);
 					assert.equal(result.native.nativeParentMatches, true);
 					assert.equal(result.native.gameParentMatches, true);

@@ -61,6 +61,8 @@ internal sealed class Fixture : Form
 {
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 250 };
     private int clicks, keys;
+    private long originalStyle, originalExStyle;
+    private Win.Rect originalRect;
 
     internal Fixture()
     {
@@ -70,9 +72,14 @@ internal sealed class Fixture : Form
         MouseDown += (_, _) => { clicks++; Invalidate(); };
         KeyDown += (_, _) => { keys++; Invalidate(); };
         Paint += (_, e) => e.Graphics.DrawString($"DECK UI FIXTURE\nClicks {clicks} / Keys {keys}", Font, Brushes.White, 24, 24);
-        Shown += (_, _) =>
+        Shown += (_, _) => BeginInvoke(() =>
         {
-            Program.Send(new { type = "ready", pid = Environment.ProcessId, hwnd = Handle.ToInt64().ToString() });
+            // Explicitly show the fixture GUI before readiness, even after a hidden launch.
+            Win.ShowWindow(Handle, 5);
+            if (!Win.IsWindowVisible(Handle)) throw new InvalidOperationException("FIXTURE_UI_NOT_VISIBLE");
+            originalStyle = Win.GetStyle(Handle); originalExStyle = Win.GetExStyle(Handle);
+            Win.GetWindowRect(Handle, out originalRect);
+            Program.Send(new { type = "ready", pid = Environment.ProcessId, hwnd = Handle.ToInt64().ToString(), visible = true });
             _ = Task.Run(() =>
             {
                 while (Console.ReadLine() is { } line)
@@ -86,8 +93,22 @@ internal sealed class Fixture : Form
                     });
                 }
             });
+        });
+        timer.Tick += (_, _) =>
+        {
+            Win.GetWindowRect(Handle, out var currentRect);
+            Program.Send(new
+            {
+                type = "fixture",
+                clicks,
+                keys,
+                parent = Win.GetParent(Handle).ToInt64().ToString(),
+                visible = Win.IsWindowVisible(Handle),
+                styleRestored = Win.GetStyle(Handle) == originalStyle,
+                exStyleRestored = Win.GetExStyle(Handle) == originalExStyle,
+                boundsRestored = currentRect.Equals(originalRect)
+            });
         };
-        timer.Tick += (_, _) => Program.Send(new { type = "fixture", clicks, keys, parent = Win.GetParent(Handle).ToInt64().ToString(), visible = Win.IsWindowVisible(Handle) });
         timer.Start();
         FormClosed += (_, _) => timer.Dispose();
     }
@@ -100,6 +121,7 @@ internal static class Win
     [StructLayout(LayoutKind.Sequential)]
     internal struct Rect { internal int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] internal static extern nint GetParent(nint hwnd);
+    [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool ShowWindow(nint hwnd, int command);
     [DllImport("user32.dll", SetLastError = true)] internal static extern nint SetParent(nint hwnd, nint parent);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindow(nint hwnd);
     [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsWindowVisible(nint hwnd);
@@ -114,6 +136,9 @@ internal static class Win
     [DllImport("gdi32.dll")][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool DeleteObject(nint obj);
     [DllImport("user32.dll")] internal static extern int SetWindowRgn(nint hwnd, nint region, [MarshalAs(UnmanagedType.Bool)] bool redraw);
     [DllImport("user32.dll")] internal static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll", EntryPoint = "SetPropW", CharSet = CharSet.Unicode, SetLastError = true)][return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetProp(nint hwnd, string name, nint value);
+    [DllImport("user32.dll", EntryPoint = "GetPropW", CharSet = CharSet.Unicode)] internal static extern nint GetProp(nint hwnd, string name);
+    [DllImport("user32.dll", EntryPoint = "RemovePropW", CharSet = CharSet.Unicode)] internal static extern nint RemoveProp(nint hwnd, string name);
     internal static int WindowPid(nint hwnd) { GetWindowThreadProcessId(hwnd, out int pid); return pid; }
     internal static long GetStyle(nint hwnd) => GetWindowLong(hwnd, -16).ToInt64();
     internal static long GetExStyle(nint hwnd) => GetWindowLong(hwnd, -20).ToInt64();

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -10,7 +9,13 @@ internal sealed class OwnedHostFixture : Form
 {
     private readonly InputViewport viewport = new() { BackColor = Color.FromArgb(17, 35, 45) };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 200 };
-    private UiBinding? ui;
+    private readonly ForeignUi foreign = new();
+    private ForeignUi.Binding? ui;
+    private Task<object>? adoption, detachment;
+    private Task layout = Task.CompletedTask;
+    private bool adopting, detaching, closing, allowClose, restoreFailed;
+    private long layoutRequested, layoutApplied;
+    private string? layoutError;
     private bool connected = true;
     private int clicks, keys, wheel;
     private Point lastMouse;
@@ -28,12 +33,18 @@ internal sealed class OwnedHostFixture : Form
         viewport.MouseMove += (_, e) => { if (dragging) { pan.Offset(e.X - lastMouse.X, e.Y - lastMouse.Y); lastMouse = e.Location; viewport.Invalidate(); } };
         viewport.MouseWheel += (_, e) => { wheel += e.Delta / 120; viewport.Invalidate(); };
         viewport.KeyDown += (_, _) => { keys++; viewport.Invalidate(); };
-        Resize += (_, _) => FitUi();
-        FormClosing += (_, e) => { try { DetachUi(); } catch { e.Cancel = true; } };
-        Shown += (_, _) => { Program.Send(new { type = "ready", pid = Environment.ProcessId, hwnd = Handle.ToInt64().ToString(), gameHwnd = viewport.Handle.ToInt64().ToString(), mode = "game-owned-host-fixture" }); _ = Task.Run(ReadRequests); };
+        Resize += (_, _) => { if (!adopting && !detaching) _ = ObserveLayout(); };
+        FormClosing += (_, e) => { if (allowClose) return; e.Cancel = true; _ = CloseNormally(); };
+        Shown += (_, _) => BeginInvoke(() =>
+        {
+            Win.ShowWindow(Handle, 5);
+            if (!Win.IsWindowVisible(Handle)) throw new InvalidOperationException("FIXTURE_HOST_NOT_VISIBLE");
+            Program.Send(new { type = "ready", pid = Environment.ProcessId, hwnd = Handle.ToInt64().ToString(), gameHwnd = viewport.Handle.ToInt64().ToString(), visible = true, mode = "game-owned-host-fixture" });
+            _ = Task.Run(ReadRequests);
+        });
         timer.Tick += (_, _) =>
         {
-            if (ui != null && !UiAlive()) { DetachUi(); Text = "CommandDeck fixture — game survived Deck exit"; }
+            if (ui != null && !ForeignUi.Alive(ui) && !adopting && !detaching && !restoreFailed) _ = RestoreAfterDisconnect("Deck exit");
             Program.Send(new { type = "fixture", state = Status() });
         };
         timer.Start();
@@ -63,27 +74,39 @@ internal sealed class OwnedHostFixture : Form
             }
         }
         catch (IOException) { }
-        finally { try { BeginInvoke(() => { connected = false; DetachUi(); Text = "CommandDeck fixture — game survived bridge disconnect"; }); } catch (InvalidOperationException) { } }
+        finally { try { BeginInvoke(() => { connected = false; _ = RestoreAfterDisconnect("bridge disconnect"); }); } catch (InvalidOperationException) { } }
     }
     private static string? ReadLine()
     {
         var text = new StringBuilder();
         while (true) { int value = Console.Read(); if (value < 0) return null; if (value == '\n') return text.ToString(); if (text.Length >= 32768) throw new IOException("FRAME_LIMIT"); if (value != '\r') text.Append((char)value); }
     }
-    private void Request(JsonObject message)
+    private async void Request(JsonObject message)
     {
-        string id = message["id"]?.GetValue<string>() ?? "";
+        string id = message["id"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";
         try
         {
             if (message["method"]?.GetValue<string>() == "close")
             {
-                DetachUi(); _ = CloseAfterReply(id); return;
+                if (closing) throw new InvalidOperationException("HOST_CLOSE_PENDING");
+                closing = true;
+                try
+                {
+                    await DetachUi();
+                    if (await Program.FlushReply(new { id, ok = true, result = new { closed = true } }))
+                    {
+                        allowClose = true; Close();
+                    }
+                    else closing = false;
+                }
+                catch { closing = false; throw; }
+                return;
             }
             object result = message["method"]?.GetValue<string>() switch
             {
-                "adopt" => AdoptUi(message),
-                "rect" => SetViewport(message),
-                "detach" => DetachUi(),
+                "adopt" => await AdoptUi(message),
+                "rect" => await SetViewport(message),
+                "detach" => await DetachUi(),
                 "status" => Status(),
                 "exercise-input" => ExerciseFixtureInput(),
                 "exercise-backpressure" => ExerciseFixtureBackpressure(),
@@ -94,73 +117,157 @@ internal sealed class OwnedHostFixture : Form
         }
         catch (Exception error) { Program.Send(new { id, ok = false, code = error is InvalidOperationException ? error.Message : "FIXTURE_OPERATION_FAILED" }); }
     }
-    private async Task CloseAfterReply(string id)
+    private async Task CloseNormally()
     {
-        if (await Program.FlushReply(new { id, ok = true, result = new { closed = true } }))
+        if (closing) return;
+        closing = true;
+        try { await DetachUi(); allowClose = true; Close(); }
+        catch { closing = false; Text = "CommandDeck fixture — UI restoration unproven, host retained"; }
+    }
+    private async Task RestoreAfterDisconnect(string reason)
+    {
+        try { await DetachUi(); Text = "CommandDeck fixture — game survived " + reason; }
+        catch { restoreFailed = true; Text = "CommandDeck fixture — UI restoration unproven, host retained"; }
+    }
+    private Task<object> AdoptUi(JsonObject message)
+    {
+        if (ui != null || adopting || detaching || closing || !connected) throw new InvalidOperationException("UI_ADOPTION_BUSY");
+        adopting = true;
+        return adoption = AdoptCore(message);
+    }
+    private async Task<object> AdoptCore(JsonObject message)
+    {
+        try
         {
-            try { BeginInvoke(Close); } catch (InvalidOperationException) { }
+            nint hwnd = (nint)long.Parse(message["hwnd"]!.GetValue<string>());
+            int pid = message["pid"]!.GetValue<int>();
+            ui = await foreign.Capture(hwnd, pid);
+            if (!connected || closing || detaching) throw new InvalidOperationException("UI_ADOPTION_INTERRUPTED");
+            await foreign.Adopt(ui, Handle);
+            if (!connected || closing || detaching) throw new InvalidOperationException("UI_ADOPTION_INTERRUPTED");
+            viewport.Dock = DockStyle.None;
+            await QueueLayout();
+            if (!connected || closing || detaching) throw new InvalidOperationException("UI_ADOPTION_INTERRUPTED");
+            return Status();
+        }
+        catch
+        {
+            if (ui != null)
+            {
+                try { await foreign.Restore(ui); ClearUi(); }
+                catch { layoutError = "UI_RESTORE_UNPROVEN"; throw new InvalidOperationException(layoutError); }
+            }
+            throw;
+        }
+        finally { adopting = false; }
+    }
+    private async Task ObserveLayout()
+    {
+        try { await QueueLayout(); }
+        catch { /* The failed layout stays visible in status; no automatic replay. */ }
+    }
+    private Task QueueLayout()
+    {
+        if (ui == null || detaching) return Task.CompletedTask;
+        if (layoutError != null) return Task.FromException(new InvalidOperationException(layoutError));
+        layoutRequested++;
+        // Coalesce resize bursts into the latest desired layout, while retaining the in-flight call.
+        if (!layout.IsCompleted) return layout;
+        return layout = ApplyLayouts();
+    }
+    private async Task ApplyLayouts()
+    {
+        try
+        {
+            while (ui != null && !detaching && layoutApplied < layoutRequested)
+            {
+                var binding = ui;
+                long revision = layoutRequested;
+                var size = ClientSize;
+                var hole = Rectangle.Intersect(new Rectangle(Point.Empty, size), requestedViewport);
+                bool visible = viewport.Visible;
+                await foreign.Layout(binding, Handle, size, hole, visible);
+                if (!ReferenceEquals(ui, binding)) return;
+                layoutApplied = revision;
+            }
+        }
+        catch (Exception error)
+        {
+            layoutError = error is InvalidOperationException ? error.Message : "UI_LAYOUT_FAILED";
+            throw;
         }
     }
-    private object AdoptUi(JsonObject message)
-    {
-        if (ui != null) throw new InvalidOperationException("UI_ALREADY_ADOPTED");
-        nint hwnd = (nint)long.Parse(message["hwnd"]!.GetValue<string>()); int pid = message["pid"]!.GetValue<int>();
-        using var process = Process.GetProcessById(pid);
-        if (!Win.IsWindow(hwnd) || Win.WindowPid(hwnd) != pid || process.SessionId != Process.GetCurrentProcess().SessionId || Win.GetParent(hwnd) != 0) throw new InvalidOperationException("INVALID_UI_WINDOW");
-        Win.GetWindowRect(hwnd, out var rect);
-        ui = new UiBinding(hwnd, pid, process.StartTime.ToUniversalTime().Ticks, Win.GetStyle(hwnd), Win.GetExStyle(hwnd), rect);
-        Win.SetStyle(hwnd, (ui.Style & ~Win.Popup & ~Win.Caption & ~Win.ThickFrame) | Win.Child | Win.Visible);
-        _ = Win.SetParent(hwnd, Handle);
-        if (Win.GetParent(hwnd) != Handle || (Win.GetStyle(hwnd) & Win.Child) == 0 || (Win.GetStyle(hwnd) & Win.Popup) != 0) { DetachUi(); throw new InvalidOperationException("UI_ADOPTION_NOT_PROVEN"); }
-        viewport.Dock = DockStyle.None; FitUi(); Activate();
-        return Status();
-    }
-    private bool UiAlive()
-    {
-        try { using var process = Process.GetProcessById(ui!.Pid); return Win.IsWindow(ui.Hwnd) && Win.WindowPid(ui.Hwnd) == ui.Pid && process.StartTime.ToUniversalTime().Ticks == ui.Started; }
-        catch { return false; }
-    }
-    private void FitUi()
-    {
-        if (ui == null || !UiAlive()) return;
-        Win.SetWindowPos(ui.Hwnd, 0, 0, 0, ClientSize.Width, ClientSize.Height, Win.NoZOrder | Win.NoActivate | Win.FrameChanged | Win.Show);
-        ApplyHole();
-    }
-    private object SetViewport(JsonObject message)
+    private async Task<object> SetViewport(JsonObject message)
     {
         double x = message["x"]!.GetValue<double>(), y = message["y"]!.GetValue<double>(), w = message["width"]!.GetValue<double>(), h = message["height"]!.GetValue<double>();
-        if (new[] { x, y, w, h }.Any(v => !double.IsFinite(v)) || x < 0 || y < 0 || w < 1 || h < 1 || w > 8192 || h > 8192) throw new InvalidOperationException("INVALID_VIEWPORT_RECT");
+        if (new[] { x, y, w, h }.Any(v => !double.IsFinite(v)) || x < 0 || y < 0 || x > 8192 || y > 8192 || w < 1 || h < 1 || w > 8192 || h > 8192) throw new InvalidOperationException("INVALID_VIEWPORT_RECT");
+        if (adopting || detaching || closing) throw new InvalidOperationException("UI_TRANSITION_PENDING");
         if (ui == null) return Status();
         double scale = Win.GetDpiForWindow(Handle) / 96.0;
         requestedViewport = Rectangle.Intersect(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), new Rectangle((int)Math.Round(x * scale), (int)Math.Round(y * scale), (int)Math.Round(w * scale), (int)Math.Round(h * scale)));
         viewport.Visible = message["visible"]?.GetValue<bool>() == true && requestedViewport.Width > 0 && requestedViewport.Height > 0;
-        viewport.Bounds = requestedViewport; ApplyHole(); return Status();
+        viewport.Bounds = requestedViewport;
+        await QueueLayout();
+        return Status();
     }
-    private void ApplyHole()
+    private Task<object> DetachUi()
     {
-        if (ui == null || !UiAlive()) return;
-        nint outer = Win.CreateRectRgn(0, 0, ClientSize.Width, ClientSize.Height);
-        if (viewport.Visible && requestedViewport.Width > 0 && requestedViewport.Height > 0)
-        {
-            nint hole = Win.CreateRectRgn(requestedViewport.Left, requestedViewport.Top, requestedViewport.Right, requestedViewport.Bottom);
-            int combined = Win.CombineRgn(outer, outer, hole, 4); Win.DeleteObject(hole);
-            if (combined == 0) { Win.DeleteObject(outer); throw new InvalidOperationException("VIEWPORT_REGION_FAILED"); }
-        }
-        if (Win.SetWindowRgn(ui.Hwnd, outer, true) == 0) { Win.DeleteObject(outer); throw new InvalidOperationException("UI_REGION_FAILED"); }
+        if (detaching) return detachment!;
+        detaching = true;
+        return detachment = DetachCore();
     }
-    private object DetachUi()
+    private async Task<object> DetachCore()
     {
-        var saved = ui;
-        if (saved != null && UiAlive())
+        try
         {
-            Win.SetWindowRgn(saved.Hwnd, 0, true); _ = Win.SetParent(saved.Hwnd, 0);
-            Win.SetStyle(saved.Hwnd, saved.Style); Win.SetExStyle(saved.Hwnd, saved.ExStyle);
-            if (Win.GetParent(saved.Hwnd) != 0) throw new InvalidOperationException("UI_DETACH_NOT_PROVEN");
-            Win.SetWindowPos(saved.Hwnd, 0, saved.Rect.Left, saved.Rect.Top, saved.Rect.Right - saved.Rect.Left, saved.Rect.Bottom - saved.Rect.Top, Win.NoActivate | Win.NoZOrder | Win.FrameChanged | Win.Show);
+            if (adoption != null && !adoption.IsCompleted) { try { await adoption; } catch { } }
+            // Drain the old layout before restoring. Late geometry must not touch the detached UI.
+            try { await layout; } catch { }
+            if (ui != null) await foreign.Restore(ui);
+            ClearUi();
+            return Status();
         }
-        ui = null; viewport.Visible = true; viewport.Dock = DockStyle.Fill; viewport.Invalidate(); return Status();
+        finally { detaching = false; }
     }
-    private object Status() => new { attached = ui != null && UiAlive(), nativeParentMatches = ui != null && Win.GetParent(ui.Hwnd) == Handle, uiChildStyle = ui != null && (Win.GetStyle(ui.Hwnd) & Win.Child) != 0 && (Win.GetStyle(ui.Hwnd) & Win.Popup) == 0, gameParentMatches = Win.GetParent(viewport.Handle) == Handle, gameOwnerPid = Win.WindowPid(viewport.Handle), hostOwnerPid = Win.WindowPid(Handle), gameAlive = !IsDisposed, connected, viewportFull = viewport.Dock == DockStyle.Fill, clicks, keys, wheel, gameCalls = 0, mode = "game-owned-host-fixture", kind = "fixture", targetPid = Environment.ProcessId };
+    private void ClearUi()
+    {
+        ui = null;
+        layoutRequested = layoutApplied = 0;
+        layoutError = null;
+        restoreFailed = false;
+        viewport.Visible = true; viewport.Dock = DockStyle.Fill; viewport.Invalidate();
+    }
+    private object Status()
+    {
+        bool alive = ui != null && ForeignUi.Alive(ui);
+        return new
+        {
+            attached = alive && Win.GetParent(ui!.Hwnd) == Handle,
+            nativeParentMatches = alive && Win.GetParent(ui!.Hwnd) == Handle,
+            uiChildStyle = alive && (Win.GetStyle(ui!.Hwnd) & Win.Child) != 0 && (Win.GetStyle(ui.Hwnd) & Win.Popup) == 0,
+            uiVisible = alive && Win.IsWindowVisible(ui!.Hwnd),
+            hostVisible = Win.IsWindowVisible(Handle),
+            gameParentMatches = Win.GetParent(viewport.Handle) == Handle,
+            gameOwnerPid = Win.WindowPid(viewport.Handle),
+            hostOwnerPid = Win.WindowPid(Handle),
+            gameAlive = !IsDisposed,
+            connected,
+            viewportFull = viewport.Dock == DockStyle.Fill,
+            uiOperationPending = adopting || detaching || !layout.IsCompleted,
+            layoutPending = ui != null && layoutApplied < layoutRequested,
+            layoutRequested,
+            layoutApplied,
+            layoutError,
+            restoreFailed,
+            clicks,
+            keys,
+            wheel,
+            gameCalls = 0,
+            mode = "game-owned-host-fixture",
+            kind = "fixture",
+            targetPid = Environment.ProcessId
+        };
+    }
     private object ExerciseFixtureInput()
     {
         // Test-only messages to this simulator's own control. Never target DSP or a foreign HWND.
@@ -186,7 +293,6 @@ internal sealed class OwnedHostFixture : Form
         ClientSize = new Size(ClientSize.Width - 1, ClientSize.Height - 1);
         return new { fixtureOnly = true };
     }
-    private sealed record UiBinding(nint Hwnd, int Pid, long Started, long Style, long ExStyle, Win.Rect Rect);
     private sealed class InputViewport : Panel
     {
         internal InputViewport() { SetStyle(ControlStyles.Selectable | ControlStyles.OptimizedDoubleBuffer, true); TabStop = true; }

@@ -9,9 +9,11 @@ export class OwnedFixtureHost extends EventEmitter {
 		this.ready = Promise.resolve();
 		this.fixture = undefined;
 		this.rect = undefined;
+		this.transitions = 0;
 	}
 	async request(method, args = {}) {
 		if (method === "rect") this.rect = args;
+		if (method === "rect" && this.transitions > 0) return { deferred: true };
 		const inactive = {
 			attached: false,
 			nativeParentMatches: false,
@@ -45,12 +47,29 @@ export class OwnedFixtureHost extends EventEmitter {
 		if (method === "attach") {
 			if (args.targetId !== "owned-fixture")
 				throw new Error("FIXTURE_TARGET_ONLY");
-			await this.fixture.request("adopt", {
-				hwnd: this.window.getNativeWindowHandle().readBigUInt64LE().toString(),
-				pid: process.pid,
-			});
-			if (this.rect) await this.fixture.request("rect", this.rect);
+			this.transitions++;
+			try {
+				await this.fixture.request("adopt", {
+					hwnd: this.window
+						.getNativeWindowHandle()
+						.readBigUInt64LE()
+						.toString(),
+					pid: process.pid,
+				});
+			} finally {
+				this.transitions--;
+			}
+			if (this.rect && this.transitions === 0)
+				await this.fixture.request("rect", this.rect);
 			return this.fixture.request("status");
+		}
+		if (["detach", "close"].includes(method)) {
+			this.transitions++;
+			try {
+				return await this.fixture.request(method, args);
+			} finally {
+				this.transitions--;
+			}
 		}
 		return this.fixture.request(method, args);
 	}

@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
-import { NativeClient } from "../apps/desktop/native-client.mjs";
+import { fileURLToPath } from "node:url";
+import {
+	NativeClient,
+	nativeExecutable,
+} from "../apps/desktop/native-client.mjs";
+
+const executable = process.argv.includes("--isolated-build")
+	? fileURLToPath(
+			new URL(
+				"../.local/native-hang/CommandDeck.NativeHost.exe",
+				import.meta.url,
+			),
+		)
+	: nativeExecutable;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, timeout = 5000) {
@@ -12,10 +25,11 @@ async function until(check, timeout = 5000) {
 	}
 }
 async function pair() {
-	const ui = new NativeClient(["--fixture"]);
-	const game = new NativeClient(["--owned-host-fixture"]);
+	const ui = new NativeClient(["--fixture"], executable);
+	const game = new NativeClient(["--owned-host-fixture"], executable);
 	const metadata = await ui.ready;
-	await game.ready;
+	assert.equal(metadata.visible, true);
+	assert.equal((await game.ready).visible, true);
 	await game.request("adopt", metadata);
 	return { ui, game };
 }
@@ -47,6 +61,7 @@ try {
 	assert.equal(state.gameOwnerPid, current.game.child.pid);
 	assert.equal(state.hostOwnerPid, current.game.child.pid);
 	proof.ownership = "passed";
+	proof.visibleFixtureReadiness = "passed";
 	await current.game.request("rect", {
 		x: 340,
 		y: 85,
@@ -81,6 +96,12 @@ try {
 	proof.resizeAndBadRect = "passed";
 	await current.game.request("detach");
 	await until(() => current.ui.latest?.parent === "0");
+	await until(
+		() =>
+			current.ui.latest?.styleRestored &&
+			current.ui.latest?.exStyleRestored &&
+			current.ui.latest?.boundsRestored,
+	);
 	proof.normalDetach = "passed";
 	await current.game.request("adopt", await current.ui.ready);
 	const stoppedUi = once(current.ui.child, "exit");
