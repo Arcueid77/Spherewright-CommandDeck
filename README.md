@@ -148,6 +148,10 @@ CI builds both shared cores for .NET Framework 4.7.2 and runs simulators; it can
 
 ## Planned execution boundaries
 
+The M3 prototype currently has an offline `GameIntentLedger` library, exercised only by synthetic tests. It is not imported by the desktop, Pi runtime or read-only MCP adapter. There is no live game-write route or game approval button. The library records a single normal research-enqueue intent before returning a private commit DTO, blocks another unresolved intent, keeps the original key/action across reopening, and never restores short tokens. Internal object-identity approval is not evidence of a real UI confirmation.
+
+Native research plans do not echo the target technology. The library therefore accepts preparations and proof reads only through constructor-fixed trusted ports with immutable exact requests and per-call correlation; it does not accept arbitrary raw plans or terminal proofs from callers. Those ports still need a real MCP implementation and validation. The prototype only verifies normal queue append/readback, conservatively blocks native unknown/recovery/failure for independent audit, and has no automatic unblock API. If research finishes before the fresh queue read, the current narrow proof remains incomplete. Its sixteen tests demonstrate bookkeeping and refusal behavior, not actual dispatch exactly-once, physical-input exclusion or a completed M3 game task.
+
 - Development mode may expose source-editing and build tools for explicitly authorized workspace roots, while respecting each repository's instructions.
 - Game mode exposes controlled Spherewright tools. It does not inherit development shell or file permissions.
 - Switching modes does not authorize a pending game action. Approvals, budgets, commit intents, original action identities and receipts belong to CommandDeck's task ledger, independently of Pi conversation history.
