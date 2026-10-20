@@ -42,8 +42,10 @@ internal static class Program
             }, Json));
             return;
         }
+        Console.WriteLine("{\"type\":\"fixture-startup\",\"phase\":\"main-entered\"}");
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
+        Console.WriteLine("{\"type\":\"fixture-startup\",\"phase\":\"forms-initialized\"}");
         if (args.Contains("--owned-host-fixture")) Application.Run(new OwnedHostFixture());
         else if (args.Contains("--fixture")) Application.Run(new Fixture());
         else

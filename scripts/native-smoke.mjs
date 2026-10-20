@@ -27,11 +27,18 @@ async function until(check, timeout = 5000) {
 async function pair() {
 	const ui = new NativeClient(["--fixture"], executable);
 	const game = new NativeClient(["--owned-host-fixture"], executable);
-	const metadata = await ui.ready;
-	assert.equal(metadata.visible, true);
-	assert.equal((await game.ready).visible, true);
-	await game.request("adopt", metadata);
-	return { ui, game };
+	try {
+		const [metadata, gameMetadata] = await Promise.all([ui.ready, game.ready]);
+		assert.equal(metadata.visible, true);
+		assert.equal(gameMetadata.visible, true);
+		await game.request("adopt", metadata);
+		return { ui, game };
+	} catch (error) {
+		// Construction may fail before the caller receives this pair. Both are our own fixtures.
+		ui.child.kill();
+		game.child.kill();
+		throw error;
+	}
 }
 async function cleanup({ ui, game }) {
 	if (!game.stopped && game.child.stdin.writable) {

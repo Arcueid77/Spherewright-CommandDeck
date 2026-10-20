@@ -12,6 +12,7 @@ export class NativeClient extends EventEmitter {
 		super();
 		this.sequence = 0;
 		this.pending = new Map();
+		this.startupPhases = [];
 		const launch =
 			args.length === 1 && args[0] === "--fixture" ? spawnOwnedUi : spawn;
 		this.child = launch(executable, args, {
@@ -29,14 +30,16 @@ export class NativeClient extends EventEmitter {
 			const onReady = (metadata) => finish(undefined, metadata);
 			const onError = () => finish(new Error("NATIVE_HOST_START_FAILED"));
 			const onExit = () => finish(new Error("NATIVE_HOST_EXITED"));
-			const timer = setTimeout(
-				() => finish(new Error("NATIVE_HOST_READY_TIMEOUT")),
-				10000,
-			);
+			const timer = setTimeout(() => {
+				finish(new Error(`NATIVE_HOST_READY_TIMEOUT_${this.startupPhases.join("_") || "NO_PHASE"}`));
+				// NativeClient launches only our fixture executable; failed startup must not orphan it.
+				this.child.kill();
+			}, 30000);
 			this.once("ready", onReady);
 			this.child.once("error", onError);
 			this.child.once("exit", onExit);
 		});
+		this.ready.catch(() => {}); // The paired fixture may still be awaiting its own readiness.
 		this.child.on("error", () => {
 			this.stopped = true;
 		});
@@ -45,6 +48,8 @@ export class NativeClient extends EventEmitter {
 			if (line.length > 32768) return;
 			try {
 				const message = JSON.parse(line);
+				if (message.type === "fixture-startup" && /^[a-z-]+$/.test(message.phase ?? ""))
+					this.startupPhases = [...this.startupPhases.slice(-3), message.phase];
 				if (message.type === "ready") this.emit("ready", message);
 				if (message.type === "fixture-diagnostic")
 					this.emit("diagnostic", message);

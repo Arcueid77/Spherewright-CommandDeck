@@ -29,6 +29,8 @@ Foreign-window capture, adoption, geometry and restoration run through one seria
 
 Earlier hidden launches could announce readiness before the native window was visible. Both fixture windows now explicitly show themselves and read back visibility before readiness. The Electron smoke checks host and UI-child visibility after adoption. These are native visibility checks, not human visual or input acceptance.
 
+An `e7d0303` CI run timed out waiting for fixture startup at ten seconds, before the lifecycle tests began; its cause was not established by that log. Fixture startup now reports bounded phase labels and permits up to thirty seconds for a cold launch. Readiness still requires the visible-window reply. The test awaits both fixture starts together and cleans up both owned children if pair construction fails; it does not retry native operations or convert a startup timeout into a pass.
+
 Synthetic telemetry uses a bounded output queue written off the native UI thread. Backpressure may drop fixture telemetry, and does not freeze that thread; close acknowledgement is flushed before normal exit. This lossy simulator transport is not a game-action receipt ledger. Host initialization and requests have bounded waits; a timeout does not automatically spawn a replacement or replay an operation.
 
 Normal simulator-host exit detaches the UI first. Test cleanup terminates only PIDs created by the test harness; no DSP process is launched, inspected for gameplay state, loaded, saved or terminated.
