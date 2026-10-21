@@ -6,19 +6,21 @@ import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
+import { nativeResearchStateHash } from "../apps/desktop/research-preview.mjs";
 
 async function fixture(t) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-ledger-")), file = join(directory, "game-ledger.sqlite"), authority = {}, stores = []; let now = 100000;
 	let prepareReply, proofReply;
-	const open = () => { const ledger = new GameIntentLedger(file, { approvalAuthority: authority, prepareResearch: async (request) => prepareReply ? prepareReply(request) : { request, plan: plan() }, readResearchProof: async (request) => proofReply ? proofReply(request) : { request, terminal: completion({ scope }, ledger.intent(request.intentId)), freshProgression: progression({ scope, context }), context: resultContext({ scope, context }) }, now: () => now }); stores.push(ledger); return ledger; };
+	const open = () => { const ledger = new GameIntentLedger(file, { approvalAuthority: authority, prepareResearch: async (request) => prepareReply ? prepareReply(request) : { request, plan: plan(), researchBudget: budget() }, readResearchProof: async (request) => proofReply ? proofReply(request) : { request, terminal: completion({ scope }, ledger.intent(request.intentId)), freshProgression: progression({ scope, context }), context: resultContext({ scope, context }) }, now: () => now }); stores.push(ledger); return ledger; };
 	const scope = { bridgeInstanceId: "bridge-fixture", sessionId: "session-fixture", planetId: 1, techId: 100, capturedAtGameTick: 1200, selectionStateHash: "sha256:" + "a".repeat(64) };
-	const context = () => ({ ...scope, owned: true, accessRestricted: false, writeHealth: "healthy", observedAt: now });
+	const budget = () => [{ itemId: 1202, name: "磁线圈", count: 10, direction: "research-consumption" }];
+	const context = () => ({ ...scope, owned: true, accessRestricted: false, writeHealth: "healthy", observedAt: now, researchBudget: budget() });
 	const token = "synthetic-private-plan-" + randomUUID();
-	const plan = () => ({ prepared: true, actionKind: "select-research", planToken: token, expiresAtUtc: new Date(now + 30000).toISOString(), expectedStateHash: scope.selectionStateHash, stateHashVersion: 1, commitAllowedNow: true, itemBudget: [], commitBlockers: [] });
+	const plan = () => ({ prepared: true, actionKind: "select-research", planToken: token, expiresAtUtc: new Date(now + 30000).toISOString(), expectedStateHash: nativeResearchStateHash({ kind: "select-research", ...scope }), stateHashVersion: 1, researchQueueReadbackVersion: 1, commitAllowedNow: true, itemBudget: budget(), commitBlockers: [] });
 	const ledger = open();
 	t.after(async () => { stores.forEach((store) => store.close()); const absolute = await realpath(directory); assert.equal(dirname(absolute).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(absolute).startsWith("commanddeck-game-ledger-")); await rm(absolute, { recursive: true, force: true }); });
 	const approve = async (store = ledger, extra = {}) => { const task = store.createResearchTask({ ...scope, ...extra }), review = await store.prepare(task.id); store.approve(authority, task.id, review.previewHash); return { task, review }; };
-	return { directory, file, authority, scope, context, plan, token, ledger, open, approve, setPrepareReply: (callback) => { prepareReply = callback; }, setProofReply: (callback) => { proofReply = callback; }, advance: (ms) => { now += ms; } };
+	return { directory, file, authority, scope, context, plan, budget, token, ledger, open, approve, setPrepareReply: (callback) => { prepareReply = callback; }, setProofReply: (callback) => { proofReply = callback; }, advance: (ms) => { now += ms; } };
 }
 function acceptance(intent, extra = {}) { return { accepted: true, actionKind: "select-research", actionId: "action-fixture", idempotencyKey: intent.idempotencyKey, ...extra }; }
 function completion(f, intent, extra = {}) {
@@ -36,6 +38,7 @@ test("research approval binds an immutable one-write scope and cannot be forged 
 	assert.throws(() => f.ledger.approve(f.authority, task.id, "0".repeat(64)), /FRESH_RESEARCH_PREVIEW_REQUIRED/);
 	f.ledger.approve(f.authority, task.id, review.previewHash); const intent = f.ledger.beginIntent(task.id, review.previewHash, f.context());
 	assert.equal(intent.commit.planToken, f.token); assert.equal(f.ledger.unresolved().length, 1);
+	assert.match(intent.idempotencyKey, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/); assert.equal(intent.commit.idempotencyKey, intent.idempotencyKey);
 	assert.throws(() => f.ledger.beginIntent(task.id, review.previewHash, f.context()), /UNRESOLVED_GAME_INTENT/);
 });
 test("a same-hash plan for research B cannot be attached to research A by a caller-supplied response", async (t) => {
@@ -44,6 +47,55 @@ test("a same-hash plan for research B cannot be attached to research A by a call
 	await assert.rejects(f.ledger.prepare(task.id), /RESEARCH_PREPARE_CORRELATION_MISMATCH/);
 	assert.equal(actual.arguments.techId, 100); assert.equal(actual.arguments.sessionId, f.scope.sessionId); assert.equal(actual.arguments.planetId, 1); assert.equal(actual.arguments.expectedSelectionStateHash, f.scope.selectionStateHash);
 	assert.equal(f.ledger.preview, undefined); assert.equal(f.ledger.task(task.id).approvalId, null); assert.equal(f.ledger.unresolved().length, 0);
+});
+test("native action hash must bind the exact approved research scope rather than equal the selection hash", async (t) => {
+	const f = await fixture(t);
+	for (const change of [{ sessionId: "different-session" }, { planetId: 2 }, { techId: 101 }, { selectionStateHash: "sha256:" + "b".repeat(64) }]) {
+		const task = f.ledger.createResearchTask(f.scope);
+		f.setPrepareReply((request) => ({ request, researchBudget: f.budget(), plan: { ...f.plan(), expectedStateHash: nativeResearchStateHash({ kind: "select-research", ...f.scope, ...change }) } }));
+		await assert.rejects(f.ledger.prepare(task.id), /RESEARCH_PREVIEW_REJECTED/);
+	}
+	const task = f.ledger.createResearchTask(f.scope);
+	f.setPrepareReply((request) => ({ request, researchBudget: f.budget(), plan: { ...f.plan(), expectedStateHash: f.scope.selectionStateHash } }));
+	await assert.rejects(f.ledger.prepare(task.id), /RESEARCH_PREVIEW_REJECTED/); assert.equal(f.ledger.unresolved().length, 0);
+	for (const input of [{ planetId: 2147483648 }, { techId: 2147483648 }, { techId: "100" }]) assert.throws(() => f.ledger.createResearchTask({ ...f.scope, ...input }), /INVALID_RESEARCH_TASK_SCOPE/);
+});
+test("previews require explicit native readback support and independently matching fresh bounded budgets", async (t) => {
+	const f = await fixture(t);
+	for (const version of [undefined, 0, 2, "1"]) {
+		const task = f.ledger.createResearchTask(f.scope);
+		f.setPrepareReply((request) => ({ request, researchBudget: f.budget(), plan: { ...f.plan(), researchQueueReadbackVersion: version } }));
+		await assert.rejects(f.ledger.prepare(task.id), /RESEARCH_READBACK_NOT_SUPPORTED/);
+	}
+	for (const budget of [undefined, [], [{ ...f.budget()[0], count: 11 }], [{ ...f.budget()[0], itemId: 1203 }], [{ ...f.budget()[0], direction: "consume" }], [...f.budget(), ...f.budget()]]) {
+		const task = f.ledger.createResearchTask(f.scope);
+		f.setPrepareReply((request) => ({ request, researchBudget: budget, plan: f.plan() }));
+		await assert.rejects(f.ledger.prepare(task.id), /RESEARCH_BUDGET_INVALID|RESEARCH_BUDGET_MISMATCH/);
+	}
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+test("native plan and budget mutations cannot replace the immutable data bound to user approval", async (t) => {
+	const f = await fixture(t), task = f.ledger.createResearchTask(f.scope), native = f.plan(), observed = f.budget();
+	f.setPrepareReply((request) => ({ request, plan: native, researchBudget: observed }));
+	const review = await f.ledger.prepare(task.id); f.ledger.approve(f.authority, task.id, review.previewHash);
+	native.planToken = "different-native-plan-token"; native.itemBudget[0].count = 999; observed[0].name = "changed"; observed[0].count = 999;
+	assert.ok(Object.isFrozen(review.researchBudget)); assert.ok(Object.isFrozen(review.researchBudget[0]));
+	assert.throws(() => { review.researchBudget[0].count = 999; }, TypeError);
+	assert.deepEqual(review.researchBudget, f.budget());
+	const intent = f.ledger.beginIntent(task.id, review.previewHash, f.context()); assert.equal(intent.commit.planToken, f.token);
+});
+test("repreparing a changed requirement invalidates the old preview hash and final fresh budget must still match", async (t) => {
+	const f = await fixture(t), task = f.ledger.createResearchTask(f.scope), first = await f.ledger.prepare(task.id); f.ledger.approve(f.authority, task.id, first.previewHash);
+	const changed = [{ ...f.budget()[0], count: 11 }];
+	f.setPrepareReply((request) => ({ request, plan: { ...f.plan(), itemBudget: changed }, researchBudget: changed }));
+	const second = await f.ledger.prepare(task.id); assert.notEqual(first.previewHash, second.previewHash);
+	assert.throws(() => f.ledger.approve(f.authority, task.id, first.previewHash), /FRESH_RESEARCH_PREVIEW_REQUIRED/);
+	f.ledger.approve(f.authority, task.id, second.previewHash);
+	for (const value of [undefined, [], f.budget(), [...changed, ...changed], [{ ...changed[0], count: Number.MAX_SAFE_INTEGER + 1 }]]) {
+		assert.throws(() => f.ledger.beginIntent(task.id, second.previewHash, { ...f.context(), researchBudget: value }), /RESEARCH_BUDGET_INVALID|RESEARCH_BUDGET_MISMATCH/);
+		assert.equal(f.ledger.unresolved().length, 0);
+	}
+	assert.equal(f.ledger.beginIntent(task.id, second.previewHash, { ...f.context(), researchBudget: changed }).commit.planToken, f.token);
 });
 test("cancel or expiry while a trusted preparation is in flight cannot produce an approved preview", async (t) => {
 	for (const mode of ["cancel", "expiry"]) {
@@ -140,6 +192,15 @@ test("a reopened journal can only poll and reconcile its persisted original acti
 	const reopened = f.open(); assert.equal((await reopened.reconcile(intent.intentId)).state, "completed");
 	assert.deepEqual(reopened.reconciliationRequest(intent.intentId, f.context()), { actionId: "action-fixture" });
 	const once = reopened.intent(intent.intentId); assert.deepEqual(await reopened.reconcile(intent.intentId), once);
+});
+test("legacy pending keys remain unchanged and reconcile only their original action after reopening", async (t) => {
+	const f = await fixture(t), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context()), legacyKey = "commanddeck-" + randomUUID();
+	// Represent a pre-fix persisted record without changing its historical acceptance or action identity.
+	f.ledger.db.prepare("UPDATE game_intents SET idempotency_key=? WHERE id=?").run(legacyKey, intent.intentId);
+	f.ledger.accept(intent.intentId, acceptance({ ...intent, idempotencyKey: legacyKey })); f.ledger.close();
+	const reopened = f.open(); assert.equal(reopened.unresolved()[0].idempotencyKey, legacyKey);
+	f.setProofReply((request) => { assert.equal(request.idempotencyKey, legacyKey); assert.equal(request.actionId, "action-fixture"); return { request, terminal: completion(f, reopened.intent(request.intentId)), freshProgression: progression(f), context: resultContext(f) }; });
+	const done = await reopened.reconcile(intent.intentId); assert.equal(done.state, "completed"); assert.equal(done.idempotencyKey, legacyKey);
 });
 test("short tokens and extra native credential fields are absent from persisted task and receipt bytes", async (t) => {
 	const f = await fixture(t), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context());

@@ -39,12 +39,23 @@ test("host prepares but sends no commit until an exact live native approval, the
 	assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
 	const id = preview.currentTaskId, challenge = f.host.confirmation(id, 1);
 	assert.ok(!JSON.stringify({ preview, challenge }).includes("PRIVATE_"));
+	assert.deepEqual(challenge.researchBudget, [{ itemId: 1202, name: "磁线圈", count: 10, direction: "research-consumption" }]); assert.ok(Object.isFrozen(challenge.researchBudget));
 	assert.throws(() => f.host.confirm({}, challenge.nonce, 1), /TRUSTED_USER_APPROVAL_REQUIRED/);
 	f.host.confirm(f.approval, challenge.nonce, 1);
 	assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
 	const done = await f.host.settled(); assert.equal(done.phase, "completed"); assert.equal(done.tasks[0].intent.state, "completed"); assert.equal(f.frozen(), false); assert.equal(f.hasLease(), false);
 	assert.deepEqual(done.tasks[0].intent.terminal.afterQueue, [99, 100]); assert.equal(done.nativeInputExclusion, false);
 	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const restored = reopened.snapshot(); assert.equal(restored.currentTaskId, id); assert.equal(restored.tasks[0].intent.state, "completed"); assert.ok(restored.events.some((event) => event.kind === "stage" && event.text === "completed")); assert.equal(restored.unresolved.length, 0);
+});
+
+test("native support and final fresh requirement changes refuse before a durable intent or commit", async (t) => {
+	for (const mode of ["readback-unsupported", "budget-changed-at-confirm"]) {
+		const f = await fixture(t, { mode }); f.start(); const prepared = await f.host.settled();
+		if (mode === "readback-unsupported") { assert.equal(prepared.phase, "failed"); assert.equal(prepared.error, "RESEARCH_READBACK_NOT_SUPPORTED"); }
+		else { const challenge = f.host.confirmation(prepared.currentTaskId, 1); f.host.confirm(f.approval, challenge.nonce, 1); const rejected = await f.host.settled(); assert.equal(rejected.phase, "failed"); assert.equal(rejected.error, "RESEARCH_BUDGET_MISMATCH"); }
+		assert.equal(f.host.snapshot().unresolved.length, 0); assert.equal(f.host.snapshot().tasks[0].intent, null);
+		assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0); assert.equal(f.frozen(), false);
+	}
 });
 
 test("renderer replacement and wrong-epoch approval cannot authorize a write", async (t) => {

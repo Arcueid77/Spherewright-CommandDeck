@@ -43,14 +43,26 @@ test("actual stdio prepare -> durable intent -> unique commit -> original result
 	const f = await fixture(t), { adapter, ledger, task, observed } = await f.open();
 	assert.ok((await adapter.playbook()).text.includes("never replay"));
 	assert.ok(!JSON.stringify(observed).includes("PRIVATE_"));
-	const preview = await ledger.prepare(task.id); assert.equal(preview.scope.techId, 100); assert.ok(!JSON.stringify(preview).includes("PRIVATE_"));
+	assert.equal(observed.researchBudget, undefined); assert.ok(!JSON.stringify(observed).includes("requiredItemCount"));
+	const beforePrepare = f.client.stats.toolCalls, preview = await ledger.prepare(task.id); assert.equal(preview.scope.techId, 100); assert.ok(!JSON.stringify(preview).includes("PRIVATE_"));
+	assert.equal(f.client.stats.toolCalls - beforePrepare, 7); // Same context/player/progression checks and one prepare; no budget-only read.
+	assert.deepEqual(preview.researchBudget, [{ itemId: 1202, name: "磁线圈", count: 10, direction: "research-consumption" }]);
 	ledger.approve(f.approvalAuthority, task.id, preview.previewHash);
-	const fresh = await adapter.observe(task.scope), intent = ledger.beginIntent(task.id, preview.previewHash, fresh.context);
+	const fresh = await adapter.observe(task.scope, { researchTechId: 100 }), intent = ledger.beginIntent(task.id, preview.previewHash, { ...fresh.context, researchBudget: fresh.researchBudget });
 	const acceptance = await adapter.commit(intent.commit); assert.equal(acceptance.syntheticCommitCount, 1); ledger.accept(intent.intentId, acceptance);
 	const completed = await ledger.reconcile(intent.intentId); assert.equal(completed.state, "completed"); assert.deepEqual(completed.terminal.afterQueue, [99, 100]);
 	const count = f.client.stats.toolCalls; await ledger.reconcile(intent.intentId); assert.equal(f.client.stats.toolCalls, count);
 	assert.throws(() => ledger.beginIntent(task.id, preview.previewHash, fresh.context), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
 	ledger.close(); assert.ok(!(await readFile(join(f.directory, "game.sqlite"))).includes(Buffer.from("PRIVATE_")));
+});
+
+test("old native readback support and nonmatching or malformed native budgets refuse with zero commits", async (t) => {
+	for (const mode of ["readback-unsupported", "budget-missing", "budget-extra", "budget-wrong-id", "budget-wrong-count", "budget-wrong-direction", "budget-duplicate", "budget-unsafe", "budget-unsafe-requirement"]) {
+		const f = await fixture(t, mode), { ledger, task } = await f.open();
+		await assert.rejects(ledger.prepare(task.id), mode === "readback-unsupported" ? /RESEARCH_READBACK_NOT_SUPPORTED/ : /RESEARCH_BUDGET_INVALID|RESEARCH_BUDGET_MISMATCH/);
+		assert.equal(ledger.unresolved().length, 0);
+		assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+	}
 });
 
 test("unowned, disabled, changed world and stale selection refuse before commit", async (t) => {
@@ -62,11 +74,11 @@ test("unowned, disabled, changed world and stale selection refuse before commit"
 });
 
 test("pending action stays pending; wrong queue or native unknown never becomes success", async (t) => {
-	for (const mode of ["pending", "wrong-queue", "native-unknown", "native-unknown-context-failure"]) {
+	for (const mode of ["pending", "wrong-queue", "missing-readback", "native-unknown", "native-unknown-context-failure"]) {
 		const f = await fixture(t, mode), { ledger, task, adapter } = await f.open(), preview = await ledger.prepare(task.id);
 		ledger.approve(f.approvalAuthority, task.id, preview.previewHash);
-		const intent = ledger.beginIntent(task.id, preview.previewHash, (await adapter.observe(task.scope)).context); ledger.accept(intent.intentId, await adapter.commit(intent.commit));
-		await assert.rejects(ledger.reconcile(intent.intentId), mode === "pending" ? /ORIGINAL_ACTION_PENDING/ : mode === "wrong-queue" ? /RESEARCH_TERMINAL_PROOF_INCOMPLETE/ : /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+		const fresh = await adapter.observe(task.scope, { researchTechId: 100 }), intent = ledger.beginIntent(task.id, preview.previewHash, { ...fresh.context, researchBudget: fresh.researchBudget }); ledger.accept(intent.intentId, await adapter.commit(intent.commit));
+		await assert.rejects(ledger.reconcile(intent.intentId), mode === "pending" ? /ORIGINAL_ACTION_PENDING/ : ["wrong-queue", "missing-readback"].includes(mode) ? /RESEARCH_TERMINAL_PROOF_INCOMPLETE/ : /INDEPENDENT_GAME_AUDIT_REQUIRED/);
 		assert.equal(ledger.unresolved().length, 1);
 		if (mode === "pending") { assert.equal(ledger.intent(intent.intentId).state, "accepted"); assert.equal((await ledger.reconcile(intent.intentId)).state, "completed"); }
 		if (mode === "native-unknown-context-failure") await assert.rejects(adapter.context(task.scope), /MCP_TOOL_REJECTED/);

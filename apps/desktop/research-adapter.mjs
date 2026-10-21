@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { opaque, positive, tick, selectionHash } from "./research-contract.mjs";
+import { matchResearchBudget, researchBudgetFromRequirements, researchId } from "./research-preview.mjs";
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const ids = (value) => Array.isArray(value) && value.length <= 64 && value.every(positive);
@@ -32,7 +33,8 @@ export class ResearchAdapter {
 		if (writing && (value.writesConfigured !== true || value.writeHealth !== "healthy" || session.writesAllowed !== true || session.writeHealth !== "healthy" || session.peacefulMode !== "confirmed_peaceful" || !Array.isArray(session.writeBlockers) || session.writeBlockers.length)) throw new Error("HEALTHY_RESEARCH_WRITES_REQUIRED");
 		return context;
 	}
-	async observe(expected, { writing = true, player = false } = {}) {
+	async observe(expected, { writing = true, player = false, researchTechId } = {}) {
+		if (researchTechId !== undefined && !researchId(researchTechId)) throw new Error("INVALID_RESEARCH_TASK_SCOPE");
 		const before = await this.context(expected, writing), args = { sessionId: before.sessionId, planetId: before.planetId };
 		if (player) {
 			const value = result(await this.port.player(args));
@@ -45,15 +47,17 @@ export class ResearchAdapter {
 			return { techId: tech.techId, name: label(tech.name), unlocked: tech.unlocked, isQueued: tech.isQueued, prerequisiteTechIds: [...tech.prerequisiteTechIds] };
 		});
 		if (new Set(technologies.map((tech) => tech.techId)).size !== technologies.length) throw new Error("RESEARCH_TECHNOLOGY_INVALID");
-		return { context: { ...after, selectionStateHash: raw.selectionStateHash }, progression: { sessionId: raw.sessionId, planetId: raw.planetId, capturedAtGameTick: raw.capturedAtGameTick, selectionStateHash: raw.selectionStateHash, observedAt: receivedAt, techQueue: [...raw.techQueue], technologies } };
+		const researchBudget = researchTechId === undefined ? undefined : researchBudgetFromRequirements(raw.technologies.find((tech) => tech.techId === researchTechId)?.itemRequirements);
+		return { context: { ...after, selectionStateHash: raw.selectionStateHash }, progression: { sessionId: raw.sessionId, planetId: raw.planetId, capturedAtGameTick: raw.capturedAtGameTick, selectionStateHash: raw.selectionStateHash, observedAt: receivedAt, techQueue: [...raw.techQueue], technologies }, ...(researchBudget === undefined ? {} : { researchBudget }) };
 	}
 	async prepareResearch(request, scope) {
 		const expected = { sessionId: scope.sessionId, planetId: scope.planetId, techId: scope.techId, expectedSelectionStateHash: scope.selectionStateHash, stateHashVersion: 1, prioritizeQueued: false };
 		if (request.actionKind !== "select-research" || !equal(request.arguments, expected)) throw new Error("RESEARCH_PREPARE_SCOPE_MISMATCH");
-		const fresh = await this.observe(scope, { player: true });
+		const fresh = await this.observe(scope, { player: true, researchTechId: scope.techId });
 		if (fresh.context.selectionStateHash !== scope.selectionStateHash) throw new Error("RESEARCH_SELECTION_CHANGED");
 		const plan = result(await this.port.prepare(request.arguments));
-		return { request, plan };
+		if (plan.researchQueueReadbackVersion !== 1) throw new Error("RESEARCH_READBACK_NOT_SUPPORTED");
+		return { request, plan, researchBudget: matchResearchBudget(plan.itemBudget, fresh.researchBudget) };
 	}
 	async commit(dto) { return result(await this.port.commit(dto)); } // Called once, only after durable beginIntent.
 	async readResearchProof(request) {

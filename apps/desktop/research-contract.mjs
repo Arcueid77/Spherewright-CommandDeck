@@ -22,7 +22,8 @@ export function validResearchArguments(name, args) {
 	if (!fields || !args || Array.isArray(args) || typeof args !== "object" || Object.keys(args).length !== Object.keys(fields).length || !Object.keys(args).every((key) => Object.hasOwn(fields, key))) return false;
 	for (const key of Object.keys(fields)) {
 		const value = args[key];
-		if (["sessionId", "actionId", "idempotencyKey"].includes(key) && !opaque(value)) return false;
+		if (["sessionId", "actionId"].includes(key) && !opaque(value)) return false;
+		if (key === "idempotencyKey" && (typeof value !== "string" || value.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))) return false;
 		if (["planetId", "techId"].includes(key) && !positive(value)) return false;
 		if (key === "expectedSelectionStateHash" && !selectionHash(value)) return false;
 		if (key === "stateHashVersion" && value !== 1 || key === "prioritizeQueued" && value !== false) return false;

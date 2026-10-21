@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { matchResearchBudget, nativeResearchStateHash, researchId } from "./research-preview.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -52,8 +53,9 @@ export class GameIntentLedger {
 		if (writing && (context.writeHealth !== "healthy" || context.selectionStateHash !== scope.selectionStateHash || !Number.isFinite(context.observedAt) || Math.abs(this.now() - context.observedAt) > 2000)) throw new Error("FRESH_GAME_CONTEXT_REQUIRED");
 	}
 	createResearchTask(input) {
-		if (!input || !opaque(input.bridgeInstanceId) || !opaque(input.sessionId) || !positive(input.planetId) || !positive(input.techId) || !tick(input.capturedAtGameTick) || !stateHash(input.selectionStateHash)) throw new Error("INVALID_RESEARCH_TASK_SCOPE");
+		if (!input || !opaque(input.bridgeInstanceId) || !opaque(input.sessionId) || !researchId(input.planetId) || !researchId(input.techId) || !tick(input.capturedAtGameTick) || !stateHash(input.selectionStateHash)) throw new Error("INVALID_RESEARCH_TASK_SCOPE");
 		const scope = { kind: "select-research", bridgeInstanceId: input.bridgeInstanceId, sessionId: input.sessionId, planetId: input.planetId, techId: input.techId, capturedAtGameTick: input.capturedAtGameTick, selectionStateHash: input.selectionStateHash, maximumAcceptedWrites: 1 };
+		nativeResearchStateHash(scope);
 		const id = randomUUID(); this.#transaction(() => this.db.prepare("INSERT INTO game_tasks(id,scope,state) VALUES(?,?,'draft')").run(id, JSON.stringify(scope))); return this.task(id);
 	}
 	async prepare(id) {
@@ -64,18 +66,25 @@ export class GameIntentLedger {
 		try {
 			const reply = await this.#prepareResearch(request);
 			if (this.#preparing.get(id) !== request || !equal(reply?.request, request)) throw new Error("RESEARCH_PREPARE_CORRELATION_MISMATCH");
-			return this.#preview(id, reply.plan);
+			return this.#preview(id, reply.plan, reply.researchBudget);
 		} catch (error) { if (this.#preparing.get(id) === request) { try { this.#transaction(() => this.db.prepare("UPDATE game_tasks SET state='blocked' WHERE id=? AND state='preparing'").run(id)); } catch {} } throw new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "RESEARCH_PREPARE_FAILED"); }
 		finally { if (this.#preparing.get(id) === request) this.#preparing.delete(id); }
 	}
-	#preview(id, plan) {
+	#preview(id, plan, observedBudget) {
 		const result = this.#transaction(() => {
 		const task = this.#task(id), expiresAt = Date.parse(plan?.expiresAtUtc);
-		if (task.state !== "preparing" || plan?.prepared !== true || plan.actionKind !== "select-research" || plan.commitAllowedNow !== true || plan.stateHashVersion !== 1 || plan.expectedStateHash !== task.scope.selectionStateHash || typeof plan.planToken !== "string" || plan.planToken.length < 20 || plan.planToken.length > 2048 || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000 || !Array.isArray(plan.itemBudget) || plan.itemBudget.length || !Array.isArray(plan.commitBlockers) || plan.commitBlockers.length) throw new Error("RESEARCH_PREVIEW_REJECTED");
-		const previewHash = hash({ scope: task.scope, planFingerprint: hash(plan.planToken), expiresAt });
+		if (plan?.researchQueueReadbackVersion !== 1) throw new Error("RESEARCH_READBACK_NOT_SUPPORTED");
+		if (task.state !== "preparing" || plan?.prepared !== true || plan.actionKind !== "select-research" || plan.commitAllowedNow !== true || plan.stateHashVersion !== 1 || plan.expectedStateHash !== nativeResearchStateHash(task.scope) || typeof plan.planToken !== "string" || plan.planToken.length < 20 || plan.planToken.length > 2048 || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000 || !Array.isArray(plan.commitBlockers) || plan.commitBlockers.length) throw new Error("RESEARCH_PREVIEW_REJECTED");
+		const researchBudget = matchResearchBudget(plan.itemBudget, observedBudget);
+		const previewHash = hash({ scope: task.scope, nativeExpectedStateHash: plan.expectedStateHash, researchQueueReadbackVersion: 1, researchBudget, planFingerprint: hash(plan.planToken), expiresAt });
 		this.db.prepare("UPDATE game_tasks SET state='awaiting_approval',preview_hash=?,preview_boot=?,expires_at=?,approval_id=NULL,approval_at=NULL WHERE id=?").run(previewHash, this.bootId, expiresAt, id);
-		return { taskId: id, scope: task.scope, previewHash, expiresAt };
-		}); this.#plans.set(id, { token: plan.planToken, previewHash: result.previewHash }); return result;
+		return { taskId: id, scope: task.scope, previewHash, expiresAt, researchBudget };
+		}); this.#plans.set(id, { token: plan.planToken, previewHash: result.previewHash, researchBudget: result.researchBudget }); return result;
+	}
+	confirmationPreview(id) {
+		const task = this.#task(id), plan = this.#plans.get(id);
+		if (task.state !== "awaiting_approval" || task.preview_boot !== this.bootId || task.expires_at <= this.now() || plan?.previewHash !== task.preview_hash) throw new Error("FRESH_RESEARCH_PREVIEW_REQUIRED");
+		return Object.freeze({ researchBudget: plan.researchBudget });
 	}
 	approve(authority, id, previewHash) {
 		if (authority !== this.#authority) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED");
@@ -86,7 +95,8 @@ export class GameIntentLedger {
 			if (this.db.prepare("SELECT 1 FROM game_gate LIMIT 1").get() || this.db.prepare(`SELECT 1 FROM game_intents WHERE state IN (${pendingStates}) LIMIT 1`).get()) throw new Error("UNRESOLVED_GAME_INTENT_BLOCKS_WRITES");
 			const task = this.#task(id), plan = this.#plans.get(id); this.#context(task.scope, freshContext, true);
 			if (task.state !== "approved" || !task.approval_id || task.preview_hash !== previewHash || task.preview_boot !== this.bootId || task.expires_at <= this.now() || plan?.previewHash !== previewHash) throw new Error("FRESH_RESEARCH_APPROVAL_REQUIRED");
-			const intentId = randomUUID(), idempotencyKey = "commanddeck-" + randomUUID();
+			matchResearchBudget(plan.researchBudget, freshContext.researchBudget);
+			const intentId = randomUUID(), idempotencyKey = randomUUID();
 			this.db.prepare("INSERT INTO game_intents(id,task_id,idempotency_key,state) VALUES(?,?,?,'recorded')").run(intentId, id, idempotencyKey);
 			this.db.prepare("UPDATE game_tasks SET state='intent_recorded' WHERE id=?").run(id);
 			return { intentId, idempotencyKey, commit: { sessionId: task.scope.sessionId, planetId: task.scope.planetId, planToken: plan.token, idempotencyKey } };

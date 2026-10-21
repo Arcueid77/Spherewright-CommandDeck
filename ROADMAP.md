@@ -208,6 +208,10 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 
 Luna在fresh空菜单核验后正常退出游戏，备份旧组件并冷部署同批99c2643的四件Spherewright DLL，窗口适配器f840和配置保持原状；经Steam单次正常启动，新MCP核实64tools/1resource和健康空菜单。唯一expired-primary prepare现在明确拒绝“Journal progress differs from the saved checkpoint; reauthorization must not roll back later history.”：票据checkpoint为11条，Journal已有12条，新增记录晚于已记录的保存点。root核原始拒绝回执与额外记录，部署前后两份票据及Journal字节哈希均相同，0 commit/load/save/真实游戏动作。正常Deck经真实文件选择器连接同批新MCP，显示0.4.0/29151/主菜单，科研列表与开始分析继续禁用；未调用模型或发起任务。原组件备份和私有回执留在忽略目录。版本兼容修复已交付，原世界进度覆盖与真实研究验收仍未通过。新建并正常保存另一世界会更换当前保护恢复入口、使旧票据代际失效，尚未获准，不自动作为fallback；旧存档文件未被覆盖。
 
+2026-10-21 用户随后明确选择专用测试世界，首次正常保存会切换保护恢复入口的说明已获确认。新世界已正常创建并完成内含的首次保存；只代表合法 owned 场景已建立。真实 Deck/MiniMax 对电磁学进行了3次模型请求、2次观察/提案调用，但原生预检与 Deck 合同不一致，在 intent/commit 前拒绝；数据库保留原失败任务，0 intent、无未决 writer。世界和预算的详细证据统一留在独立 Lab 场景，未载入旧世界或提交科研。
+
+本次修复按原生 `action-v1` 的字段长度编码核动作哈希，不把它等同于科研选项哈希；以同一 fresh 目标的等级总材料独立核预算，绑定不可变预览并在提交前重新比对。真实原生框显示等级总需求、未来正常消耗及只执行入队，不把它写成剩余需求或即时扣料。产品普通入队新增显式 capability 1，只有同 tick 的原队列、科研进度、物品与研究缓冲保全证明通过后才产生完成读回；旧 Plugin 的默认0拒绝提交。新 intent 使用原生 UUID，旧 pending 仍保留原 key/action 核销，不改键重放。独立 Astra 源码审查未发现具体 P0/P1；本地145项 Node 测试、类型/renderer构建及 M3 桌面模拟回归通过；产品完整 Plugin 构建零警告/错误、3,194项回归通过。上述结果尚不证明新组件已部署或真实科研完成，须准确 CI、同批冷部署与同一新世界保护恢复后继续实测。
+
 ## 8. M4：通过 Deck 开发并验收 Spherewright
 
 这是首发必需的开发者闭环：

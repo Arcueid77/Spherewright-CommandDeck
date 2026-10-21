@@ -112,7 +112,7 @@ export class GameTasks {
 		this.#confirmations.clear(); const nonce = randomUUID();
 		this.#confirmations.set(nonce, { taskId, previewHash: task.previewHash, uiEpoch, expiresAt: task.expiresAt });
 		const details = this.ledger.tasks().find((value) => value.id === taskId).details;
-		return { nonce, taskId, techId: task.scope.techId, techName: details.techName, planetId: task.scope.planetId, expiresAt: task.expiresAt, maximumAcceptedWrites: 1, normalEnqueue: true, syntheticOnly: this.syntheticOnly };
+		return { nonce, taskId, techId: task.scope.techId, techName: details.techName, planetId: task.scope.planetId, expiresAt: task.expiresAt, maximumAcceptedWrites: 1, normalEnqueue: true, syntheticOnly: this.syntheticOnly, researchBudget: this.ledger.confirmationPreview(taskId).researchBudget };
 	}
 	reprepare() {
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || !this.currentTaskId) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
@@ -124,10 +124,10 @@ export class GameTasks {
 		const challenge = this.#confirmations.get(nonce); this.#confirmations.delete(nonce);
 		if (!challenge || this.closing || this.operation || challenge.uiEpoch !== uiEpoch || challenge.taskId !== this.currentTaskId || challenge.expiresAt <= this.now() || this.phase !== "awaiting_approval") throw new Error("FRESH_RESEARCH_APPROVAL_REQUIRED");
 		return this.#launch("confirming", async () => {
-			const task = this.ledger.task(challenge.taskId), fresh = await this.adapter.observe(task.scope, { player: true }); this.#notStopped();
+			const task = this.ledger.task(challenge.taskId), fresh = await this.adapter.observe(task.scope, { player: true, researchTechId: task.scope.techId }); this.#notStopped();
 			this.ledger.approve(this.#approvalAuthority, task.id, challenge.previewHash);
 			// No await between durable intent and the one transport submission.
-			const intent = this.ledger.beginIntent(task.id, challenge.previewHash, fresh.context);
+			const intent = this.ledger.beginIntent(task.id, challenge.previewHash, { ...fresh.context, researchBudget: fresh.researchBudget });
 			let receipt;
 			try { receipt = await this.adapter.commit(intent.commit); }
 			catch { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }

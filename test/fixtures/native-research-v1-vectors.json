@@ -1,0 +1,14 @@
+[
+	{
+		"scope": { "techId": 1001, "sessionId": "session-A", "selectionStateHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "planetId": 104 },
+		"expected": "sha256:1bec0bc13a8d5e76ed021234760607c001e2f1d856b66549602eceacc6099365"
+	},
+	{
+		"scope": { "techId": 1, "sessionId": "会话|🚀:A", "selectionStateHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "planetId": 2147483647 },
+		"expected": "sha256:c7e7c8c9d719fa751d5f85ce10b1ec3be2197fc2b5fb3af0d061fd8aaca42297"
+	},
+	{
+		"scope": { "techId": 2147483647, "sessionId": "a:|bc", "selectionStateHash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "planetId": 1 },
+		"expected": "sha256:7aebed490d01d201e7e5b5b781f514684b6a790df18df5efbf6b9e2062a84d70"
+	}
+]
