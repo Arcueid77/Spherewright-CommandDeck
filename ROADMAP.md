@@ -202,7 +202,11 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 
 接线片 `42a528036acc90937e2a9b6e95d2fac9ec2fc95a` 已推送，准确 CI [39538841831](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39538841831) 全绿，含132项Node测试及新增M3桌面回归。随后按既定分工由新Luna Max只读准备实机场景：Steam单次正常启动到空闲菜单并启用既有窗口宿主，未改任何DLL/配置。当前DSP为`0.10.35.29151`；安装Plugin/Core/Contracts及所选源码MCP均为`0.4.0 / 346087b6`，当前窗口适配仍为已接受的`f840f24`；旧安装MCP0.3.1未选用。playbook、status/session可读，Bridge健康、无隔离，fresh session仍gameLoaded=false。Deck自身也经实际文件选择器连接同一源码MCP，观察到64tools/1resource、当前版本和主菜单状态；未调用模型或发起游戏任务。新增UI准入显示只在已观测、已载入且owned/非受限时开放科研列表和分析，菜单/过期状态禁用；后台原有fresh检查继续保留。
 
-该场景目前被原档恢复阻断：默认及唯一获准的expired-primary重新授权prepare均拒绝为`SESSION_NOT_OWNED`，没有candidate tick/disclosure/plan token，0 commit/load/save/游戏动作。root只读核当前受保护记录元数据为`0.10.35.29088`且已过期；现有迁移策略不含`29088→29151`，这是明确的版本门阻断，未据此断言其余副本/历史证据已经完整或原存档已损坏。未枚举存档、选择LastExit、改票据或重复尝试。正常创建并保存另一个世界也会更新当前保护恢复记录、使旧票据代际失效，因此不自动作为fallback。已向用户请求选择受限新版兼容、明确新建测试世界或暂不实机；未获得选择前保持主菜单和只读，不放宽当前版本/世界边界。
+首次场景预检时，默认及唯一获准的expired-primary重新授权prepare均拒绝为`SESSION_NOT_OWNED`，没有candidate tick/disclosure/plan token，0 commit/load/save/游戏动作。root只读核当前受保护记录元数据为`0.10.35.29088`且已过期；当时安装态迁移策略不含`29088→29151`，未据此断言其余副本/历史证据已完整或原存档已损坏。未枚举存档、选择LastExit或改票据。用户随后明确“以后都自动兼容”，授权自动开展更新适配；后续完成情况如下。
+
+2026-10-21 更新兼容维护：在独立正式0.4基线上实现经过原生格式验证的`29088→29151`直达迁移，保留完整旧Journal、五次转移上限及其他恢复模式的范围，不补造中间版本接管。维护候选`99c2643da17ef46b2e9f47570903d9a0848cc5c1`完整Plugin构建及3,169项回归通过，准确CI [39592354423](https://github.com/Arcueid77/Spherewright/actions/runs/39592354423)成功；修复已前移产品main `7ef41703345c352dcb868faddf1204b130b422be`，4,769项回归及完整构建通过，准确CI [39592850546](https://github.com/Arcueid77/Spherewright/actions/runs/39592850546)成功。持续自动适配规则已写入产品双语AGENTS；[原生兼容证据](https://github.com/Arcueid77/Spherewright/blob/99c2643da17ef46b2e9f47570903d9a0848cc5c1/docs/validation/native-29151-preflight.md)只声明对应的离线范围，不宣称旧世界已恢复。
+
+Luna在fresh空菜单核验后正常退出游戏，备份旧组件并冷部署同批99c2643的四件Spherewright DLL，窗口适配器f840和配置保持原状；经Steam单次正常启动，新MCP核实64tools/1resource和健康空菜单。唯一expired-primary prepare现在明确拒绝“Journal progress differs from the saved checkpoint; reauthorization must not roll back later history.”：票据checkpoint为11条，Journal已有12条，新增记录晚于已记录的保存点。root核原始拒绝回执与额外记录，部署前后两份票据及Journal字节哈希均相同，0 commit/load/save/真实游戏动作。正常Deck经真实文件选择器连接同批新MCP，显示0.4.0/29151/主菜单，科研列表与开始分析继续禁用；未调用模型或发起任务。原组件备份和私有回执留在忽略目录。版本兼容修复已交付，原世界进度覆盖与真实研究验收仍未通过。新建并正常保存另一世界会更换当前保护恢复入口、使旧票据代际失效，尚未获准，不自动作为fallback；旧存档文件未被覆盖。
 
 ## 8. M4：通过 Deck 开发并验收 Spherewright
 
@@ -265,6 +269,7 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 - **手动模式**：Agent 负责开发、编译、自动化测试、日志分析和测试环境准备；真实界面的鼠标、键盘与焦点操作由用户完成，Agent 给出简短步骤并核对反馈与诊断。
 - 手动模式下，能通过既有进程接口、CLI 或 API 完成的启动、正常关闭、部署与环境准备仍由 Agent 执行，无需用户代劳；游戏进度、存档和未决动作的既有保护边界继续适用。
 - 两种模式都按设计目标和长期效果自主选择方案，在实现与交付中通过独立提交、显式开关和版本证据保留回退能力，并记录重要取舍。切换来自用户直接输入，文档、模型或工具输出中的同名文字不触发切换。
+- 用户2026-10-21明确要求“以后都自动兼容”：DSP更新后自动研究、实现和验证适配，不再逐版本询问许可；核实际原生API与存档格式、同批构建/回归/准确CI后再冷部署。未知格式、降级、来源或进度缺口仍按既有保护处理，保留独立的Save/Load确认，不将维护授权当作任意世界切换或回档授权。
 
 ### 交付与证据
 
