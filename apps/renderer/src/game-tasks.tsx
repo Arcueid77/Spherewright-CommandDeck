@@ -31,7 +31,8 @@ export function GameTasksPanel() {
 	const [model, setModel] = useState(""), [mode, setMode] = useState("assist"), [tech, setTech] = useState(""), [prompt, setPrompt] = useState("分析这项科技是否适合现在加入科研队列，并说明原因。");
 	const profile = c.profiles.find((value) => profileToken(value) === model), task = state.tasks.find((value) => value.id === state.currentTaskId) ?? state.tasks[0];
 	const locked = state.busy || state.developmentFrozen || state.unresolved.length > 0;
-	const ready = c.healthy && bridge.metadata?.researchAvailable && bridge.observation?.connected;
+	const observedSession = bridge.observation?.session;
+	const ready = c.healthy && bridge.metadata?.researchAvailable && bridge.observation?.connected && observedSession?.state === "observed" && observedSession.data?.gameLoaded && observedSession.data.owned && !observedSession.data.accessRestricted;
 	const expired = task?.expiresAt !== null && task?.expiresAt !== undefined && task.expiresAt <= Date.now();
 	const catalogFresh = state.catalog && state.catalog.expiresAt > Date.now();
 	return <div className="panel game-tasks-panel"><div className="eyebrow">BOUNDED GAME TASK</div><h2>游戏 Agent</h2><p>先从一项指定科技开始：Agent 读取科研状态并提出建议，你确认后正常入队，随后核对原动作和队列。</p>
