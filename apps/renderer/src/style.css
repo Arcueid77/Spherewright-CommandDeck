@@ -73,6 +73,18 @@ textarea {
 .data-scope { color: #9caeb9; font-size: 11px; overflow-wrap: anywhere; }
 .watch-items { display: flex; gap: 8px; }
 .watch-items input { min-width: 0; flex: 1; }
+.game-tasks-panel fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.game-tasks-panel label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 12px; }
+.game-tasks-panel textarea { resize: vertical; line-height: 1.7; }
+.game-task-settings { margin: 18px 0; }
+.game-task-settings summary { cursor: pointer; margin-bottom: 14px; font-size: 12px; color: #adbea9; }
+.game-tasks-panel small { display: block; margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
+.game-task-stage { padding: 10px 12px; margin: 18px 0 10px; border: 1px solid #4b655d; color: #a9c9b8; border-radius: 5px; font-size: 12px; }
+.game-task-receipt { padding: 14px; margin-top: 14px; background: #14232d; border: 1px solid #3b5259; border-radius: 5px; font-size: 12px; }
+.game-task-transcript { border-top: 1px solid #2b414c; margin-top: 18px; padding-top: 8px; }
+.game-event { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.8; }
+.game-event.stage, .game-event.tool, .game-event.result { margin: 10px 0; color: #88b8a9; font-size: 11px; }
+.game-event.error { color: #e4b277; }
 .table-scroll { overflow: auto; max-height: 70%; margin-top: 16px; }
 .bridge-panel table { border-collapse: collapse; width: 100%; font-size: 11px; text-align: left; white-space: nowrap; }
 .bridge-panel th { color: #aebac5; background: #182838; position: sticky; top: 0; }

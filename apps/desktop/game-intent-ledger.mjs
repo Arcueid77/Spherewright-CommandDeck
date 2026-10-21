@@ -11,9 +11,9 @@ const tick = (value) => Number.isSafeInteger(value) && value >= 0;
 const queue = (value) => Array.isArray(value) && value.length <= 64 && value.every(positive);
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const pendingStates = "'recorded','accepted','unknown'";
-const auditReasons = ["ACCEPTANCE_BINDING_MISMATCH", "NATIVE_OUTCOME_REQUIRES_AUDIT"];
+const auditReasons = ["ACCEPTANCE_BINDING_MISMATCH", "ORIGINAL_ACTION_BINDING_MISMATCH", "NATIVE_OUTCOME_REQUIRES_AUDIT"];
 
-// M3 offline foundation only. No MCP, network, model, UI approval endpoint or game transport is connected.
+// Durable bounded research ledger. Trusted host ports own transport and approval provenance.
 export class GameIntentLedger {
 	#authority; #prepareResearch; #readResearchProof; #preparing = new Map(); #reading = new Map(); #plans = new Map(); #faulted = false;
 	constructor(file, { approvalAuthority, prepareResearch, readResearchProof, now = () => Date.now() } = {}) {
@@ -23,7 +23,7 @@ export class GameIntentLedger {
 		this.#authority = approvalAuthority; this.#prepareResearch = prepareResearch; this.#readResearchProof = readResearchProof; this.now = now; this.bootId = randomUUID(); mkdirSync(dirname(file), { recursive: true }); this.db = new DatabaseSync(file);
 		try {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version;
-			if (version !== 0 && version !== 1) throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED");
+			if (![0, 1, 2].includes(version)) throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED");
 			if (version === 0 && this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get().n) throw new Error("GAME_LEDGER_SCHEMA_UNKNOWN");
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;");
 			if (version === 0) this.db.exec(`BEGIN IMMEDIATE;
@@ -32,6 +32,10 @@ export class GameIntentLedger {
 				CREATE UNIQUE INDEX one_pending_game_intent ON game_intents((1)) WHERE state IN (${pendingStates});
 				CREATE TABLE game_gate(id INTEGER PRIMARY KEY CHECK(id=1), intent_id TEXT NOT NULL, reason TEXT NOT NULL);
 				PRAGMA user_version=1; COMMIT;`);
+			if (version < 2) this.db.exec(`BEGIN IMMEDIATE;
+				CREATE TABLE game_task_details(task_id TEXT PRIMARY KEY REFERENCES game_tasks(id), body TEXT NOT NULL);
+				CREATE TABLE game_task_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES game_tasks(id), kind TEXT NOT NULL, body TEXT NOT NULL);
+				PRAGMA user_version=2; COMMIT;`);
 			this.db.prepare("SELECT id,scope,state,preview_hash,preview_boot,expires_at,approval_id,approval_at FROM game_tasks LIMIT 1").all();
 			this.db.prepare("SELECT id,task_id,idempotency_key,state,action_id,acceptance,terminal FROM game_intents LIMIT 1").all();
 		} catch (error) { this.db.close(); throw error; }
@@ -90,7 +94,7 @@ export class GameIntentLedger {
 		this.#plans.delete(id); return result; // Caller may send only after this durable transaction returns.
 	}
 	markUnknown(id, reason = "COMMIT_RECEIPT_UNAVAILABLE") {
-		if (!["COMMIT_RECEIPT_UNAVAILABLE", "ACCEPTANCE_BINDING_MISMATCH", "RESEARCH_TERMINAL_PROOF_INCOMPLETE", "ORIGINAL_ACTION_NOT_FOUND"].includes(reason)) reason = "COMMIT_RECEIPT_UNAVAILABLE";
+		if (!["COMMIT_RECEIPT_UNAVAILABLE", "ACCEPTANCE_BINDING_MISMATCH", "ORIGINAL_ACTION_BINDING_MISMATCH", "RESEARCH_TERMINAL_PROOF_INCOMPLETE", "ORIGINAL_ACTION_NOT_FOUND"].includes(reason)) reason = "COMMIT_RECEIPT_UNAVAILABLE";
 		return this.#transaction(() => { if (this.#intent(id).state !== "completed") this.#unknown(id, reason); });
 	}
 	#unknown(id, reason) { const intent = this.#intent(id), gate = this.db.prepare("SELECT * FROM game_gate WHERE id=1").get(); if (!auditReasons.includes(gate?.reason)) this.db.prepare("INSERT INTO game_gate(id,intent_id,reason) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET intent_id=excluded.intent_id,reason=excluded.reason").run(id, reason); if (intent.state !== "completed") this.db.prepare("UPDATE game_intents SET state='unknown' WHERE id=?").run(id); this.db.prepare("UPDATE game_tasks SET state='blocked' WHERE id=?").run(intent.task_id); }
@@ -105,16 +109,17 @@ export class GameIntentLedger {
 		if (intent.state === "completed") return this.intent(id);
 		if (!intent.action_id) throw new Error("UNKNOWN_COMMIT_HAS_NO_ACTION_ID");
 		if (this.#reading.has(id)) throw new Error("ORIGINAL_ACTION_READ_ALREADY_IN_FLIGHT");
-		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: "select-research", actionId: intent.action_id, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId });
+		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: "select-research", actionId: intent.action_id, idempotencyKey: intent.idempotency_key, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId });
 		this.#reading.set(id, request);
 		try { const reply = await this.#readResearchProof(request); if (this.#reading.get(id) !== request || !equal(reply?.request, request)) throw new Error("RESEARCH_READ_CORRELATION_MISMATCH"); return this.#complete(id, reply.terminal, reply.freshProgression, reply.context); }
-		catch (error) { throw new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "ORIGINAL_ACTION_READ_FAILED"); }
+		catch (error) { if (error?.message === "ORIGINAL_ACTION_BINDING_MISMATCH") { this.#transaction(() => this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH")); throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED"); } throw new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "ORIGINAL_ACTION_READ_FAILED"); }
 		finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
 	}
 	#complete(id, terminal, freshProgression, context) {
 		const result = this.#transaction(() => {
 		if (auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
 		const intent = this.#intent(id), task = this.#task(intent.task_id), readback = terminal?.researchQueueReadback;
+		if (terminal && (terminal.actionId !== intent.action_id || terminal.actionKind !== "select-research" || terminal.sessionId !== task.scope.sessionId || terminal.planetId !== task.scope.planetId || terminal.idempotencyKey !== intent.idempotency_key)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return { error: "INDEPENDENT_GAME_AUDIT_REQUIRED" }; }
 		this.#context(task.scope, context);
 		if (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal?.state) || terminal?.recoveryRequired === true) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return { error: "INDEPENDENT_GAME_AUDIT_REQUIRED" }; }
 		const before = readback?.beforeQueue, after = readback?.afterQueue, current = freshProgression?.techQueue;
@@ -127,5 +132,18 @@ export class GameIntentLedger {
 	task(id) { const value = this.#task(id); return { id: value.id, state: value.state, scope: value.scope, previewHash: value.preview_hash, expiresAt: value.expires_at, approvalId: value.approval_id }; }
 	intent(id) { const value = this.#intent(id); return { intentId: value.id, taskId: value.task_id, state: value.state, idempotencyKey: value.idempotency_key, actionId: value.action_id, acceptance: value.acceptance ? JSON.parse(value.acceptance) : null, terminal: value.terminal ? JSON.parse(value.terminal) : null }; }
 	unresolved() { return this.db.prepare(`SELECT id FROM game_intents WHERE state IN (${pendingStates})`).all().map(({ id }) => this.intent(id)); }
+	tasks() { return this.db.prepare("SELECT id FROM game_tasks ORDER BY rowid DESC LIMIT 32").all().map(({ id }) => ({ ...this.task(id), details: JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"), intent: (() => { const value = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id); return value ? this.intent(value.id) : null; })() })); }
+	details(id, value) {
+		this.#task(id);
+		const body = { mode: value.mode === "observe" ? "observe" : "assist", techName: String(value.techName ?? "").slice(0, 160), prompt: String(value.prompt ?? "").slice(0, 2000), provider: String(value.provider ?? "").slice(0, 256), model: String(value.model ?? "").slice(0, 256), cohortHash: String(value.cohortHash ?? "").slice(0, 64), schemaHash: String(value.schemaHash ?? "").slice(0, 64), playbookHash: String(value.playbookHash ?? "").slice(0, 64), createdAt: this.now() };
+		this.#transaction(() => this.db.prepare("INSERT INTO game_task_details(task_id,body) VALUES(?,?)").run(id, JSON.stringify(body)));
+	}
+	note(id, kind, value = {}) {
+		if (!["stage", "assistant", "tool", "error", "result"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
+		const body = { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
+		this.#transaction(() => { this.#task(id); this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,?,?)").run(id, kind, JSON.stringify(body)); this.db.prepare("DELETE FROM game_task_events WHERE task_id=? AND sequence NOT IN (SELECT sequence FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 200)").run(id, id); });
+	}
+	events(id) { this.#task(id); return this.db.prepare("SELECT sequence,kind,body FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 100").all(id).reverse().map(({ body, ...value }) => ({ ...value, ...JSON.parse(body) })); }
+	advised(id) { return this.#transaction(() => { const task = this.#task(id); if (task.state !== "draft") throw new Error("GAME_TASK_NOT_ADVISORY"); this.db.prepare("UPDATE game_tasks SET state='advised' WHERE id=?").run(id); return this.task(id); }); }
 	close() { if (this.closed) return; this.closed = true; this.#plans.clear(); this.#preparing.clear(); this.#reading.clear(); this.db.close(); }
 }

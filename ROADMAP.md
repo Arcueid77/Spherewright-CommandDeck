@@ -1,6 +1,6 @@
 # Spherewright CommandDeck Roadmap
 
-日期：2026-10-21。状态：M0 中央菜单点击继续暂缓；M1 有限开发闭环及受保护模型配置已有证据，跨组停靠待验；M2 只读面板和合成闭环已实现，真实世界与性能待验；M3 正在做离线意图账本，未接真实写入；当前为自动模式。下列版本号是规划，不代表已打 tag 或发布。
+日期：2026-10-21。状态：M0 中央菜单点击继续暂缓；M1 有限开发闭环及受保护模型配置已有证据，跨组停靠待验；M2 只读面板和合成闭环已实现，真实世界与性能待验；M3 观察/协助研究已接通 Pi、固定 MCP、原生确认和持久化账本，替身闭环及确认框物理操作已验证，真实 DSP 与输入协调仍待；当前为自动模式。下列版本号是规划，不代表已打 tag 或发布。
 
 ## 1. 产品目标
 
@@ -176,7 +176,9 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 
 导入、恢复、版本迁移等较强确认要求不能被一般“继续执行”覆盖。跨所有独立客户端的强制租约或 epoch 如有需要，属于 Spherewright 协议的后续独立能力，不由 Deck 的内存锁代替。
 
-2026-10-21 离线首片：新增独立 `GameIntentLedger` 库，**尚未被桌面、Pi 或 MCP 接入**。只表示普通研究入队、每任务最多一次写入的意图与核销，不包含通用动作执行器或游戏 transport。SQLite事务在返回可信调用方的 commit DTO 之前持久化意图；唯一 pending 跨同一数据库的实例互斥，丢 ACK 保留原幂等键，缺 actionId 时不猜测、不生成新键。token 仅本实例内存保留，数据库仅存指纹；重启不恢复旧 token/审批，已知原 action 仍可按原 bridge/session/planet 只读核销。取消在受理后仅转核销，不能宣称已撤销原生动作。
+以下按切片记录历史进展，当前接线与验收边界见本节末。
+
+2026-10-21 离线首片：新增独立 `GameIntentLedger` 库，**当时尚未被桌面、Pi 或 MCP 接入**。只表示普通研究入队、每任务最多一次写入的意图与核销，不包含通用动作执行器或游戏 transport。SQLite事务在返回可信调用方的 commit DTO 之前持久化意图；唯一 pending 跨同一数据库的实例互斥，丢 ACK 保留原幂等键，缺 actionId 时不猜测、不生成新键。token 仅本实例内存保留，数据库仅存指纹；重启不恢复旧 token/审批，已知原 action 仍可按原 bridge/session/planet 只读核销。取消在受理后仅转核销，不能宣称已撤销原生动作。
 
 内部审批依赖可信宿主持有的对象身份及精确 preview digest；它只是内部能力入口，**尚未证明真实 UI 确认来源**。原生 PreparedNormalAction 不回显 techId，因此不能用 token 哈希声称目标已被原生回显。库只经构造时固定的可信 prepare/proof port 建立不可变精确请求和本次 requestId 的关联，拒绝错目标/旧请求的回执；这些 port 仍是待实现和实机验证的可信适配器契约。成功核销要求原 action终态、普通队列追加读回、材料/科研进度保全、同范围新观察及 hash/tick/本机接收年龄约束；native unknown/recovery/failed 或错 action 必须独立审计，本片未提供自动解除入口。研究若在 fresh 读回前已完成而目标不在队列，本片保留为未证明，不自动改写成成功。
 
@@ -185,6 +187,18 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 离线账本切片 `f37dae5ad59df6968e7335c12bbc8f56a2dd5aae` 的本地完整108项测试和准确 CI [39471754621](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39471754621) 全绿；Astra 的两项授权/读回 P1 已在固定可信适配器契约前提下复核闭合，未把离线结果转为真实授权证明。下一步先为明确、合法的 owned 场景取得安装态/fresh 只读证据，并补真实适配器及 UI 确认来源；没有这些前提时不启用真实写入。当前没有载入、导入、恢复或新建世界的自动许可。
 
 2026-10-21 固定研究 MCP 适配器：已实现宿主持有对象身份的窄 capability，固定开放 progression/player/普通研究 prepare/commit/原 action result 和确切 playbook resource；原公开 `read` 仍拒绝写接口。严格核接口 schema/hint、同 bridge/session/planet、正常排队参数、fresh hash/tick 与 owned/healthy/peaceful 状态，剔除无关保存/飞行凭据。真实 stdio 合成服务已覆盖准备到唯一提交及原动作/队列核销、错误 scope、禁写、pending、错队列和 native unknown 后观察失败；已取得的 native 安全异常先进入持久化硬隔离，不因后续读取失败而丢失。相关28项测试通过。带不可用 descriptor 的源码 MCP 元数据探针仍为64 tools/1 resource，新增固定接口兼容检查通过，0 tools/call；这不是安装态或实机验证。本切片尚未接入桌面、Pi 或真实游戏，M3仍未通过。
+
+该固定接口片已推送 `ee4e123e6b388e2cd4eb1bd16eacd1b999bf8147`，准确 CI [39534517109](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39534517109) 成功。
+
+2026-10-21 首次协助研究接线：桌面新增“游戏 Agent”，与中央视口分组显示。通过现有 progression 接口按名称选择现场未排队科技，列表句柄限60秒并绑定原世界与服务组；开始前重新核对原身份和文件/schema指纹。观察模式允许在原生禁写时读建议，但仍要求 owned/非受限。Pi 仅有 observe/propose，最多4次模型请求、8次工具调用和5分钟模型运行；无源码/命令工具、短票据、通用 MCP 或提交能力。模型结束后程序才 fresh prepare，用户经可信 UI-main 原生确认框明确确认；Cancel 为默认，nonce绑定确切preview和当前UI epoch，界面替换/取消能阻止尚未记录的提交。原生票据过期需重新预检，不移植旧审批。
+
+游戏任务占用同一 MCP 和开发执行门；源码编辑、构建、模型配置变更及竞争连接在保留期间拒绝。提交意图先落 SQLite，随后唯一发送，终态只查原action并fresh读队列。v2账本增加受限显示元数据与事件；v1升级保留原pending/key/action；完成回执、事件与已知原动作跨重开保留，不恢复旧token或确认。错 action/kind/session/planet/key 在附加读取之前进入持久化硬隔离，下一回执恢复正常也不能普通解除；Astra独立审核发现的两处相关P1均已修复并有组合反例。缺actionId、native未知和需独立核销状态均不自动解禁。外部客户端不因此获得租约保证。
+
+本地完整132项Node测试、类型检查及renderer构建通过；本轮M0/M1/M2桌面回归通过。新增M3桌面回归通过实际supervisor、Pi utility、加密profile、stdio MCP和renderer，用3次合成模型请求、2次工具、1次替身提交验证Cancel零提交、原action/队列读回、界面重载不重放、开发门释放及服务正常退出。默认CI仅mock原生dialog的返回值。另以computer-use在明确“NO DSP”的真实原生框完成Escape取消、重新预检和鼠标确认，观察队列99→99,100，程序核实1次替身提交并正常退出；首次过期尝试被拒绝，未计作点击通过。私有记录绑定当次来源文件哈希，不提交原始界面或配置。
+
+独立SDK探针复用现有CC Switch MiniMax-M3.1-Flash，3次真实模型请求、2次observe/propose工具后完成建议，替身游戏经测试宿主审批完成1次入队；费用未知，零真实游戏调用。它验证真实模型与替身服务；上述物理路径验证合成模型与真实原生确认框，两者仍不替代真实DSP组合。完整回归曾出现一次合成凭据测试未取得匹配请求；原断言保留并补无密钥诊断，单项9项及完整132项复验通过，未据此宣称已定位原因或改变凭据/重试策略。
+
+**当前M3仍未整体通过**：安装态Plugin/MCP及合法owned场景、真实研究入队/材料保全、保存覆盖与Lab accepted预算、真实异常与玩家接手竞争尚待实机核销；输入尚未游戏侧互斥，有界自主保持禁用。本轮没有运行DSP、没有载入/导入/恢复/新建世界、没有部署游戏DLL、没有真实游戏写入，也没有tag/Release。下一步需要准备明确获授权的测试世界，再做该单项任务的fresh实机验收。
 
 ## 8. M4：通过 Deck 开发并验收 Spherewright
 
@@ -265,4 +279,4 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 - [Win32 SetParent](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent)：窗口样式、DPI 和跨进程行为必须单独处理。
 - [Spherewright 固定源码协议](https://github.com/Arcueid77/Spherewright/blob/ddec09e3e752358043dc7b0bb43486d800c3b940/docs/protocol.md)：作为本路线的接口研究锚点；安装能力和后续版本须 fresh 核对。
 
-**下一步按用户最新选择推进 M1：先交付持久多仓工作区、文件/差异、开发 Agent 和有结果记录的构建测试，再验证界面恢复与零重放。M0 中央菜单点击问题及其余交互项暂挂；完整首发门继续保留这些未证明项。**
+**下一步推进已接线的M3单项真实研究验收：先核安装态、获授权的owned现场和Lab预算，再逐项确认、核原动作、fresh读回和保存覆盖。M1跨组停靠、M2实机性能及M0点击/显示故障门继续保留；未准备或未获授权的世界不自动载入、恢复、导入或新建。**

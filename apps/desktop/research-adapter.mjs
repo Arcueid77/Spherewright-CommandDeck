@@ -59,7 +59,7 @@ export class ResearchAdapter {
 	async readResearchProof(request) {
 		const originalContext = await this.context(request, false);
 		const raw = result(await this.port.result({ actionId: request.actionId }));
-		if (raw.actionId !== request.actionId || raw.actionKind !== "select-research" || raw.sessionId !== request.sessionId || raw.planetId !== request.planetId) throw new Error("ORIGINAL_ACTION_BINDING_MISMATCH");
+		if (raw.actionId !== request.actionId || raw.actionKind !== "select-research" || raw.sessionId !== request.sessionId || raw.planetId !== request.planetId || raw.idempotencyKey !== request.idempotencyKey) throw new Error("ORIGINAL_ACTION_BINDING_MISMATCH");
 		if (!["outcome_unknown", "recovery_required", "action_failed"].includes(raw.state) && raw.recoveryRequired !== true && raw.terminal === false) throw new Error("ORIGINAL_ACTION_PENDING");
 		// Project before returning: flight tokens, save names and unrelated native fields never enter the ledger.
 		const readback = raw.researchQueueReadback;

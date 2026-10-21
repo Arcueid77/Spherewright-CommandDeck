@@ -3,16 +3,20 @@ import { once } from "node:events";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
+import { confirmResearchFromUi } from "./research-confirmation.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const rendererFile = join(root, "dist/renderer/index.html");
 const rendererUrl = pathToFileURL(rendererFile).href;
 const smoke = process.argv.includes("--smoke-ui");
+const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
+let syntheticGameAnswer = null;
 let window,
 	heartbeat,
 	sequence = 0,
 	allowClose = false,
 	closing = false;
+let confirmingGame = false;
 const pending = new Map();
 function send(message) {
 	if (process.connected) process.send(message, () => {});
@@ -50,12 +54,14 @@ async function testCommand(message) {
 			window.webContents.reload();
 			await loaded;
 			result = true;
-		} else if (["capture-workbench", "capture-bridge"].includes(message.name)) {
+		} else if (message.name === "answer-game-confirmation" && gameSmoke && [0, 1].includes(message.response)) {
+			syntheticGameAnswer = message.response; result = true;
+		} else if (["capture-workbench", "capture-bridge", "capture-game"].includes(message.name)) {
 			let captureTimer;
 			try {
 				const capture = await Promise.race([window.webContents.capturePage(undefined, { stayAwake: true }), new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error("CAPTURE_TIMEOUT")), 1000); })]);
 				await mkdir(join(root, ".local"), { recursive: true });
-				await writeFile(join(root, message.name === "capture-bridge" ? ".local/m2-smoke-bridge.private.png" : ".local/m1-smoke-workbench.private.png"), capture.toPNG());
+				await writeFile(join(root, message.name === "capture-game" ? ".local/m3-smoke-game.private.png" : message.name === "capture-bridge" ? ".local/m2-smoke-bridge.private.png" : ".local/m1-smoke-workbench.private.png"), capture.toPNG());
 				result = { captured: true };
 			} catch { result = { captured: false, code: "CAPTURE_UNAVAILABLE" }; }
 			finally { clearTimeout(captureTimer); }
@@ -176,6 +182,17 @@ if (typeof process.send !== "function") {
 				"deck:snapshot": "snapshot",
 			}))
 				handle(channel, (args) => request(action, args));
+			handle("deck:game", (args) => {
+				if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
+				return request("game", args);
+			});
+			handle("deck:confirm-research", async (args) => {
+				if (confirmingGame) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+				confirmingGame = true;
+				try {
+					return await confirmResearchFromUi({ taskId: args?.taskId, request, showDialog: (options) => { if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
+				} finally { confirmingGame = false; }
+			});
 			handle("deck:focus-ui", async () => {
 				// Preserve Chromium's active editor/drag operation when this UI already owns focus.
 				if (window.webContents.isFocused()) return { alreadyFocused: true };

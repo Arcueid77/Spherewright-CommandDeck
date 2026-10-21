@@ -10,6 +10,7 @@ import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
 import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel } from "./bridge";
+import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -56,6 +57,8 @@ declare global {
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			chooseBridge(): Promise<unknown>;
+			game<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			confirmResearch(taskId: string): Promise<unknown>;
 			targets(): Promise<Target[]>;
 			attach(id: string): Promise<NativeState>;
 			detach(): Promise<unknown>;
@@ -288,7 +291,7 @@ function GamePanel(props: IDockviewPanelProps) {
 					onClick={() =>
 						void act(
 							() => window.deck.attach(selected),
-							"Deck UI 已嵌入选定宿主；Agent 游戏动作接口尚未接入。",
+							"窗口连接已建立；游戏任务请在“游戏 Agent”面板单独发起。",
 						)
 					}
 				>
@@ -337,11 +340,11 @@ function EvidencePanel() {
 			<div className="eyebrow">CAPABILITY BOUNDARY</div>
 			<h2>M0 验证范围</h2>
 			<div className="metric">
-				<span>游戏动作接口</span>
-				<strong>未接入</strong>
+				<span>本页 M0 探针的游戏工具</span>
+				<strong>不开放</strong>
 			</div>
 			<div className="metric">
-				<span>允许的 Agent 工具</span>
+				<span>本页探针工具</span>
 				<strong>deck_echo</strong>
 			</div>
 			<div className="metric">
@@ -392,7 +395,12 @@ const components = {
 	events: EventPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
+	"game-agent": GameTasksPanel,
 };
+function addGamePanel(api: DockviewReadyEvent["api"], activate = false) {
+	if (!api.getPanel("game-agent")) api.addPanel({ id: "game-agent", component: "game-agent", title: "游戏 Agent", ...(api.getPanel("development") ? { position: { referencePanel: "development", direction: "within" as const }, inactive: true } : { position: { referencePanel: "game", direction: "right" as const }, initialWidth: 390 }) });
+	if (activate) { api.getPanel("game")?.api.setActive(); api.getPanel("game-agent")?.api.setActive(); }
+}
 function addBridgePanels(api: DockviewReadyEvent["api"], activate = false) {
 	for (const [id, title] of [["bridge", "只读舰桥"], ["research", "科研"], ["production", "生产"], ["power", "供电"], ["logistics", "物流"]]) if (!api.getPanel(id)) api.addPanel({ id, component: id, title, ...(api.getPanel("editor") ? { position: { referencePanel: "editor", direction: "within" as const }, inactive: true } : {}) });
 	if (activate) api.getPanel("bridge")?.api.setActive();
@@ -415,6 +423,7 @@ async function ready(event: DockviewReadyEvent) {
 			api.addPanel({ id: "events", component: "events", title: "运行事件", position: { referencePanel: "output", direction: "within" }, inactive: true });
 			addBridgePanels(api);
 		}
+		addGamePanel(api);
 		api.onDidLayoutChange(() => { void persistedLayout.save(api.toJSON()).catch(() => {}); });
 		return;
 	}
@@ -443,21 +452,24 @@ async function ready(event: DockviewReadyEvent) {
 }
 function App() {
 	const [settings, setSettings] = useState(false);
+	const [confirmation, setConfirmation] = useState(false);
 	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
-	useEffect(() => { if (settings) document.body.dataset.deckOverlay = "settings"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings]);
+	useEffect(() => window.deck.onEvent((event) => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); }), []);
+	useEffect(() => { if (settings || confirmation) document.body.dataset.deckOverlay = settings ? "settings" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation]);
 	return (
 		<div className="app">
-			<header inert={settings}>
+			<header inert={settings || confirmation}>
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
-				<div className="tag">M1 / M2 · 开发与观察</div>
+				<div className="tag">开发 · 观察 · 有限研究</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
 				<button onClick={() => setSettings(true)}>模型设置</button>
 				<button onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
-				<div className="header-note">游戏动作未接入 · 中央点击暂缓</div>
+				<button onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
+				<div className="header-note">游戏执行逐项确认 · 中央点击暂缓</div>
 			</header>
-			<div className="workspace" inert={settings}>
+			<div className="workspace" inert={settings || confirmation}>
 				<DockviewReact
 					className="dockview-theme-abyss"
 					components={components}
@@ -476,4 +488,4 @@ document.addEventListener(
 	},
 	{ capture: true },
 );
-createRoot(document.getElementById("root")!).render(<WorkbenchProvider><BridgeProvider><App /></BridgeProvider></WorkbenchProvider>);
+createRoot(document.getElementById("root")!).render(<WorkbenchProvider><BridgeProvider><GameTasksProvider><App /></GameTasksProvider></BridgeProvider></WorkbenchProvider>);

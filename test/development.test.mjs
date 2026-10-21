@@ -145,6 +145,17 @@ test("an in-flight admission cannot pass a newly established unknown-execution g
 	assert.equal(calls, 0); assert.equal(f.workbench.store.activeTask(), null);
 });
 
+test("game reservation blocks every development task and rejects an admission already awaiting refresh", windows, async (t) => {
+	const f = await fixture(t), original = f.workbench.workspace.refresh.bind(f.workbench.workspace);
+	let enter, release, effects = 0; const entered = new Promise((done) => { enter = done; });
+	t.mock.method(f.workbench.workspace, "refresh", async (...args) => { const value = await original(...args); enter(); await new Promise((done) => { release = done; }); return value; });
+	const admission = f.workbench.start({ rootId: f.rootId, kind: "edit" }, async () => { effects++; });
+	const refused = assert.rejects(admission, /WORKBENCH_ADMISSION_EXPIRED|GAME_EXECUTION_OWNS_RUNTIME/); await entered;
+	f.workbench.gameWritesFrozen = false; f.workbench.admissionGeneration++; release(); await refused;
+	for (const kind of ["agent", "check", "edit", "revert"]) await assert.rejects(f.workbench.start({ rootId: f.rootId, kind }, async () => { effects++; }), /GAME_EXECUTION_OWNS_RUNTIME/);
+	assert.equal(effects, 0); assert.equal(f.workbench.state().executionBlocked, true);
+});
+
 test("file reverts retain history and refuse to discard later external changes", windows, async (t) => {
 	const f = await fixture(t), before = await f.workbench.workspace.read(f.rootId, "code.mjs");
 	const edit = await f.workbench.request("save", { rootId: f.rootId, path: "code.mjs", expectedSha256: before.sha256, content: "edited\r\n" }); await f.workbench.operation.done;

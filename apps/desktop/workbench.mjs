@@ -30,7 +30,7 @@ export class Workbench {
 		this.store.recoverInterrupted();
 		for (const task of this.store.tasks()) if (task.state === "interrupted" && this.store.invocations(task.id).some((entry) => entry.name === "workspace_check" && entry.state === "unknown")) this.store.saveUi("execution-blocked", { reason: "INTERRUPTED_COMMAND_REQUIRES_RECONCILIATION", taskId: task.id });
 		this.operation = null; this.closing = false; this.admissionGeneration = 0;
-		// No game writer exists in M1. Future game execution must explicitly reconcile this gate.
+		// The trusted supervisor reserves this gate before a game task; renderer/model cannot toggle it.
 		this.gameWritesFrozen = true;
 	}
 	notify(taskId, kind, value) {
@@ -45,7 +45,7 @@ export class Workbench {
 			}),
 			tasks: this.store.tasks().map(({ response, prompt, ...task }) => ({ ...task, prompt: prompt.slice(0, 240) })),
 			activeTask: this.store.activeTask()?.id ?? this.operation?.id ?? null,
-			gameWriteAccess: "not_connected", executionBlocked: Boolean(this.store.ui("execution-blocked")),
+			gameWriteAccess: this.gameWritesFrozen ? "not_connected" : "development_frozen", executionBlocked: !this.gameWritesFrozen || Boolean(this.store.ui("execution-blocked")),
 		};
 	}
 	async add(args) {
@@ -89,12 +89,14 @@ export class Workbench {
 	}
 	async start({ rootId, kind, prompt = "", provider, model, parentId }, action) {
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
+		if (!this.gameWritesFrozen) throw new Error("GAME_EXECUTION_OWNS_RUNTIME");
 		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
 		if (kind === "agent" && this.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_EXECUTION_BLOCKED");
 		if (this.operation || this.store.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");
 		const generation = this.admissionGeneration;
 		await this.workspace.refresh(rootId);
 		if (this.closing || generation !== this.admissionGeneration) throw new Error("WORKBENCH_ADMISSION_EXPIRED");
+		if (!this.gameWritesFrozen) throw new Error("GAME_EXECUTION_OWNS_RUNTIME");
 		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
 		if (kind === "agent" && this.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_EXECUTION_BLOCKED");
 		if (this.operation || this.store.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");

@@ -66,9 +66,10 @@ test("sealed profiles cannot be moved to another identity and endpoints reject c
 	await assert.rejects(f.vault.list(), /BINDING_MISMATCH/);
 });
 test("a protected runtime buffers split SSE echoes and emits only complete sanitized text", async (t) => {
-	let received = false; const secret = "!literal-fixture-" + randomUUID();
+	let received = false; const observedRequests = [], secret = "!literal-fixture-" + randomUUID();
 	const server = createServer(async (request, response) => {
 		received = request.headers.authorization === "Bearer " + secret;
+		observedRequests.push({ method: request.method, path: request.url, authorizationMatched: received });
 		for await (const _chunk of request) {}
 		response.writeHead(200, { "content-type": "text/event-stream" });
 		for (const choice of [{ delta: { role: "assistant", content: "provider echo: " + secret.slice(0, 15) } }, { delta: { content: secret.slice(15) } }, { delta: {}, finish_reason: "stop" }]) response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture-model", choices: [{ index: 0, ...choice }] })}\n\n`);
@@ -79,7 +80,8 @@ test("a protected runtime buffers split SSE echoes and emits only complete sanit
 	const runtime = await createProtectedRuntime({ ...config, key: secret }, new AbortController().signal);
 	const stream = runtime.streamSimple(runtime.getModel(config.id, config.modelId), { messages: [{ role: "user", content: "Echo synthetic fixture", timestamp: Date.now() }] }, { maxTokens: 128, maxRetries: 0 });
 	const events = []; for await (const event of stream) events.push(event);
-	assert.equal(received, true); assert.equal((await stream.result()).stopReason, "stop");
+	const completed = await stream.result(), diagnostic = JSON.stringify({ requests: observedRequests, stopReason: completed.stopReason, error: completed.errorMessage ?? null });
+	assert.equal(completed.stopReason, "stop", diagnostic); assert.equal(received, true, diagnostic);
 	assert.ok(!JSON.stringify(events).includes(secret)); assert.ok(JSON.stringify(events).includes("[redacted]"));
 	assert.equal(events.filter((event) => event.type === "text_delta").map((event) => event.delta).join(""), "provider echo: [redacted]");
 });

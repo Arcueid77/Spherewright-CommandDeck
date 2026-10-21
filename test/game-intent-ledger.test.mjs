@@ -110,6 +110,16 @@ test("native unknown or recovery outcomes require independent audit even if a la
 		await assert.rejects(f.ledger.reconcile(intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/); assert.equal(f.ledger.unresolved()[0].state, "unknown");
 	}
 });
+test("a received terminal for the wrong native identity hard-latches before ordinary context or later proof", async (t) => {
+	for (const extra of [{ actionId: "wrong-action" }, { actionKind: "build" }, { sessionId: "wrong-native-session" }, { planetId: 2 }, { idempotencyKey: "wrong-key" }]) {
+		const f = await fixture(t), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context()); f.ledger.accept(intent.intentId, acceptance(intent));
+		f.setProofReply((request) => ({ request, terminal: completion(f, intent, extra), freshProgression: progression(f), context: resultContext(f) }));
+		await assert.rejects(f.ledger.reconcile(intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+		f.setProofReply(() => { throw new Error("MUST_NOT_READ_AGAIN"); }); await assert.rejects(f.ledger.reconcile(intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+		f.ledger.close(); const reopened = f.open(); await assert.rejects(reopened.reconcile(intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	}
+});
+
 test("proof request identity, local receive age and matching fresh hashes are all required", async (t) => {
 	const f = await fixture(t), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context()); f.ledger.accept(intent.intentId, acceptance(intent));
 	assert.equal(f.ledger.complete, undefined);
@@ -139,6 +149,12 @@ test("short tokens and extra native credential fields are absent from persisted 
 	assert.ok(!JSON.stringify([f.ledger.task(task.id), f.ledger.intent(intent.intentId)]).includes(f.token));
 	f.ledger.close(); const bytes = await readFile(f.file); assert.ok(!bytes.includes(Buffer.from(f.token))); assert.ok(!bytes.includes(Buffer.from("PRIVATE_NATIVE_CREDENTIAL")));
 });
+test("v1 ledger migration preserves the exact pending action, key and scope while adding display storage", async (t) => {
+	const f = await fixture(t), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context()); f.ledger.accept(intent.intentId, acceptance(intent)); f.ledger.close();
+	const old = new DatabaseSync(f.file); old.exec("DROP TABLE game_task_events; DROP TABLE game_task_details; PRAGMA user_version=1"); old.close();
+	const reopened = f.open(); assert.equal(reopened.db.prepare("PRAGMA user_version").get().user_version, 2); assert.equal(reopened.unresolved()[0].idempotencyKey, intent.idempotencyKey); assert.equal(reopened.unresolved()[0].actionId, "action-fixture"); assert.deepEqual(reopened.task(task.id).scope, task.scope); assert.deepEqual(reopened.events(task.id), []);
+});
+
 test("future journal schemas are refused without resetting the existing file", async (t) => {
 	const f = await fixture(t); f.ledger.close(); const db = new DatabaseSync(f.file); db.exec("PRAGMA user_version=99"); db.close(); const before = await readFile(f.file);
 	assert.throws(() => f.open(), /GAME_LEDGER_SCHEMA_UNSUPPORTED/); assert.deepEqual(await readFile(f.file), before);

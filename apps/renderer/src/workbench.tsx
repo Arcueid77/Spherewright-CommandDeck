@@ -143,7 +143,7 @@ export function DevelopmentPanel() {
 		<textarea aria-label="开发任务" className="task-input" maxLength={16000} placeholder="描述一个有限改动，或让 Agent 先检查代码…" value={prompt} onChange={(event) => draft(event.target.value)} />
 		<div className="actions"><button className="accent" disabled={!c.rootId || !profiles.some((profile) => profileToken(profile) === model) || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
 		<div className="check-row"><select aria-label="仓库检查" value={checkId} onChange={(event) => setCheckId(event.target.value)}>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}</select><button disabled={!checkId || !c.root?.canExecute || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void wb<Task>("check", { rootId: c.rootId, checkId }).then((task) => { c.selectTask(task.id); return c.refresh(); }).catch(c.report)}>运行检查</button></div>
-		<p className="muted">构建和测试会运行该仓库代码。游戏动作未接入，模型费用未知。</p>
+		<p className="muted">构建和测试会运行该仓库代码。开发任务不持有游戏工具，模型费用未知。</p>
 		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{taskText(task)}</pre></>}
 		{c.notice && <p className="notice">{c.notice}</p>}
 	</div>;

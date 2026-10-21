@@ -18,6 +18,8 @@ import { resolveTaskProfile } from "./profile-access.mjs";
 import { BridgeMonitor } from "./bridge-monitor.mjs";
 import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
 import { settleShutdown } from "./shutdown-drain.mjs";
+import { GameTasks } from "./game-tasks.mjs";
+import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
@@ -33,7 +35,13 @@ let changingProfiles = false;
 function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
 const native = new WindowHost();
 const events = new EventEmitter();
-const bridge = new BridgeMonitor({ ...(smoke && process.argv.includes("--smoke-bridge") ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), emit: () => emit({ type: "bridge-changed" }) });
+const researchAuthority = {}, gameApprovalAuthority = {};
+const gameSmoke = smoke && process.argv.includes("--smoke-game");
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : smoke && process.argv.includes("--smoke-bridge") ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, emit: () => emit({ type: "bridge-changed" }) });
+const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke,
+	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
+	releaseDevelopment: () => workbenchCall("game-end"), planner: runGamePlanner, emit: () => emit({ type: "game-changed" }),
+});
 let bridgeTimer;
 const runtimePending = new Map(),
 	tests = new Map();
@@ -61,7 +69,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") ? "m0" : "development",
+	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const safeEnvironment = () =>
@@ -88,6 +96,18 @@ function workbenchCall(action, args = {}) {
 		const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("WORKBENCH_RESPONSE_TIMEOUT")); }, 25000);
 		runtimePending.set(id, { resolve, reject, timer });
 		runtime.postMessage({ type: "workbench", id, action, args });
+	});
+}
+function runGamePlanner(command) {
+	const id = "game-planner:" + randomUUID(), { signal, observe, event, ...data } = command;
+	return new Promise((resolve, reject) => {
+		const abort = () => runtime?.postMessage({ type: "abort-game", taskId: data.task.id });
+		const finish = (value, error) => { signal.removeEventListener("abort", abort); error ? reject(error) : resolve(value); };
+		const timer = setTimeout(() => { runtimePending.delete(id); abort(); finish(null, new Error("GAME_RUNTIME_RESPONSE_TIMEOUT")); }, 310000);
+		runtimePending.set(id, { timer, resolve: (value) => finish(value), reject: (error) => finish(null, error) });
+		signal.addEventListener("abort", abort, { once: true });
+		runtime.postMessage({ type: "game-planner", id, command: { ...data, directory: join(privateDirectory, smoke ? "game-agent-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game-agent") } });
+		if (signal.aborted) abort();
 	});
 }
 async function probe(config) {
@@ -147,7 +167,7 @@ async function probe(config) {
 		emit({ type: "probe-state", busy: false });
 	}
 }
-async function api(action, args) {
+async function api(action, args, source) {
 	if (ui?.nativeProbePending && ["viewport", "focus-ui"].includes(action)) return { deferred: true };
 	if (ui?.nativeProbePending && ["attach", "start-fixture", "probe"].includes(action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 	if (stopping && ["viewport", "focus-ui"].includes(action))
@@ -157,7 +177,7 @@ async function api(action, args) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action) || action === "bridge" && args?.action === "snapshot";
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action) || ["bridge", "game"].includes(action) && args?.action === "snapshot";
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -171,6 +191,21 @@ async function api(action, args) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, events: [...state.events] };
+	if (action === "game") {
+		if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
+		if (args.action === "snapshot") return game.snapshot();
+		if (ui?.nativeProbePending || !workbenchReady) throw new Error("GAME_RUNTIME_UNAVAILABLE");
+		if (args.action === "catalog") return game.catalog();
+		if (args.action === "start") return game.start(args.args);
+		if (args.action === "stop") return game.stop();
+		if (args.action === "reprepare") return game.reprepare();
+		return game.reconcile(args.args?.intentId);
+	}
+	if (action === "game-confirmation" || action === "game-confirmed") {
+		if (source !== ui || !source?.registered || ui?.nativeProbePending) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED");
+		if (action === "game-confirmation") return game.confirmation(args?.taskId, source.epoch);
+		return game.confirm(gameApprovalAuthority, args?.nonce, source.epoch);
+	}
 	if (action === "bridge-select") {
 		if (typeof args !== "string" || !isAbsolute(args) || args.length > 4096 || args.includes("\0")) throw new Error("INVALID_MCP_SELECTION");
 		return bridge.select(args);
@@ -248,7 +283,7 @@ async function attachFromCommandLine(args) {
 	if (typeof target !== "string" || !/^adapter:[0-9]+-[0-9]+$/.test(target))
 		throw new Error("INVALID_ADAPTER_TARGET");
 	await api("attach", target);
-	emit({ type: "native-state", text: "已按本次启动参数嵌入选定窗口；游戏动作工具未接入。" });
+	emit({ type: "native-state", text: "已按本次启动参数嵌入选定窗口；游戏任务需在独立面板发起。" });
 	if (args.includes("--window-probe")) {
 		const first = await api("status");
 		await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -285,7 +320,7 @@ function clearUiTests(record) {
 		}
 }
 function startUi() {
-	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : [])];
+	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
 	const child = spawnOwnedUi(process.execPath, args, {
 		cwd: root,
 		env: safeEnvironment(),
@@ -354,7 +389,7 @@ function startUi() {
 			typeof message.id === "string" &&
 			message.id.length < 50
 		) {
-			void api(message.action, message.args).then(
+			void api(message.action, message.args, record).then(
 				(result) =>
 					send(record, { type: "response", id: message.id, ok: true, result }),
 				(error) =>
@@ -407,6 +442,7 @@ async function recoverUi(reason, expected = ui) {
 	if (stopping || recovering || expected !== ui) return;
 	recovering = true;
 	const old = ui;
+	game.invalidateUi(old.epoch);
 	const heartbeatAgeMs = performance.now() - old.lastHeartbeat;
 	recordUiLifecycle({ kind: "recovery", reason, epoch: old.epoch, heartbeatAgeMs, exited: old.child.exitCode !== null || old.child.signalCode !== null, nativeProbe: old.lastNativeProbe });
 	clearUiTests(old);
@@ -510,7 +546,9 @@ async function shutdown(exitCode = 0) {
 	clearInterval(bridgeTimer);
 	runtime?.postMessage({ type: "abort" });
 	try {
-		await settleShutdown([() => bridge.close(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve()]);
+		// Drain game first so its retained original action can still use the same connection.
+		await settleShutdown([() => game.drain(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve()]);
+		await bridge.close();
 		await native.request("detach");
 		await native.request("close");
 	} catch (error) {
@@ -518,6 +556,7 @@ async function shutdown(exitCode = 0) {
 			stopping = false;
 			bridge.resumeAfterCloseFailure(); bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			if (workbenchReady) await workbenchCall("resume-after-close-failure").catch(() => {});
+			await game.resumeAfterCloseFailure().catch(() => {});
 			throw error;
 		}
 		// Only the test-created simulator can be cleaned up here. The DSP client has no child/kill route.
@@ -536,6 +575,7 @@ async function shutdown(exitCode = 0) {
 		}
 	}
 	await vault.tail;
+	game.close();
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
 	runtime?.kill();
@@ -599,11 +639,16 @@ if (!app.requestSingleInstanceLock()) {
 			runtime.stdout.on("data", () => {});
 			runtime.stderr.on("data", () => {});
 			runtime.on("message", (message) => {
+				if (message.type === "game-read-request") {
+					void (async () => { try { if (typeof message.id !== "string" || !/^game-read:[0-9a-f-]{36}$/.test(message.id)) throw new Error("INVALID_GAME_READ"); const value = await game.observeForModel(message.taskId); runtime.postMessage({ type: "game-read-response", id: message.id, ok: true, value }); } catch { runtime.postMessage({ type: "game-read-response", id: message.id, ok: false }); } })().catch(() => {});
+					return;
+				}
+				if (message.type === "game-planner-event") { try { game.plannerEvent(message.taskId, message.kind, message.value); } catch { runtime.postMessage({ type: "abort-game", taskId: message.taskId }); } return; }
 				if (message.type === "credential-request") {
 					void (async () => {
 						try {
 							if (stopping || changingProfiles || !workbenchReady || typeof message.id !== "string" || !/^credential:[0-9a-f-]{36}$/.test(message.id)) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
-							const profile = await resolveTaskProfile(vault, (taskId) => workbenchCall("task", { taskId }), message);
+							const profile = await resolveTaskProfile(vault, (taskId) => message.taskType === "game" ? game.profileTask(taskId) : workbenchCall("task", { taskId }), message);
 							if (stopping || changingProfiles || !workbenchReady) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
 							runtime.postMessage({ type: "credential-response", id: message.id, ok: true, profile });
 						} catch { runtime.postMessage({ type: "credential-response", id: message.id, ok: false }); }
@@ -634,7 +679,7 @@ if (!app.requestSingleInstanceLock()) {
 				runtimePending.clear();
 				emit({
 					type: "notice",
-					text: "开发运行时已停止；未自动重放任务。游戏动作接口未接入。",
+					text: "开发运行时已停止；未自动重放任务。游戏未决动作保留，需核对原动作。",
 				});
 			});
 			const workspaceRoots = [];
@@ -645,6 +690,7 @@ if (!app.requestSingleInstanceLock()) {
 			}
 			await workbenchCall("initialize", { directory: join(privateDirectory, smoke ? "m1-smoke-" + (process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID()) : "workbench"), helperSource: join(root, "artifacts/commands"), roots: workspaceRoots });
 			workbenchReady = true;
+			await game.initialize();
 			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
 			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
@@ -660,7 +706,7 @@ if (!app.requestSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
@@ -673,6 +719,7 @@ if (!app.requestSingleInstanceLock()) {
 					getRuntimePid: () => runtime.pid,
 					getBridgePid: () => bridge.telemetry?.client.child.pid,
 					bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true,
+					getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; },
 					getProbeSequence: () => probeSequence,
 					getState: () => state,
 					beginUiHang: () =>

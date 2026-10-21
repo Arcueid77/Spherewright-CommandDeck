@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld(
 		manageProfiles: (action, args = {}) => ipcRenderer.invoke("deck:profiles-manage", { action, args }),
 		bridge: (action, args = {}) => ipcRenderer.invoke("deck:bridge", { action, args }),
 		chooseBridge: () => ipcRenderer.invoke("deck:choose-bridge"),
+		game: (action, args = {}) => ipcRenderer.invoke("deck:game", { action, args }),
+		confirmResearch: (taskId) => ipcRenderer.invoke("deck:confirm-research", { taskId }),
 		targets: () => ipcRenderer.invoke("deck:targets"),
 		attach: (targetId) => ipcRenderer.invoke("deck:attach", targetId),
 		detach: () => ipcRenderer.invoke("deck:detach"),
