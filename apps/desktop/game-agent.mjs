@@ -5,6 +5,8 @@ import { readProfiles } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
 
+const maximumOutputTokens = 4096;
+
 export function researchForModel(progression, techId) {
 	const target = progression.technologies.find((value) => value.techId === techId);
 	if (!target) throw new Error("RESEARCH_TARGET_NOT_OBSERVED");
@@ -27,8 +29,9 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 	const stream = runtime.streamSimple.bind(runtime);
 	runtime.streamSimple = (model, context, options) => {
 		if (signal.aborted) throw new Error("GAME_MODEL_STOPPED");
-		if (++requests > 4) throw new Error("GAME_MODEL_REQUEST_LIMIT");
-		return stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, 1024), maxRetries: 0 });
+		if (requests >= 4) throw new Error("GAME_MODEL_REQUEST_LIMIT");
+		requests++;
+		return stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, maximumOutputTokens), maxRetries: 0 });
 	};
 	let tail = Promise.resolve();
 	const tools = [];
@@ -36,7 +39,8 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		tools.push({ name, label: name, description, parameters, execute(_id, args) {
 			const run = tail.then(async () => {
 				if (signal.aborted) throw new Error("GAME_MODEL_STOPPED");
-				if (++calls > 8) throw new Error("GAME_MODEL_TOOL_LIMIT");
+				if (calls >= 8) throw new Error("GAME_MODEL_TOOL_LIMIT");
+				calls++;
 				event("tool", { name, text: "started" });
 				const value = await action(args); event("tool", { name, text: "completed" });
 				return { content: [{ type: "text", text: JSON.stringify(value) }], details: { name } };
@@ -56,7 +60,7 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 	};
 	const abort = () => { session?.clearQueue(); void session?.abort(); };
 	try {
-		({ session } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime, model: { ...model, maxTokens: Math.min(model.maxTokens, 1024) }, thinkingLevel: "off", sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), resourceLoader: loader, noTools: "all", tools: names, customTools: tools, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0, timeoutMs: 60000 } }, cacheWarming: "off" }) }));
+		({ session } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime, model: { ...model, maxTokens: Math.min(model.maxTokens, maximumOutputTokens) }, thinkingLevel: "off", sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), resourceLoader: loader, noTools: "all", tools: names, customTools: tools, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0, timeoutMs: 60000 } }, cacheWarming: "off" }) }));
 		if (JSON.stringify(session.getActiveToolNames().sort()) !== JSON.stringify(names) || JSON.stringify(session.getCallableToolNames().sort()) !== JSON.stringify(names)) throw new Error("PI_GAME_TOOL_SET_MISMATCH");
 		signal.addEventListener("abort", abort, { once: true });
 		session.subscribe((eventData) => {
@@ -71,8 +75,9 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		await tail;
 		if (signal.aborted) throw new Error("GAME_MODEL_STOPPED");
 		if (rejectedEcho) throw new Error("PROVIDER_CREDENTIAL_ECHO_REJECTED");
-		if (session.messages.filter((message) => message.role === "assistant").at(-1)?.stopReason !== "stop") throw new Error("GAME_MODEL_DID_NOT_FINISH");
-		event("result", { text: `模型请求 ${requests} 次；工具 ${calls} 次；费用未知。模型没有提交游戏动作。` });
+		const stopReason = session.messages.filter((message) => message.role === "assistant").at(-1)?.stopReason;
+		if (stopReason === "length") throw new Error("GAME_MODEL_OUTPUT_LIMIT");
+		if (stopReason !== "stop") throw new Error("GAME_MODEL_DID_NOT_FINISH");
 		return { proposedTechId, requestCount: requests, toolCalls: calls, tools: names, cost: "unknown", gameCommits: 0 };
-	} finally { signal.removeEventListener("abort", abort); session?.dispose(); }
+	} finally { signal.removeEventListener("abort", abort); session?.dispose(); event("result", { text: `模型请求 ${requests} 次；工具 ${calls} 次；费用未知。模型没有提交游戏动作。` }); }
 }
