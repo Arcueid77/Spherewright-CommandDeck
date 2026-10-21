@@ -184,6 +184,8 @@ M2 切片 `aecd91e7db3bc3be8488738f6d985e61f601c757` 的本地92项测试及准�
 
 离线账本切片 `f37dae5ad59df6968e7335c12bbc8f56a2dd5aae` 的本地完整108项测试和准确 CI [39471754621](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39471754621) 全绿；Astra 的两项授权/读回 P1 已在固定可信适配器契约前提下复核闭合，未把离线结果转为真实授权证明。下一步先为明确、合法的 owned 场景取得安装态/fresh 只读证据，并补真实适配器及 UI 确认来源；没有这些前提时不启用真实写入。当前没有载入、导入、恢复或新建世界的自动许可。
 
+2026-10-21 固定研究 MCP 适配器：已实现宿主持有对象身份的窄 capability，固定开放 progression/player/普通研究 prepare/commit/原 action result 和确切 playbook resource；原公开 `read` 仍拒绝写接口。严格核接口 schema/hint、同 bridge/session/planet、正常排队参数、fresh hash/tick 与 owned/healthy/peaceful 状态，剔除无关保存/飞行凭据。真实 stdio 合成服务已覆盖准备到唯一提交及原动作/队列核销、错误 scope、禁写、pending、错队列和 native unknown 后观察失败；已取得的 native 安全异常先进入持久化硬隔离，不因后续读取失败而丢失。相关28项测试通过。带不可用 descriptor 的源码 MCP 元数据探针仍为64 tools/1 resource，新增固定接口兼容检查通过，0 tools/call；这不是安装态或实机验证。本切片尚未接入桌面、Pi 或真实游戏，M3仍未通过。
+
 ## 8. M4：通过 Deck 开发并验收 Spherewright
 
 这是首发必需的开发者闭环：

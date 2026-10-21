@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, lstat, realpath } from "node:fs/promises";
 import { basename, dirname, join, toNamespacedPath } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { researchDefinitions, supportedResearchTool, validResearchArguments, researchPlaybookUri } from "./research-contract.mjs";
 
 const definitions = {
 	spherewright_get_status: {}, spherewright_get_session_state: {},
@@ -38,16 +39,18 @@ export async function fingerprintMcp(executable) {
 	}
 	return { path, cohortHash: hash.digest("hex"), fileCount: names.length };
 }
-export function launchMcp(selection, { descriptorPath } = {}) {
+export function launchMcp(selection, { descriptorPath, researchAuthority } = {}) {
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|SPHEREWRIGHT_BRIDGE_DESCRIPTOR)/i.test(key)));
 	const child = spawn(toNamespacedPath(selection.path), descriptorPath ? ["--bridge-descriptor", descriptorPath] : [], { cwd: dirname(selection.path), env, shell: false, windowsHide: true, stdio: "pipe" });
-	return new ReadOnlyMcpClient(child);
+	return new ReadOnlyMcpClient(child, { researchAuthority });
 }
 
-// Closed MCP adapter: no public arbitrary request, sampling, elicitation, resource or write-tool API.
+// Closed MCP adapter. Public read() stays M2-only; research requires the supervisor's object identity.
 export class ReadOnlyMcpClient {
 	#pending = new Map(); #sequence = 0; #buffer = ""; #tools = new Map(); #stage = "new"; #discoveryDeadline = Infinity;
-	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000 } = {}) {
+	#researchTools = new Set(); #researchAuthority; #hasPlaybook = false;
+	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000, researchAuthority } = {}) {
+		this.#researchAuthority = researchAuthority && typeof researchAuthority === "object" ? researchAuthority : null;
 		this.child = child; this.timeoutMs = timeoutMs; this.discoveryTimeoutMs = discoveryTimeoutMs; this.closed = false; this.exitConfirmed = false;
 		this.stats = { requests: 0, toolCalls: 0, duplicateReplies: 0, rejectedCalls: 0 };
 		this.exited = new Promise((resolve) => { child.once("exit", () => { this.exitConfirmed = true; this.#fail("MCP_EXITED"); resolve(); }); child.once("error", () => { if (!child.pid) this.exitConfirmed = true; this.#fail("MCP_LAUNCH_FAILED"); resolve(); }); });
@@ -119,14 +122,39 @@ export class ReadOnlyMcpClient {
 		}
 		const tools = init.capabilities?.tools ? await pages(this, "tools/list", "tools") : [], resources = init.capabilities?.resources ? await pages(this, "resources/list", "resources") : [];
 		const names = new Set(), accepted = new Map();
-		for (const tool of tools) { if (typeof tool?.name !== "string" || names.has(tool.name)) throw new Error("MCP_DUPLICATE_OR_INVALID_TOOL"); names.add(tool.name); if (supportedReadTool(tool)) accepted.set(tool.name, tool); }
+		const research = new Set();
+		for (const tool of tools) { if (typeof tool?.name !== "string" || names.has(tool.name)) throw new Error("MCP_DUPLICATE_OR_INVALID_TOOL"); names.add(tool.name); if (supportedReadTool(tool)) accepted.set(tool.name, tool); if (supportedResearchTool(tool)) research.add(tool.name); }
 		this.#tools = accepted; this.#stage = "ready";
-		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
+		this.#researchTools = research; this.#hasPlaybook = resources.filter((value) => value?.uri === researchPlaybookUri).length === 1;
+		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
 		return this.metadata;
 	}
 	supports(name) { return !this.closed && this.#stage === "ready" && this.#tools.has(name); }
 	async read(name, args = {}) {
 		if (!this.supports(name) || !validArguments(name, args)) { this.stats.rejectedCalls++; throw new Error("MCP_READ_NOT_SUPPORTED"); }
+		return this.#callTool(name, args);
+	}
+	researchPort(authority) {
+		if (!this.#researchAuthority || authority !== this.#researchAuthority || this.closed || this.#stage !== "ready" || !this.metadata.researchAvailable) throw new Error("TRUSTED_RESEARCH_CAPABILITY_REQUIRED");
+		const call = (name, args) => {
+			if (this.closed || !this.#researchTools.has(name) || !validResearchArguments(name, args)) { this.stats.rejectedCalls++; return Promise.reject(new Error("RESEARCH_CALL_NOT_SUPPORTED")); }
+			return this.#callTool(name, args);
+		};
+		return Object.freeze({
+			progression: (args) => call("spherewright_get_progression_state", args),
+			player: (args) => call("spherewright_get_player_state", args),
+			prepare: (args) => call("spherewright_prepare_select_research", args),
+			commit: (args) => call("spherewright_commit_select_research", args),
+			result: (args) => call("spherewright_get_action_result", args),
+			playbook: async () => {
+				if (this.closed || !this.#hasPlaybook) throw new Error("RESEARCH_PLAYBOOK_UNAVAILABLE");
+				const reply = await this.#request("resources/read", { uri: researchPlaybookUri });
+				if (!Array.isArray(reply?.contents) || reply.contents.length !== 1 || reply.contents[0].uri !== researchPlaybookUri || typeof reply.contents[0].text !== "string" || !reply.contents[0].text.length || Buffer.byteLength(reply.contents[0].text) > 262144) throw new Error("RESEARCH_PLAYBOOK_INVALID");
+				return reply.contents[0].text;
+			},
+		});
+	}
+	async #callTool(name, args) {
 		this.stats.toolCalls++;
 		const reply = await this.#request("tools/call", { name, arguments: args });
 		if (reply?.isError !== undefined && typeof reply.isError !== "boolean") throw new Error("MCP_TOOL_ERROR_FLAG_INVALID");
