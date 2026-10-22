@@ -17,7 +17,7 @@ export class McpPerformance {
 			if (!['responses', 'rpcErrors', 'aborted'].includes(outcome)) throw new Error('MCP_MEASUREMENT_OUTCOME_INVALID');
 			ended = true; counters[outcome]++; this.#pending--;
 			const finished = this.#now();
-			this.#samples.push({ kind, started, finished, duration: Math.max(0, finished - started) });
+			this.#samples.push({ kind, started, finished, outcome, duration: Math.max(0, finished - started) });
 			if (this.#samples.length > capacity) this.#samples.shift();
 		};
 	}
@@ -29,9 +29,9 @@ export class McpPerformance {
 	snapshot() {
 		const now = this.#now();
 		const timing = samples => {
-			if (!samples.length) return { sampleCount: 0, windowDurationMs: null, lastCompletedAgeMs: null, durationMs: null };
-			const durations = samples.map(value => value.duration).sort((a, b) => a - b), last = Math.max(...samples.map(value => value.finished));
-			return { sampleCount: samples.length, windowDurationMs: Math.max(0, last - Math.min(...samples.map(value => value.started))), lastCompletedAgeMs: Math.max(0, now - last), durationMs: { meanMs: durations.reduce((sum, value) => sum + value, 0) / durations.length, p95Ms: durations[Math.ceil(durations.length * 0.95) - 1], maxMs: durations.at(-1) } };
+			if (!samples.length) return { sampleCount: 0, roundTripSampleCount: 0, windowDurationMs: null, lastCompletedAgeMs: null, durationMs: null };
+			const durations = samples.filter(value => value.outcome !== 'aborted').map(value => value.duration).sort((a, b) => a - b), last = Math.max(...samples.map(value => value.finished));
+			return { sampleCount: samples.length, roundTripSampleCount: durations.length, windowDurationMs: Math.max(0, last - Math.min(...samples.map(value => value.started))), lastCompletedAgeMs: Math.max(0, now - last), durationMs: durations.length ? { meanMs: durations.reduce((sum, value) => sum + value, 0) / durations.length, p95Ms: durations[Math.ceil(durations.length * 0.95) - 1], maxMs: durations.at(-1) } : null };
 		};
 		const byKind = Object.fromEntries(kinds.map(kind => [kind, { ...this.#counts[kind], ...timing(this.#samples.filter(value => value.kind === kind)) }]));
 		const total = kinds.reduce((sum, kind) => { for (const key of Object.keys(sum)) sum[key] += this.#counts[kind][key]; return sum; }, counts());

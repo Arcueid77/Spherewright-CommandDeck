@@ -5,7 +5,7 @@ type Datum<T> = { state: string; reason: string | null; ageMs: number | null; da
 type Coverage = { complete: boolean; returned: number; total: number; pages: number };
 type Numbers = Record<string, number | null>;
 type DurationStatistics = { meanMs: number; p95Ms: number; maxMs: number };
-type ClientTiming = { sampleCount: number; windowDurationMs: number | null; lastCompletedAgeMs: number | null; durationMs: DurationStatistics | null };
+type ClientTiming = { sampleCount: number; roundTripSampleCount: number; windowDurationMs: number | null; lastCompletedAgeMs: number | null; durationMs: DurationStatistics | null };
 type ClientCounts = { started: number; responses: number; rpcErrors: number; aborted: number };
 type ClientPerformance = ClientTiming & ClientCounts & { version: number; source: string; sampleCapacity: number; pending: number; pendingCapacity: number; peakPending: number; transportClosed: boolean; duplicateReplies: number; rejectedBeforeAdmission: number; byKind: Record<"metadata" | "tool" | "resource", ClientTiming & ClientCounts>; lifetime: { state: string; basis: string; durationMs: number; endedAgeMs: number | null } };
 type RuntimePerformance = { version: number; source: string; scope: string; sampleCount: number; sampleCapacity: number; completedUpdates: number; windowDurationMs: number; sampleAgeMs: number | null; updateInterval: DurationStatistics | null; bridgePump: DurationStatistics | null; pendingMainThreadRequests: number; mainThreadQueueCapacity: number; lastProcessedMainThreadRequests: number; maxRequestsPerFrame: number; mainThreadBudgetMs: number };
@@ -59,8 +59,8 @@ function ClientPerformanceReadout({ value, connected }: { value?: ClientPerforma
 	return <section aria-label="MCP 客户端测量"><h3>MCP 客户端测量</h3><p>{connected ? "本连接快照" : "已保留快照 · 当前未确认实时连接"} · {phase}</p>
 		<p>RPC 发起 {value.started} · 工具 {value.byKind.tool.started} · 元数据 {value.byKind.metadata.started} · 资源 {value.byKind.resource.started}<br />RPC 回包 {value.responses} · RPC 错误 {value.rpcErrors} · 中止 {value.aborted}<br />本地在途 {value.pending} / {value.pendingCapacity} · 峰值 {value.peakPending}</p>
 		<table><thead><tr><th>往返耗时（毫秒）</th><th>平均</th><th>P95</th><th>最大</th></tr></thead><tbody>{rows.map(([label, timing]) => <tr key={label}><td>{label}</td><td>{fmt(timing?.meanMs, 2)}</td><td>{fmt(timing?.p95Ms, 2)}</td><td>{fmt(timing?.maxMs, 2)}</td></tr>)}</tbody></table>
-		<p>最近 {value.sampleCount} / {value.sampleCapacity} 个结束请求 · 窗口 {fmt(value.windowDurationMs === null ? null : value.windowDurationMs / 1000, 2)} 秒<br />{lifetime.basis === "launch_request" ? "启动请求" : "客户端接入"}后计时 {fmt(lifetime.durationMs / 1000, 3)} 秒</p>
-		<details><summary>测量范围</summary><p className="muted">本连接的单调时钟测量，往返包含本地传输和服务处理。计数在发起时累计，回包与工具、游戏动作成功分别记录。结束请求包括回包、RPC错误和中止；最近128个记录构成窗口。子进程退出事件冻结生命周期计时，重连建立新计数。界面快照读取沿用现有通道。</p><p>重复回包 {value.duplicateReplies} · 接口或参数拒绝 {value.rejectedBeforeAdmission}</p></details>
+		<p>最近 {value.sampleCount} / {value.sampleCapacity} 个结束请求 · 窗口 {fmt(value.windowDurationMs === null ? null : value.windowDurationMs / 1000, 2)} 秒<br />往返回包样本 {value.roundTripSampleCount}（工具 {value.byKind.tool.roundTripSampleCount}）<br />{lifetime.basis === "launch_request" ? "启动请求" : "客户端接入"}后计时 {fmt(lifetime.durationMs / 1000, 3)} 秒</p>
+		<details><summary>测量范围</summary><p className="muted">本连接的单调时钟测量，往返包含本地传输和服务处理。计数在发起时累计，回包与工具、游戏动作成功分别记录。最近128个结束请求构成窗口；往返仅统计收到RPC结果或错误的样本，中止另计。子进程退出事件冻结生命周期计时，重连建立新计数。界面快照读取沿用现有通道。</p><p>重复回包 {value.duplicateReplies} · 接口或参数拒绝 {value.rejectedBeforeAdmission}</p></details>
 	</section>;
 }
 function RuntimePerformanceReadout({ value }: { value: Datum<RuntimePerformance> | undefined }) {

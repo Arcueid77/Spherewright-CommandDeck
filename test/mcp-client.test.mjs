@@ -83,7 +83,7 @@ test("RPC responses, RPC errors and aborted transport remain distinct from tool 
 	const tool=client(t,'tool-error');await tool.discover();await assert.rejects(tool.read('spherewright_get_status'),/TOOL_REJECTED/);
 	assert.equal(tool.requestPerformance().byKind.tool.responses,1);assert.equal(tool.requestPerformance().byKind.tool.rpcErrors,0);
 	const stalled=client(t,'stall',200);await assert.rejects(stalled.discover(),/REQUEST_TIMEOUT/);await stalled.close();
-	const value=stalled.requestPerformance();assert.equal(value.started,1);assert.equal(value.aborted,1);assert.equal(value.pending,0);assert.equal(value.lifetime.state,'exit_observed');
+	const value=stalled.requestPerformance();assert.equal(value.started,1);assert.equal(value.aborted,1);assert.equal(value.pending,0);assert.equal(value.lifetime.state,'exit_observed');assert.equal(value.roundTripSampleCount,0);assert.equal(value.durationMs,null);
 });
 test('an unconfirmed child exit cannot become a completed lifetime measurement',async()=>{
 	const child=Object.assign(new EventEmitter(),{pid:12345,stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough(),kill(){}});
