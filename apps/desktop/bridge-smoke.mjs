@@ -35,6 +35,17 @@ export async function runBridgeSmoke(driver) {
 	await until(async () => (await evaluate("document.querySelector('[aria-label=\"MCP 客户端测量\"]')?.innerText"))?.includes('RPC 发起'), "CLIENT_MEASUREMENT");
 	const clientTiming = await evaluate("document.querySelector('[aria-label=\"MCP 客户端测量\"]').innerText");
 	assert.ok(clientTiming.includes('本地在途')); assert.ok(clientTiming.includes('工具 RPC')); assert.ok(clientTiming.includes('128')); assert.ok(!clientTiming.includes('PRIVATE_SYNTHETIC'));
+	const uiTiming = () => evaluate("(()=>{const value=document.querySelector('[aria-label=\"界面响应测量\"]')?.getAttribute('data-measurement');return value?JSON.parse(value):null})()");
+	const shown = await driver.testCommand('show-ui'); assert.equal(shown.visible, true); assert.equal(shown.minimized, false);
+	await until(async () => await evaluate("document.visibilityState") === 'visible', "UI_VISIBLE");
+	await until(async () => (await uiTiming())?.frame.sampleCount > 0, "UI_FRAME_MEASUREMENT");
+	const uiBaseline = await uiTiming(); assert.equal(uiBaseline.source, 'renderer_snapshot_frame_v1'); assert.ok(uiBaseline.rpc.sampleCount > 0); assert.ok(uiBaseline.frame.sampleCount <= 128);
+	// Delay this owned test renderer's animation callbacks; this is synthetic load, not game/GPU performance.
+	let uiDelayed;
+	await evaluate("(()=>{window.__m2OriginalFrame=window.requestAnimationFrame;window.requestAnimationFrame=callback=>window.__m2OriginalFrame.call(window,time=>{const until=performance.now()+70;while(performance.now()<until){}callback(time)});return true})()");
+	try { driver.emit({ type: 'bridge-changed' }); await until(async () => (await uiTiming())?.frame.nextFrameMs?.maxMs >= 65, "UI_VISIBLE_DELAY"); uiDelayed = await uiTiming(); }
+	finally { await evaluate("window.requestAnimationFrame=window.__m2OriginalFrame;delete window.__m2OriginalFrame"); }
+	assert.ok(uiDelayed.frame.totalMs.maxMs >= uiDelayed.frame.nextFrameMs.maxMs); assert.ok(!JSON.stringify(uiDelayed).includes('PRIVATE_SYNTHETIC'));
 	await evaluate("[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='科研').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic research"), "RESEARCH");
 	await evaluate("[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='生产').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");
@@ -65,5 +76,6 @@ export async function runBridgeSmoke(driver) {
 	await until(async () => (await evaluate("document.querySelector('[aria-label=\"MCP 客户端测量\"]')?.innerText"))?.includes('子进程退出已确认'), "CLIENT_EXIT_MEASUREMENT");
 	const proof = { runId: driver.runId, syntheticOnly: true, modelRequests: 0, gameCalls: 0, gameWrites: 0, supportedReadTools: initial.metadata.readTools.length, cursorCoverageComplete: true, privateFieldsAbsent: true, actualRate: 24, theoryLabeledEstimate: true, powerMegawattConversion: 60, logisticsStationCount: 2, visualCapture: capture.captured ? "captured" : "unavailable", rendererRejectsGenericCalls: true, uiTransportNoticeInvalidatesData: true, realSupervisorLoss: "not_tested", reloadKeptSameMcp: true, disconnectMarksDataStale: true, ownServerExitConfirmed: true, physicalInput: "not_tested" };
 	Object.assign(proof, { clientRequestCountersDisplayed: true, clientTimingWindowBounded: true, clientExitObservedAndFrozen: true, clientMeasurements: ended });
+	Object.assign(proof, { uiSnapshotTimingDisplayed: true, uiTimingScope: 'Visible snapshot RPC, React commit and subsequent animation callback; synthetic MCP and a test-only 70ms callback delay', uiBaseline, uiDelayed });
 	await writeFile(join(driver.root, ".local/desktop-smoke-bridge.json"), JSON.stringify(proof, null, 2));
 }

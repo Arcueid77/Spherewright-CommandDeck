@@ -49,6 +49,10 @@ async function testCommand(message) {
 		let result;
 		if (message.name === "evaluate")
 			result = await window.webContents.executeJavaScript(message.source);
+		else if (message.name === "show-ui") {
+			window.restore(); window.show(); window.focus();
+			result = { visible: window.isVisible(), minimized: window.isMinimized() };
+		}
 		else if (message.name === "reload") {
 			const loaded = once(window.webContents, "did-finish-load");
 			window.webContents.reload();
