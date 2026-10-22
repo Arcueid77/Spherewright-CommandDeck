@@ -1,5 +1,11 @@
 import { ChildProcess, spawn } from "node:child_process";
-import { basename } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
+
+export function isCurrentElectronUi(executable, args, { currentExecutable = process.execPath, electron = Boolean(process.versions.electron) } = {}) {
+	return electron && typeof executable === "string" && isAbsolute(executable) &&
+		resolve(executable).toLowerCase() === resolve(currentExecutable).toLowerCase() &&
+		Array.isArray(args) && args.includes("--managed-ui") && !args.includes("--owned-host-fixture");
+}
 
 const createdUi = new WeakSet();
 export function spawnOwnedUi(executable, args, options) {
@@ -8,10 +14,9 @@ export function spawnOwnedUi(executable, args, options) {
 		file === "commanddeck.nativehost.exe" &&
 		args.length === 1 &&
 		args[0] === "--fixture";
-	const electron =
-		file === "electron.exe" &&
-		args.includes("--managed-ui") &&
-		!args.includes("--owned-host-fixture");
+	// Packaged Electron is renamed. Its UI must still be this exact executable;
+	// an arbitrary process with a matching basename is not an owned-UI capability.
+	const electron = isCurrentElectronUi(executable, args);
 	if (!fixture && !electron) throw new Error("UI_LAUNCH_ROLE_REJECTED");
 	const child = spawn(executable, args, options);
 	createdUi.add(child);

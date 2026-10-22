@@ -72,6 +72,8 @@ npm run test:portable-pi -- --require-clean-source
 
 This materializes the actual runtime dependency graph, including nested versions and the fixed fork's seven internal packages, into a new physical temporary tree outside the checkout. It preserves package resolution without shipping workspace links, refuses registry substitutes for internal Pi packages, and records file hashes and missing optional dependencies. The copied desktop runtime completes an offline synthetic tool roundtrip with global Node package lookup disabled and developer tools absent from PATH. The existing absolute Node test runner is still used; this is dependency portability evidence, not the full Electron bundle, installer or clean-Windows acceptance. The normal checkout continues resolving these same paths through its pinned workspace links.
 
+`npm run test:renamed-ui` runs the existing workbench integration check with a separate Electron distribution whose executable is renamed `Spherewright-CommandDeck.exe`. The supervisor admits only its own current Electron executable in the explicit UI role; the registered creation handle remains necessary for termination. The check covers UI reload/replacement and single command execution. It still loads the source checkout and does not validate a complete installed bundle.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell
