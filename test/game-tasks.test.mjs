@@ -75,6 +75,20 @@ test("observe-only tasks and model JSON claims never submit a game write", async
 	}
 });
 
+test("a completed action remains busy and excludes new tasks until asynchronous developer-gate release finishes", async (t) => {
+	const f = await fixture(t); f.start(); const preview = await f.host.settled();
+	let entered, finish; const releasing = new Promise(resolve => { entered = resolve; }), barrier = new Promise(resolve => { finish = resolve; });
+	const original = f.host.releaseDevelopment;
+	t.mock.method(f.host, "releaseDevelopment", async () => { entered(); await barrier; await original(); });
+	const challenge = f.host.confirmation(preview.currentTaskId, 1); f.host.confirm(f.approval, challenge.nonce, 1);
+	try {
+		await releasing; const value = f.host.snapshot();
+		assert.equal(value.phase, "completed"); assert.equal(value.unresolved.length, 0); assert.equal(value.busy, true); assert.equal(value.developmentFrozen, true); assert.equal(f.frozen(), true);
+		assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
+	} finally { finish(); await f.host.settled(); }
+	const done = f.host.snapshot(); assert.equal(done.phase, "completed"); assert.equal(done.busy, false); assert.equal(done.developmentFrozen, false); assert.equal(f.frozen(), false);
+});
+
 test("UI replacement during final fresh checks cancels before durable intent or native commit", async (t) => {
 	const f = await fixture(t); f.start(); const ready = await f.host.settled(), challenge = f.host.confirmation(ready.currentTaskId, 1);
 	let enter, release; const entered = new Promise((done) => { enter = done; }); const original = f.host.adapter.observe.bind(f.host.adapter);

@@ -65,7 +65,7 @@ export async function runGameSmoke(driver) {
 		await driver.api("game", { action: "reprepare" }); await until(async () => (await state()).phase === "awaiting_approval", "REPREPARE");
 		if (physical) await realDialog(current.currentTaskId, "confirm_required");
 		else { await driver.testCommand("answer-game-confirmation", { response: 1 }); await evaluate(`window.deck.confirmResearch(${JSON.stringify(current.currentTaskId)})`); }
-		await until(async () => (await state()).phase === "completed", "COMPLETION"); current = await state();
+		await until(async () => { const value = await state(); return value.phase === "completed" && !value.busy && !value.developmentFrozen; }, "COMPLETION_AND_GATE_RELEASE"); current = await state();
 		assert.equal(current.unresolved.length, 0); assert.equal(current.developmentFrozen, false); assert.equal(await driver.getSyntheticCommitCount(), 1); assert.equal(requests, 3);
 		assert.deepEqual(current.tasks[0].intent.terminal.afterQueue, [99, 100]);
 		assert.ok(!JSON.stringify(current).includes("PRIVATE_")); assert.ok(!JSON.stringify(current).includes(key));
