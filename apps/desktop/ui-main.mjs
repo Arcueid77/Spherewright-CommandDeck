@@ -159,7 +159,7 @@ if (typeof process.send !== "function") {
 				},
 			});
 			window.removeMenu();
-			if (portableSmoke) window.webContents.on("console-message", (_event, details) => { if (details.level === "error") { portableRendererErrors.push(String(details.message).slice(0, 400)); if (portableRendererErrors.length > 4) portableRendererErrors.shift(); } });
+			if (portableSmoke) window.webContents.on("console-message", (details) => { if (details.level === "error") { portableRendererErrors.push(String(details.message).slice(0, 400)); if (portableRendererErrors.length > 4) portableRendererErrors.shift(); } });
 			window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 			window.webContents.on("will-navigate", (event) => event.preventDefault());
 			window.webContents.session.setPermissionRequestHandler(

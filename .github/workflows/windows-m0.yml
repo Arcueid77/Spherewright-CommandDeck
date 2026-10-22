@@ -86,5 +86,6 @@ jobs:
             .local/portable-command-smoke.json
             .local/portable-pi-smoke.json
             .local/portable-desktop-smoke.json
+            .local/portable-desktop-application.json
             artifacts/portable-desktop/commanddeck-bundle.json
           if-no-files-found: ignore
