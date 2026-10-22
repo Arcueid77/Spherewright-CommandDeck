@@ -18,9 +18,10 @@ async function fixture(t, prefix = "commanddeck-installer-test-") {
 
 test("installer identities separate product registration from explicit isolated verification", () => {
 	assert.equal(installerIdentity(), productionInstallerId); assert.notEqual(installerIdentity(testId), productionInstallerId);
+	assert.equal(installerIdentity(testId), "SWCD.Test." + testId); assert.ok(installerIdentity(testId).length < 48);
 	for (const id of ["", "../product", "'injection", "a".repeat(36)]) assert.throws(() => installerIdentity(id), /TEST_ID_INVALID/);
 	const script = makeInstallerScript({ ...options, testId });
-	assert.ok(script.includes("AppId=" + productionInstallerId + ".Test." + testId));
+	assert.ok(script.includes("AppId=" + installerIdentity(testId)));
 	assert.ok(script.includes("Isolated test builds never create user shortcuts")); assert.ok(!script.includes('Name: "{autoprograms}'));
 	assert.ok(script.includes("installer-test-scope.txt")); assert.ok(script.includes("DECKTESTROOT")); assert.ok(script.includes("if not TestScopeValid"));
 });

@@ -10,7 +10,9 @@ const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 
 export function installerIdentity(testId = null) {
 	if (testId !== null && !uuid.test(testId)) throw new Error("INSTALLER_TEST_ID_INVALID");
-	return testId === null ? productionInstallerId : productionInstallerId + ".Test." + testId;
+	// Keep the complete UUID and stay below Inno's uninstall-key shortening
+	// threshold. Product registration retains its existing stable identity.
+	return testId === null ? productionInstallerId : "SWCD.Test." + testId;
 }
 
 export async function validateInstalledSmokeSource(source, revision) {
