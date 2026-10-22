@@ -31,6 +31,10 @@ jobs:
       - run: dotnet build native/CommandDeck.Windowing/CommandDeck.Windowing.csproj -c Release -f net472 -p:RestoreLockedMode=true --nologo
       - run: dotnet build native/CommandDeck.AdapterBridge/CommandDeck.AdapterBridge.csproj -c Release -f net472 -p:RestoreLockedMode=true --nologo
       - run: npm test
+      - name: Inspect publish input state
+        run: |
+          git status --porcelain=v1 --untracked-files=normal
+          git submodule foreach --recursive git status --porcelain=v1 --untracked-files=normal
       - run: npm run publish:commands -- --output artifacts/portable-commands
       - run: npm run test:portable-command -- --source artifacts/portable-commands
       - run: npm run test:vault
