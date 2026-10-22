@@ -10,8 +10,14 @@ export async function runPortableSmoke(driver) {
 	assert.equal(app.isPackaged, true);
 	const manifest = JSON.parse(await readFile(join(root, "../../commanddeck-bundle.json"), "utf8"));
 	const runtimePid = getRuntimePid(), shown = await testCommand("show-ui"); assert.equal(shown.visible, true);
-	const renderer = await testCommand("evaluate", { source: "({body:document.body.textContent.length,noNode:typeof require==='undefined',hasBridge:typeof window.deck?.snapshot==='function'})" });
-	assert.ok(renderer.body > 100); assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true);
+	let renderer; const rendererDeadline = performance.now() + 10000;
+	while (true) {
+		renderer = await testCommand("portable-renderer-state");
+		if (renderer.brand?.includes("COMMANDDECK") && renderer.groups > 0 && renderer.body > 100) break;
+		if (performance.now() >= rendererDeadline) throw new Error("PORTABLE_RENDERER_NOT_READY " + JSON.stringify(renderer));
+		await new Promise(resolve => setTimeout(resolve, 50));
+	}
+	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
 	const state = await api("workbench", { action: "state" }); assert.equal(state.roots.length, 0); assert.equal(state.tasks.length, 0);
 	await assert.rejects(api("bridge-select", "C:\\not-a-server.exe"), /PORTABLE_SMOKE_ACTION_REJECTED/);
 	await assert.rejects(api("game", { action: "start" }), /PORTABLE_SMOKE_ACTION_REJECTED/);

@@ -10,6 +10,7 @@ const rendererFile = join(root, "dist/renderer/index.html");
 const rendererUrl = pathToFileURL(rendererFile).href;
 const smoke = process.argv.includes("--smoke-ui");
 const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
+const portableSmoke = smoke && process.argv.includes("--portable-smoke"), portableRendererErrors = [];
 let syntheticGameAnswer = null;
 let window,
 	heartbeat,
@@ -49,6 +50,10 @@ async function testCommand(message) {
 		let result;
 		if (message.name === "evaluate")
 			result = await window.webContents.executeJavaScript(message.source);
+		else if (message.name === "portable-renderer-state" && portableSmoke) {
+			const dom = await window.webContents.executeJavaScript("({body:document.body.textContent.length,brand:document.querySelector('.brand')?.textContent,groups:document.querySelectorAll('.dv-groupview').length,noNode:typeof require==='undefined',hasBridge:typeof window.deck?.snapshot==='function',readyState:document.readyState})");
+			result = { ...dom, loading: window.webContents.isLoadingMainFrame(), errors: [...portableRendererErrors] };
+		}
 		else if (message.name === "show-ui") {
 			window.restore(); window.show(); window.focus();
 			result = { visible: window.isVisible(), minimized: window.isMinimized() };
@@ -154,6 +159,7 @@ if (typeof process.send !== "function") {
 				},
 			});
 			window.removeMenu();
+			if (portableSmoke) window.webContents.on("console-message", (_event, details) => { if (details.level === "error") { portableRendererErrors.push(String(details.message).slice(0, 400)); if (portableRendererErrors.length > 4) portableRendererErrors.shift(); } });
 			window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 			window.webContents.on("will-navigate", (event) => event.preventDefault());
 			window.webContents.session.setPermissionRequestHandler(
