@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
+import { dockviewPointerCompatibility } from "./scripts/dockview-pointer-compat.mjs";
 export default defineConfig({
+	plugins: [dockviewPointerCompatibility()],
 	root: fileURLToPath(new URL("./apps/renderer", import.meta.url)),
 	base: "./",
 	build: {

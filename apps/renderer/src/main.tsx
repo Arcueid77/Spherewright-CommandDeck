@@ -472,6 +472,7 @@ function App() {
 			<div className="workspace" inert={settings || confirmation}>
 				<DockviewReact
 					className="dockview-theme-abyss"
+					dndStrategy="pointer"
 					components={components}
 					onReady={(event) => { dock.current = event.api; void ready(event); }}
 				/>
