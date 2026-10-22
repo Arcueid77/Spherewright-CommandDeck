@@ -22,10 +22,14 @@ export async function runBridgeSmoke(driver) {
 	async function until(predicate, label) { const deadline = Date.now() + 8000; while (!await predicate()) { if (Date.now() >= deadline) { await writeFile(join(base, "failure.private.json"), JSON.stringify({ label, state: await state(), ui: await evaluate("({text:document.body.innerText,tabs:[...document.querySelectorAll('.dv-tab')].map(tab=>({text:tab.textContent,active:tab.className}))})") }, null, 2)); throw new Error("BRIDGE_SMOKE_TIMEOUT_" + label); } await delay(50); } }
 	await until(async () => (await state()).observation?.production.data?.coverage.complete === true, "DATA");
 	const initial = await state(), pid = driver.getBridgePid(); assert.equal(initial.observation.summary.data.coverage.returned, 2); assert.equal(initial.observation.production.data.planets[0].production[0].actualProductionPerMinute, 24);
+	assert.equal(initial.observation.runtimePerformance.state, 'observed'); assert.equal(initial.observation.runtimePerformance.data.updateInterval.p95Ms, 18);
 	assert.ok(!JSON.stringify(initial).includes("PRIVATE_SYNTHETIC"));
 	const denied = await evaluate("(async()=>{let n=0;for(const action of ['call','tools/call','select','commit'])try{await window.deck.bridge(action,{})}catch{n++}return n})()"); assert.equal(denied, 4);
 	await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='只读舰桥').click()");
 	await until(async () => (await evaluate("document.body.innerText")).includes("MCP 服务已连接"), "CONNECTION");
+	await until(async () => (await evaluate("document.body.innerText")).includes("Unity 更新间隔"), "RUNTIME_PERFORMANCE");
+	const timing = await evaluate("document.querySelector('[aria-label=\"运行性能\"]').innerText");
+	assert.ok(timing.includes('60 / 600')); assert.ok(timing.includes('P95')); assert.ok(timing.includes('当前排队 2 / 32')); assert.ok(!timing.includes('PRIVATE_SYNTHETIC'));
 	await evaluate("[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='科研').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic research"), "RESEARCH");
 	await evaluate("[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='生产').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ReadOnlyTelemetry } from "../apps/desktop/telemetry.mjs";
+import { runtimePerformanceFixture } from "./fixtures/runtime-performance.mjs";
 
 const window = { state: "ready", startGameTick: 601, endGameTick: 1200, elapsedGameTicks: 600, elapsedGameSeconds: 10, wallClockElapsedSeconds: 0, excludedNonGameSeconds: 0, crossedSessionBoundary: false };
 function fake(options = {}) {
@@ -9,7 +10,7 @@ function fake(options = {}) {
 	c.read = async (name, args = {}) => {
 		c.calls.push({ name, args }); c.stats.toolCalls++;
 		await options.before?.(name, args);
-		if (name === "spherewright_get_status") return { success: true, status: { bridgeConnected: true, bridgeInstanceId: "bridge-fixture", protocolVersion: 1, pluginVersion: "fixture", gameVersion: "fixture", gameLoaded: true } };
+		if (name === "spherewright_get_status") return { success: true, status: { bridgeConnected: true, bridgeInstanceId: "bridge-fixture", protocolVersion: 1, pluginVersion: "fixture", gameVersion: "fixture", gameLoaded: true, runtimePerformance: options.runtimePerformance } };
 		if (name === "spherewright_get_session_state") return { success: true, result: { bridgeConnected: true, gameLoaded: !options.menu, ownedBySpherewright: !options.restricted, accessRestricted: Boolean(options.restricted), sessionId: options.changeWorld && ++sessionReads > 1 ? "different-world" : "world-fixture", gameTick: 1200, localPlanetId: 1, revision: 4, saveName: "PRIVATE_SAVE_NAME", restartResumeToken: "PRIVATE_RESUME_CREDENTIAL", flightCheckpointReloadToken: "PRIVATE_RELOAD_CREDENTIAL" } };
 		const second = Boolean(args.cursor), planetId = second ? 2 : 1, watched = name.endsWith("production");
 		const item = { itemId: args.itemIds?.[0], itemName: "Synthetic matrix", producedCount: 0, consumedCount: 1, actualProductionPerMinute: 0, actualConsumptionPerMinute: 6, theoreticalProductionPerMinute: 60, utilization: 0, theoreticalRateSource: "current_runtime_component_formula_v1", theoreticalCoverage: "complete", rateSource: "native_factory_statistics_level_0", findings: [], findingCount: 0, ...options.item };
@@ -38,6 +39,21 @@ test("menu and restricted sessions issue no production reads and reveal no priva
 		assert.equal(c.calls.length, 2); assert.equal(telemetry.snapshot().summary.data, null);
 		if (option.restricted) { assert.equal(telemetry.snapshot().summary.state, "restricted"); assert.equal(telemetry.snapshot().session.data.tick, null); assert.equal(telemetry.snapshot().session.data.localPlanetId, null); }
 	}
+});
+test("process performance shares status reads and ages by sampler age plus all transit time", async () => {
+	let now=1000;
+	const client=fake({runtimePerformance:runtimePerformanceFixture(), before(name){ if(name.endsWith('get_status'))now+=200; if(name.endsWith('get_session_state'))now+=100; }});
+	const telemetry=new ReadOnlyTelemetry(client,{now:()=>now}); await telemetry.refresh();
+	const value=telemetry.snapshot(); assert.equal(client.calls.length,8); assert.equal(value.runtimePerformance.ageMs,603); assert.equal(value.runtimePerformance.state,'observed');
+	assert.ok(!JSON.stringify(value).includes('PRIVATE_SYNTHETIC')); now+=15000;
+	assert.equal(telemetry.snapshot().runtimePerformance.state,'stale');
+	await telemetry.close(); assert.equal(telemetry.snapshot().runtimePerformance.state,'stale');
+});
+test("fresh status cannot revive a stalled sampler and menu observations need no world reads", async () => {
+	const source=runtimePerformanceFixture(); source.sampleAgeMs=20000;
+	const client=fake({menu:true,runtimePerformance:source}), telemetry=new ReadOnlyTelemetry(client,{now:()=>0}); await telemetry.refresh();
+	assert.equal(client.calls.length,2); assert.equal(telemetry.snapshot().bridge.state,'observed'); assert.equal(telemetry.snapshot().runtimePerformance.state,'stale');
+	assert.equal(telemetry.snapshot().runtimePerformance.ageMs,20000);
 });
 test("a world change during collection clears candidate data instead of publishing a mixed snapshot", async () => {
 	const telemetry = new ReadOnlyTelemetry(fake({ changeWorld: true })); await telemetry.refresh();

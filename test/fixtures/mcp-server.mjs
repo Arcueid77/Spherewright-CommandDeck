@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { runtimePerformanceFixture } from './runtime-performance.mjs';
 const mode = process.argv[2] ?? "normal";
 const send = (value) => { const write = () => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n"); if (mode === "slow-metadata") setTimeout(write, 750); else write(); };
 const tool = (name, properties = {}, required = []) => ({ name, inputSchema: { type: "object", properties: Object.fromEntries(Object.entries(properties).map(([key, type]) => [key, type === "array" ? { type, items: { type: "integer" } } : { type }])), required }, annotations: { readOnlyHint: true, destructiveHint: false } });
@@ -21,7 +22,7 @@ input.on("line", (line) => {
 		if (mode === "telemetry") {
 			const name = message.params.name, args = message.params.arguments;
 			let value;
-			if (name === "spherewright_get_status") value = { success: true, status: { bridgeConnected: true, bridgeInstanceId: "synthetic-bridge", protocolVersion: 1, pluginVersion: "synthetic", gameVersion: "synthetic", gameLoaded: true } };
+			if (name === "spherewright_get_status") value = { success: true, status: { bridgeConnected: true, bridgeInstanceId: "synthetic-bridge", protocolVersion: 1, pluginVersion: "synthetic", gameVersion: "synthetic", gameLoaded: true, runtimePerformance: runtimePerformanceFixture() } };
 			else if (name === "spherewright_get_session_state") value = { success: true, result: { bridgeConnected: true, sessionId: "synthetic-session", gameLoaded: true, ownedBySpherewright: true, accessRestricted: false, gameTick: 1200, localPlanetId: 1, revision: 1, saveName: "PRIVATE_SYNTHETIC_SAVE", restartResumeToken: "PRIVATE_SYNTHETIC_TOKEN" } };
 			else {
 				const production = name.endsWith("production"), planetId = args.cursor ? 2 : 1;

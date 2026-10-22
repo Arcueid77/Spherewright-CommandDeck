@@ -4,10 +4,12 @@ import { ageObservation } from "./observation-state";
 type Datum<T> = { state: string; reason: string | null; ageMs: number | null; data: T | null };
 type Coverage = { complete: boolean; returned: number; total: number; pages: number };
 type Numbers = Record<string, number | null>;
+type DurationStatistics = { meanMs: number; p95Ms: number; maxMs: number };
+type RuntimePerformance = { version: number; source: string; scope: string; sampleCount: number; sampleCapacity: number; completedUpdates: number; windowDurationMs: number; sampleAgeMs: number | null; updateInterval: DurationStatistics | null; bridgePump: DurationStatistics | null; pendingMainThreadRequests: number; mainThreadQueueCapacity: number; lastProcessedMainThreadRequests: number; maxRequestsPerFrame: number; mainThreadBudgetMs: number };
 type Planet = { planetId: number; name: string | null; capturedAtGameTick: number; power: Numbers; logistics: Numbers; production: Item[] };
 type Item = { itemId: number; itemName: string | null; actualProductionPerMinute: number | null; actualConsumptionPerMinute: number | null; theoreticalProductionPerMinute: number | null; theoreticalCoverage: string | null; utilization: number | null; findingsTruncated: boolean | null; findings: { kind: string; confidence: string; objectId: number }[] };
 type Snapshot = { source: string; scope: string; capturedAtGameTick: number; snapshotId: string; coverage: Coverage; planets: Planet[]; research?: Numbers & { currentTechName?: string | null; techQueue?: number[]; techQueueTruncated?: boolean | null }; window?: { state: string; resetReason: string | null; startGameTick: number | null; endGameTick: number | null; elapsedGameTicks: number | null; elapsedGameSeconds: number | null } };
-type State = { busy: boolean; selected: { path: string; cohortHash: string; fileCount: number } | null; metadata: { protocolVersion: string; serverVersion: string; toolCount: number; resourceCount: number; readTools: string[]; researchAvailable?: boolean; schemaHash: string } | null; error: string | null; observation: { connected: boolean; refreshing: boolean; itemIds: number[]; requests: number; bridge: Datum<{ pluginVersion: string; gameVersion: string; protocolVersion: number; gameLoaded: boolean }>; session: Datum<{ gameLoaded: boolean; owned: boolean; accessRestricted: boolean; tick: number | null }>; summary: Datum<Snapshot>; production: Datum<Snapshot>; events: { reason: string }[] } | null };
+type State = { busy: boolean; selected: { path: string; cohortHash: string; fileCount: number } | null; metadata: { protocolVersion: string; serverVersion: string; toolCount: number; resourceCount: number; readTools: string[]; researchAvailable?: boolean; schemaHash: string } | null; error: string | null; observation: { connected: boolean; refreshing: boolean; itemIds: number[]; requests: number; bridge: Datum<{ pluginVersion: string; gameVersion: string; protocolVersion: number; gameLoaded: boolean }>; session: Datum<{ gameLoaded: boolean; owned: boolean; accessRestricted: boolean; tick: number | null }>; summary: Datum<Snapshot>; production: Datum<Snapshot>; runtimePerformance?: Datum<RuntimePerformance>; events: { reason: string }[] } | null };
 type Context = { state: State; notice: string; refresh: () => Promise<void>; act: (action: string, args?: Record<string, unknown>) => Promise<void>; choose: () => Promise<void> };
 const Context = createContext<Context>(null!);
 export const useBridge = () => useContext(Context);
@@ -38,12 +40,26 @@ export function ConnectionPanel() {
 		<div className="actions"><button className="accent" disabled={state.busy} onClick={() => void c.choose()}>选择 MCP 服务</button><button disabled={state.busy || !state.selected || observation?.connected} onClick={() => void c.act("connect")}>重新连接</button><button disabled={state.busy || !observation?.connected} onClick={() => void c.act("disconnect")}>断开</button><button disabled={!observation?.connected} onClick={() => void c.act("refresh")}>刷新数据</button></div>
 		<p>{state.busy ? "正在核对并连接本机服务…" : observation?.connected ? "MCP 服务已连接" : "MCP 服务未连接"} · 本页面只读</p>
 		{observation?.bridge.data && <p>Spherewright {observation.bridge.data.pluginVersion} · DSP {observation.bridge.data.gameVersion}<br />游戏状态：{observation.session.data?.gameLoaded ? observation.session.data.owned && !observation.session.data.accessRestricted ? "已载入可观察世界" : "世界观察受限" : "主菜单或尚未就绪"}{observation.bridge.state === "stale" ? "（旧状态）" : ""}</p>}
+		<RuntimePerformanceReadout value={observation?.runtimePerformance} />
 		{state.metadata && <p>已发现 {state.metadata.toolCount} 个接口 / {state.metadata.resourceCount} 个资源；本页面仅使用已核对的 {state.metadata.readTools.length} 个只读接口。{state.metadata.researchAvailable ? "有限研究可在“游戏 Agent”中单独发起。" : ""}</p>}
 		{(state.error || c.notice) && <p role="status" className="notice">{c.notice || "连接尚未确认。文件发生变化时请重新选择服务；不会自动启动第二份。"}</p>}
 		<p className="muted">本页不会载入存档或提交游戏动作。关闭面板后，连接继续由后台维护；退出应用会关闭本次创建的 MCP 服务。每次启动应用后需重新选择服务。</p>
 		{state.selected && <details><summary>连接详情</summary><p className="repository-path">{state.selected.path}</p><p>服务文件组：{state.selected.fileCount} 个文件</p><code>{state.selected.cohortHash}</code>{state.metadata && <p>MCP {state.metadata.serverVersion} · 协议 {state.metadata.protocolVersion}<br />接口摘要 {state.metadata.schemaHash}</p>}</details>}
 		{observation?.events.length ? <details><summary>最近的读取事件</summary>{observation.events.slice(-6).map((event, index) => <p key={index}>{reasons[event.reason] ?? event.reason}</p>)}</details> : null}
 	</div>;
+}
+function RuntimePerformanceReadout({ value }: { value: Datum<RuntimePerformance> | undefined }) {
+	const data = value?.data;
+	const rows: [string, DurationStatistics | null][] = [["Unity 更新间隔", data?.updateInterval ?? null], ["Bridge 主线程处理", data?.bridgePump ?? null]];
+	return <section aria-label="运行性能"><h3>运行性能</h3><div className={`observation-state ${value?.state ?? "unavailable"}`}>{status[value?.state ?? "unavailable"] ?? value?.state}{data?.sampleAgeMs !== null && data?.sampleAgeMs !== undefined && value?.ageMs !== null ? ` · 最后样本 ${fmt((value?.ageMs ?? 0) / 1000)} 秒前` : ""}</div>
+		{value?.state === "unsupported" && <p className="muted">当前安装版本未提供兼容的运行性能数据。</p>}
+		{value?.reason === "RUNTIME_PERFORMANCE_INVALID" && <p className="muted">性能数据未通过格式核对。</p>}
+		{data && <><p>{data.sampleCount} / {data.sampleCapacity} 个间隔 · 窗口 {fmt(data.windowDurationMs / 1000, 2)} 秒 · 本次进程</p>
+			<table><thead><tr><th>耗时（毫秒）</th><th>平均</th><th>P95</th><th>最大</th></tr></thead><tbody>{rows.map(([label, timing]) => <tr key={label}><td>{label}</td><td>{fmt(timing?.meanMs, 2)}</td><td>{fmt(timing?.p95Ms, 2)}</td><td>{fmt(timing?.maxMs, 2)}</td></tr>)}</tbody></table>
+			<p>当前排队 {data.pendingMainThreadRequests} / {data.mainThreadQueueCapacity} · 上次处理 {data.lastProcessedMainThreadRequests} 个请求<br />每帧上限 {data.maxRequestsPerFrame} 个 · 调度预算 {fmt(data.mainThreadBudgetMs, 2)} 毫秒</p>
+		</>}
+		<p className="muted">更新间隔由游戏主线程计时，与 GPU 帧率不同。窗口保留长停顿；调度预算不抢占执行中的请求。</p>
+	</section>;
 }
 export function ResearchPanel() {
 	const value = useBridge().state.observation?.summary, research = value?.data?.research;

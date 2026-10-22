@@ -24,3 +24,9 @@ test("a delayed age-zero RPC snapshot is stale on arrival and only a new snapsho
 	const delayed = ageObservation(response, 20000); assert.equal(delayed.summary.state, "stale"); assert.equal(delayed.summary.ageMs, 20000);
 	const fresh = ageObservation(response, 5); assert.equal(fresh.summary.state, "observed"); assert.equal(fresh.summary.ageMs, 5);
 });
+test("runtime sample ages keep advancing in the UI and disconnect preserves only stale measurements", () => {
+	const original={...fixture(),runtimePerformance:{state:'warming_up',reason:null,ageMs:14000,data:{sampleCount:1}}};
+	const shown=ageObservation(original,2000); assert.equal(shown.runtimePerformance.ageMs,16000); assert.equal(shown.runtimePerformance.state,'stale');
+	assert.equal(original.runtimePerformance.ageMs,14000); assert.equal(original.runtimePerformance.state,'warming_up');
+	const disconnected=ageObservation(original,0,true); assert.equal(disconnected.runtimePerformance.state,'stale'); assert.equal(disconnected.runtimePerformance.data.sampleCount,1);
+});

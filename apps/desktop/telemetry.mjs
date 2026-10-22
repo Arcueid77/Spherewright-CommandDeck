@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runtimePerformanceDatum } from "./runtime-performance.mjs";
 
 const text = (value, max = 200) => typeof value === "string" && value.length <= max ? value : null;
 const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -42,11 +43,11 @@ export class ReadOnlyTelemetry {
 	constructor(client, { now = () => performance.now(), emit = () => {}, intervalMs = 5000, staleMs = 15000 } = {}) {
 		this.client = client; this.now = now; this.emit = emit; this.intervalMs = intervalMs; this.staleMs = staleMs;
 		this.generation = 0; this.identity = null; this.inFlight = null; this.lastStarted = -Infinity; this.connected = true;
-		this.itemIds = [6001, 6002, 6003, 6004]; this.summary = empty(); this.production = empty(); this.bridge = empty(); this.session = empty(); this.events = [];
+		this.itemIds = [6001, 6002, 6003, 6004]; this.summary = empty(); this.production = empty(); this.bridge = empty(); this.session = empty(); this.runtimePerformance = empty(); this.events = [];
 	}
 	snapshot() {
-		const qualify = (value) => ({ ...value, state: value.state === "observed" && (!this.connected || this.client.closed || this.now() - value.receivedAt > this.staleMs) ? "stale" : value.state, ageMs: value.receivedAt === null ? null : Math.max(0, this.now() - value.receivedAt) });
-		return structuredClone({ connected: this.connected && !this.client.closed, refreshing: Boolean(this.inFlight), itemIds: this.itemIds, bridge: qualify(this.bridge), session: qualify(this.session), summary: qualify(this.summary), production: qualify(this.production), events: this.events, requests: this.client.stats?.toolCalls ?? 0 });
+		const qualify = (value) => ({ ...value, state: ["observed", "warming_up"].includes(value.state) && (!this.connected || this.client.closed || this.now() - value.receivedAt > this.staleMs) ? "stale" : value.state, ageMs: value.receivedAt === null ? null : Math.max(0, this.now() - value.receivedAt) });
+		return structuredClone({ connected: this.connected && !this.client.closed, refreshing: Boolean(this.inFlight), itemIds: this.itemIds, bridge: qualify(this.bridge), session: qualify(this.session), summary: qualify(this.summary), production: qualify(this.production), runtimePerformance: qualify(this.runtimePerformance), events: this.events, requests: this.client.stats?.toolCalls ?? 0 });
 	}
 	watch(itemIds) {
 		if (!Array.isArray(itemIds) || !itemIds.length || itemIds.length > 16 || !itemIds.every((id) => Number.isSafeInteger(id) && id > 0) || new Set(itemIds).size !== itemIds.length) throw new Error("INVALID_WATCHED_ITEM_IDS");
@@ -92,16 +93,18 @@ export class ReadOnlyTelemetry {
 	}
 	async #context(generation, deadline) {
 		if (!this.client.supports("spherewright_get_status") || !this.client.supports("spherewright_get_session_state")) throw new Error("READ_CONTEXT_UNSUPPORTED");
+		const statusReadStartedAt = this.now();
 		const status = await this.#read("spherewright_get_status", {}, generation, deadline); failure(status);
 		const result = await this.#read("spherewright_get_session_state", {}, generation, deadline); failure(result);
 		if (status.status?.bridgeConnected !== true || status.status?.protocolVersion !== 1 || result.result?.bridgeConnected !== true) throw new Error("BRIDGE_PROTOCOL_UNSUPPORTED");
-		return { status: status.status, session: result.result };
+		return { status: status.status, session: result.result, statusReadStartedAt };
 	}
 	async #cycle(generation, watched) {
 		const deadline = this.now() + 30000;
 		try {
 			const initial = await this.#context(generation, deadline); if (generation !== this.generation || !this.connected) return this.snapshot();
 			this.bridge = { state: "observed", reason: null, receivedAt: this.now(), data: { pluginVersion: text(initial.status.pluginVersion), protocolVersion: initial.status.protocolVersion, gameVersion: text(initial.status.gameVersion), gameLoaded: boolean(initial.status.gameLoaded), writeHealth: text(initial.status.writeHealth) } };
+			this.runtimePerformance = runtimePerformanceDatum(initial.status.runtimePerformance, initial.statusReadStartedAt);
 			this.session = { state: "observed", reason: null, receivedAt: this.now(), data: session(initial.session) };
 			if (initial.session.gameLoaded !== true) { this.#clearWorld("MAIN_MENU"); return this.snapshot(); }
 			if (initial.session.ownedBySpherewright !== true || initial.session.accessRestricted !== false) { this.#clearWorld("READ_ACCESS_RESTRICTED", "restricted"); return this.snapshot(); }
@@ -119,8 +122,9 @@ export class ReadOnlyTelemetry {
 		} catch (error) {
 			if (generation !== this.generation || !this.connected) return this.snapshot();
 			const reason = error.message.startsWith("MCP_") ? "MCP_UNAVAILABLE" : /^[A-Z_]+$/.test(error.message) ? error.message : "READ_FAILED";
+			if (this.runtimePerformance.data) this.runtimePerformance = { ...this.runtimePerformance, state: "stale", reason };
 			if (["READ_ACCESS_RESTRICTED", "READ_CONTEXT_CHANGED", "READ_CONTEXT_TICK_CHANGED"].includes(reason)) { this.#clearWorld(reason, reason === "READ_ACCESS_RESTRICTED" ? "restricted" : "unavailable"); this.session = empty(reason); }
-			else { for (const key of ["summary", "production", "bridge", "session"]) this[key] = { ...this[key], state: this[key].data ? "stale" : reason === "READ_CONTEXT_UNSUPPORTED" ? "unsupported" : "unavailable", reason }; }
+			else { for (const key of ["summary", "production", "bridge", "session", "runtimePerformance"]) this[key] = { ...this[key], state: this[key].data ? "stale" : reason === "READ_CONTEXT_UNSUPPORTED" ? "unsupported" : "unavailable", reason }; }
 			this.#event(reason); return this.snapshot();
 		}
 	}
