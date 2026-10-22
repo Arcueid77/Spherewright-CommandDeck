@@ -6,9 +6,10 @@ export class BridgeMonitor {
 	constructor({ fingerprint = fingerprintMcp, launch = launchMcp, emit = () => {}, researchAuthority, observation } = {}) {
 		this.fingerprint = fingerprint; this.launch = launch; this.emit = emit; this.selection = null; this.metadata = null; this.telemetry = null; this.pendingClient = null; this.operation = null; this.closing = false; this.error = null;
 		this.observation = observationLimits(observation); this.observationStarted = false;
+		this.connectionGeneration = 0;
 		this.researchAuthority = this.observation ? null : researchAuthority; this.researchLease = null;
 	}
-	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null, requestPerformance: (this.pendingClient ?? this.telemetry?.client)?.requestPerformance?.() ?? null, observationPolicy: this.observation }; }
+	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null, requestPerformance: (this.pendingClient ?? this.telemetry?.client)?.requestPerformance?.() ?? null, observationPolicy: this.observation, connectionGeneration: this.connectionGeneration }; }
 	mutate(action) {
 		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
 		if (this.researchLease) return Promise.reject(new Error("GAME_TASK_OWNS_BRIDGE"));
@@ -31,7 +32,7 @@ export class BridgeMonitor {
 		if (selection.path !== this.selection.path || selection.cohortHash !== this.selection.cohortHash || selection.fileCount !== this.selection.fileCount) throw new Error("MCP_COHORT_CHANGED_RESELECT_REQUIRED");
 		if (this.closing) throw new Error("BRIDGE_MONITOR_CLOSING");
 		if (this.observation) this.observationStarted = true;
-		const client = this.launch(selection, { researchAuthority: this.researchAuthority, observation: this.observation }); this.pendingClient = client;
+		const client = this.launch(selection, { researchAuthority: this.researchAuthority, observation: this.observation }); this.connectionGeneration++; this.pendingClient = client;
 		try {
 			const metadata = await client.discover(), after = await this.fingerprint(selection.path);
 			if (after.cohortHash !== selection.cohortHash || after.path !== selection.path || after.fileCount !== selection.fileCount) throw new Error("MCP_COHORT_CHANGED_DURING_START");

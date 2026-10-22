@@ -10,11 +10,11 @@ function fixture() {
 	return { monitor, starts: () => starts, change: () => { hash = "b".repeat(64); }, blockClose: () => { failClose = true; } };
 }
 test("a selected observer survives UI snapshots but reconnect checks its exact cohort", async () => {
-	const f = fixture(); assert.equal(f.starts(), 0); await f.monitor.select(selection.path); assert.equal(f.starts(), 1);
+	const f = fixture(); assert.equal(f.starts(), 0); assert.equal(f.monitor.snapshot().connectionGeneration, 0); await f.monitor.select(selection.path); assert.equal(f.starts(), 1); assert.equal(f.monitor.snapshot().connectionGeneration, 1);
 	for (let index = 0; index < 5; index++) f.monitor.snapshot(); assert.equal(f.starts(), 1);
 	await f.monitor.disconnect(); assert.equal(f.monitor.snapshot().observation.connected, false); f.change();
-	await assert.rejects(f.monitor.connect(), /COHORT_CHANGED_RESELECT/); assert.equal(f.starts(), 1);
-	await f.monitor.select(selection.path); assert.equal(f.starts(), 2); await f.monitor.close();
+	await assert.rejects(f.monitor.connect(), /COHORT_CHANGED_RESELECT/); assert.equal(f.starts(), 1); assert.equal(f.monitor.snapshot().connectionGeneration, 1);
+	await f.monitor.select(selection.path); assert.equal(f.starts(), 2); assert.equal(f.monitor.snapshot().connectionGeneration, 2); await f.monitor.close();
 });
 test("an unconfirmed old MCP exit blocks replacement rather than starting a second process", async () => {
 	const f = fixture(); await f.monitor.select(selection.path); f.blockClose();

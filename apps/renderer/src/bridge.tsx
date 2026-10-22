@@ -13,7 +13,7 @@ type RuntimePerformance = { version: number; source: string; scope: string; samp
 type Planet = { planetId: number; name: string | null; capturedAtGameTick: number; power: Numbers; logistics: Numbers; production: Item[] };
 type Item = { itemId: number; itemName: string | null; actualProductionPerMinute: number | null; actualConsumptionPerMinute: number | null; theoreticalProductionPerMinute: number | null; theoreticalCoverage: string | null; utilization: number | null; findingsTruncated: boolean | null; findings: { kind: string; confidence: string; objectId: number }[] };
 type Snapshot = { source: string; scope: string; capturedAtGameTick: number; snapshotId: string; coverage: Coverage; planets: Planet[]; research?: Numbers & { currentTechName?: string | null; techQueue?: number[]; techQueueTruncated?: boolean | null }; window?: { state: string; resetReason: string | null; startGameTick: number | null; endGameTick: number | null; elapsedGameTicks: number | null; elapsedGameSeconds: number | null } };
-type State = { busy: boolean; selected: { path: string; cohortHash: string; fileCount: number } | null; metadata: { protocolVersion: string; serverVersion: string; toolCount: number; resourceCount: number; readTools: string[]; researchAvailable?: boolean; schemaHash: string } | null; error: string | null; requestPerformance?: ClientPerformance | null; observationPolicy?: { maxToolRequests: number; maxDurationMs: number } | null; observation: { connected: boolean; refreshing: boolean; itemIds: number[]; requests: number; bridge: Datum<{ pluginVersion: string; gameVersion: string; protocolVersion: number; gameLoaded: boolean }>; session: Datum<{ gameLoaded: boolean; owned: boolean; accessRestricted: boolean; tick: number | null }>; summary: Datum<Snapshot>; production: Datum<Snapshot>; runtimePerformance?: Datum<RuntimePerformance>; events: { reason: string }[] } | null };
+type State = { connectionGeneration?: number; busy: boolean; selected: { path: string; cohortHash: string; fileCount: number } | null; metadata: { protocolVersion: string; serverVersion: string; toolCount: number; resourceCount: number; readTools: string[]; researchAvailable?: boolean; schemaHash: string } | null; error: string | null; requestPerformance?: ClientPerformance | null; observationPolicy?: { maxToolRequests: number; maxDurationMs: number } | null; observation: { connected: boolean; refreshing: boolean; itemIds: number[]; requests: number; bridge: Datum<{ pluginVersion: string; gameVersion: string; protocolVersion: number; gameLoaded: boolean }>; session: Datum<{ gameLoaded: boolean; owned: boolean; accessRestricted: boolean; tick: number | null }>; summary: Datum<Snapshot>; production: Datum<Snapshot>; runtimePerformance?: Datum<RuntimePerformance>; events: { reason: string }[] } | null };
 type Context = { state: State; notice: string; uiPerformance: UiPerformanceSnapshot; refresh: () => Promise<void>; act: (action: string, args?: Record<string, unknown>) => Promise<void>; choose: () => Promise<void> };
 const Context = createContext<Context>(null!);
 export const useBridge = () => useContext(Context);
@@ -30,10 +30,10 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
 	if (!meter.current) meter.current = new UiPerformance({ visible: document.visibilityState === "visible" });
 	const measure = meter.current;
 	const syncVisibility = () => measure.setVisible(document.visibilityState === "visible");
-	function unavailable() { measure.interrupt(); const now = performance.now(), elapsed = Math.max(0, now - receivedAt.current); receivedAt.current = now; setState((value) => ({ ...value, observation: ageObservation(value.observation, elapsed, true) })); }
+	function unavailable() { measure.setConnection(null, false); measure.interrupt(); const now = performance.now(), elapsed = Math.max(0, now - receivedAt.current); receivedAt.current = now; setState((value) => ({ ...value, observation: ageObservation(value.observation, elapsed, true) })); }
 	function accept(value: State, started: number, expectedGeneration: number, probe?: ReturnType<UiPerformance['beginSnapshot']>) {
 		if (stopped.current || expectedGeneration !== generation.current) { probe?.discarded(); return; }
-		syncVisibility(); const id = probe?.received(); if (!probe) measure.interrupt();
+		syncVisibility(); measure.setConnection(value.connectionGeneration ?? null, value.observation?.connected === true); const id = probe?.received(); if (!probe) measure.interrupt();
 		const now = performance.now(); receivedAt.current = now; setState({ ...value, observation: ageObservation(value.observation, Math.max(0, now - started)) });
 		if (id !== null && id !== undefined) setDelivery(id);
 	}
@@ -68,6 +68,7 @@ export function ConnectionPanel() {
 		<RuntimePerformanceReadout value={observation?.runtimePerformance} />
 		<ClientPerformanceReadout value={state.requestPerformance} connected={observation?.connected === true && observation.bridge.state !== "stale"} />
 		<UiPerformanceReadout value={c.uiPerformance} />
+		<ConnectedUiPerformanceReadout value={c.uiPerformance.connected} />
 		{state.metadata && <p>已发现 {state.metadata.toolCount} 个接口 / {state.metadata.resourceCount} 个资源；本页面仅使用已核对的 {state.metadata.readTools.length} 个只读接口。{state.metadata.researchAvailable ? "有限研究可在“游戏 Agent”中单独发起。" : ""}</p>}
 		{(state.error || c.notice) && <p role="status" className="notice">{c.notice || "连接尚未确认。文件发生变化时请重新选择服务；不会自动启动第二份。"}</p>}
 		<p className="muted">本页不会载入存档或提交游戏动作。关闭面板后，连接继续由后台维护；退出应用会关闭本次创建的 MCP 服务。每次启动应用后需重新选择服务。</p>
@@ -82,6 +83,15 @@ function UiPerformanceReadout({ value }: { value: UiPerformanceSnapshot }) {
 		<table><thead><tr><th>耗时（毫秒）</th><th>平均</th><th>P95</th><th>最大</th></tr></thead><tbody>{rows.map(([label, timing]) => <tr key={label}><td>{label}</td><td>{fmt(timing?.meanMs, 2)}</td><td>{fmt(timing?.p95Ms, 2)}</td><td>{fmt(timing?.maxMs, 2)}</td></tr>)}</tbody></table>
 		<p>帧样本窗口 {fmt(value.frame.windowDurationMs === null ? null : value.frame.windowDurationMs / 1000, 2)} 秒 · 末次回调 {fmt(value.frame.latestAgeMs === null ? null : value.frame.latestAgeMs / 1000)} 秒前<br />隐藏或跨可见性 {value.hiddenOrTransition} · 合并交付 {value.coalesced} · 中断 {value.interrupted}<br />请求失败 {value.failed} · 丢弃回复 {value.discarded} · 帧回调不可用 {value.frameUnavailable}</p>
 		<details><summary>测量范围</summary><p className="muted">沿用界面的只读快照请求。可见期间，以本界面单调时钟记录请求、接收、React提交和后续动画帧回调；回调先于绘制，不代表GPU呈现或键鼠输入延迟。隐藏/跨可见性样本单列，长可见停顿保留；最多128个样本，界面重载重新计数。</p></details>
+	</section>;
+}
+function ConnectedUiPerformanceReadout({ value }: { value: UiPerformanceSnapshot['connected'] }) {
+	const rows: [string, DurationStatistics | null][] = [["连接期快照往返", value?.rpc.durationMs ?? null], ["连接期收到至提交", value?.frame.commitMs ?? null], ["连接期提交至帧回调", value?.frame.nextFrameMs ?? null], ["连接期请求至帧回调", value?.frame.totalMs ?? null]];
+	return <section aria-label="当前连接的界面响应" data-connected-measurement={JSON.stringify(value)}><h3>当前连接的界面响应</h3>
+		<p>{value ? `${value.active ? "当前连接" : "保留已确认样本"} · 第 ${value.generation} 次连接` : "等待连接"} · 已核对快照 {value?.rpc.sampleCount ?? 0} / 128 · 已核对帧回调 {value?.frame.sampleCount ?? 0} / 128</p>
+		<table><thead><tr><th>耗时（毫秒）</th><th>平均</th><th>P95</th><th>最大</th></tr></thead><tbody>{rows.map(([label, timing]) => <tr key={label}><td>{label}</td><td>{fmt(timing?.meanMs, 2)}</td><td>{fmt(timing?.p95Ms, 2)}</td><td>{fmt(timing?.maxMs, 2)}</td></tr>)}</tbody></table>
+		<p>连接期帧窗口 {fmt(value?.frame.windowDurationMs === null || value?.frame.windowDurationMs === undefined ? null : value.frame.windowDurationMs / 1000, 2)} 秒 · 边界回复 {value?.boundaryResponses ?? 0}<br />未获后续确认的快照 {value?.unconfirmedSnapshots ?? 0} / 帧 {value?.unconfirmedFrames ?? 0}{value?.awaitingSnapshotConfirmation || value?.awaitingFrameConfirmation ? " · 仍有样本待确认" : ""}</p>
+		<details><summary>测量范围</summary><p className="muted">只记录可见且前后属于同一次活动连接的快照；快照接收和帧回调完成后，还须由其后发起的界面快照确认连接仍活动。连接前准备、连接切换和断开后的操作不进入此表，未确认的末尾样本单列。重新连接建立新窗口；原始整界面测量仍保留长停顿。本表不代表GPU呈现或游戏输入延迟，不增加游戏请求。</p></details>
 	</section>;
 }
 function ClientPerformanceReadout({ value, connected }: { value?: ClientPerformance | null; connected: boolean }) {

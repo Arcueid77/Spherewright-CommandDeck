@@ -42,3 +42,48 @@ test('unavailable frame scheduling leaves the snapshot receipt usable and record
 	let now=0;const m=new UiPerformance({now:()=>now,requestFrame:()=>{throw new Error('unavailable');}}),probe=m.beginSnapshot();now=2;const id=probe.received();
 	now=3;assert.doesNotThrow(()=>m.committed(id));const value=m.snapshot();assert.equal(value.frameUnavailable,1);assert.equal(value.rpc.sampleCount,1);assert.equal(value.frame.totalMs,null);assert.equal(value.frames,0);
 });
+
+test('connection-only samples exclude setup and requests crossing the connection boundary',()=>{
+	const f=fixture(),m=f.meter,setup=m.beginSnapshot();f.at(10);m.setConnection(1,true);const id=setup.received();f.at(11);m.committed(id);f.at(15);f.fire(f.last());
+	assert.equal(m.snapshot().connected.rpc.sampleCount,0);assert.equal(m.snapshot().connected.frame.sampleCount,0);assert.equal(m.snapshot().connected.boundaryResponses,1);
+	f.at(20);const closing=m.beginSnapshot();f.at(25);m.setConnection(1,false);closing.received();
+	const value=m.snapshot();assert.equal(value.rpc.sampleCount,2);assert.equal(value.connected.rpc.sampleCount,0);assert.equal(value.connected.active,false);assert.equal(value.connected.boundaryResponses,2);
+});
+
+test('a later active snapshot must prove that both receipt and frame completed while the same client remained active',()=>{
+	const f=fixture(),m=f.meter;m.setConnection(1,true);const first=m.beginSnapshot();f.at(2);const id=first.received();f.at(3);m.committed(id);f.at(8);f.fire(f.last());
+	assert.equal(m.snapshot().connected.rpc.sampleCount,0);assert.equal(m.snapshot().connected.frame.sampleCount,0);assert.equal(m.snapshot().connected.awaitingFrameConfirmation,true);
+	f.at(10);const proof=m.beginSnapshot();f.at(12);proof.received();const value=m.snapshot().connected;
+	assert.equal(value.rpc.sampleCount,1);assert.equal(value.rpc.durationMs.meanMs,2);assert.equal(value.frame.sampleCount,1);assert.equal(value.frame.commitMs.meanMs,1);assert.equal(value.frame.nextFrameMs.meanMs,5);assert.equal(value.frame.totalMs.meanMs,8);assert.equal(value.frame.windowDurationMs,8);
+});
+
+test('disconnect discards unconfirmed tails and freezes the confirmed connection window',()=>{
+	const f=fixture(),m=f.meter;m.setConnection(1,true);const first=m.beginSnapshot();f.at(2);const id=first.received();f.at(3);m.committed(id);f.at(8);f.fire(f.last());
+	f.at(10);const proof=m.beginSnapshot();f.at(12);const next=proof.received();f.at(13);m.committed(next);f.at(18);f.fire(f.last());
+	f.at(20);const crossing=m.beginSnapshot();f.at(22);m.setConnection(1,false);crossing.received();const ended=m.snapshot().connected;
+	assert.equal(ended.rpc.sampleCount,1);assert.equal(ended.frame.sampleCount,1);assert.equal(ended.unconfirmedSnapshots,1);assert.equal(ended.unconfirmedFrames,1);assert.equal(ended.awaitingSnapshotConfirmation,false);assert.equal(ended.awaitingFrameConfirmation,false);
+	f.at(1000);const idle=m.beginSnapshot();f.at(1005);idle.received();const later=m.snapshot().connected;
+	assert.deepEqual(later.rpc.durationMs,ended.rpc.durationMs);assert.deepEqual(later.frame.totalMs,ended.frame.totalMs);assert.equal(later.rpc.windowDurationMs,ended.rpc.windowDurationMs);assert.equal(later.frame.windowDurationMs,ended.frame.windowDurationMs);
+});
+
+test('a replacement connection cannot inherit setup, previous samples or late frame callbacks',()=>{
+	const f=fixture(),m=f.meter;m.setConnection(1,true);const old=m.beginSnapshot();f.at(2);const a=old.received();f.at(3);m.committed(a);const cancelled=f.last();
+	f.at(4);m.setConnection(2,true);f.at(5);const current=m.beginSnapshot();f.at(6);const b=current.received();f.at(7);m.committed(b);const actual=f.last();f.at(8);f.fire(cancelled);f.at(10);f.fire(actual);
+	f.at(12);const proof=m.beginSnapshot();f.at(14);proof.received();const value=m.snapshot().connected;
+	assert.equal(value.generation,2);assert.equal(value.rpc.sampleCount,1);assert.equal(value.rpc.durationMs.meanMs,1);assert.equal(value.frame.sampleCount,1);assert.equal(value.frame.totalMs.meanMs,5);
+});
+
+test('a confirmation begun before the frame ends cannot retrospectively qualify that frame',()=>{
+	const f=fixture(),m=f.meter;m.setConnection(1,true);const first=m.beginSnapshot();f.at(2);const a=first.received();f.at(3);m.committed(a);
+	f.at(4);const early=m.beginSnapshot();f.at(8);f.fire(f.last());f.at(10);const b=early.received();assert.equal(m.snapshot().connected.frame.sampleCount,0);
+	f.at(11);m.committed(b);f.at(12);f.fire(f.last());assert.equal(m.snapshot().connected.unconfirmedFrames,1);
+	f.at(13);const proof=m.beginSnapshot();f.at(15);proof.received();assert.equal(m.snapshot().connected.frame.sampleCount,1);assert.equal(m.snapshot().connected.frame.totalMs.meanMs,8);
+});
+
+test('confirmed connection windows stay bounded and retain long visible frame waits',()=>{
+	const f=fixture(),m=f.meter;m.setConnection(1,true);
+	for(let index=1;index<=140;index++){f.at(index*1000);const probe=m.beginSnapshot();f.at(index*1000+2);const id=probe.received();f.at(index*1000+3);m.committed(id);f.at(index*1000+20);f.fire(f.last());}
+	f.at(200000);const slow=m.beginSnapshot();f.at(200002);const id=slow.received();f.at(200003);m.committed(id);f.at(205003);f.fire(f.last());
+	f.at(205004);const proof=m.beginSnapshot();f.at(205006);proof.received();const value=m.snapshot().connected;
+	assert.equal(value.rpc.sampleCount,128);assert.equal(value.frame.sampleCount,128);assert.equal(value.frame.nextFrameMs.maxMs,5000);assert.equal(value.frame.totalMs.maxMs,5003);
+});
