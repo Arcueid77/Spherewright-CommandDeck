@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M1 development and M2 read-only panels are implemented; M3 now connects a bounded research adviser, native confirmation and the durable action ledger. The research workflow has synthetic desktop, real native-dialog input and MiniMax-with-synthetic-game evidence. No real DSP task has been executed by Deck. Cross-group docking, live monitoring/performance and M3 game acceptance remain open. The owner has deferred the unresponsive embedded DSP menu; this behavior is not an input lock.**
+**Status: M1 development and M2 read-only panels are implemented. M3 has completed one real MiniMax → native confirmation → ordinary DSP research enqueue → original-action/queue readback → normal-save workflow in a dedicated owned world. Cross-group docking, live monitoring/performance, native input coordination and real failure coverage remain open. The owner has deferred the unresponsive embedded DSP menu; this behavior is not an input lock.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -156,7 +156,9 @@ The SQLite ledger records intent before the sole commit submission, admits at mo
 
 `npm run test:game` uses an owned synthetic MCP and provider through the real supervisor, Pi utility, encrypted profile and renderer, including mocked native-dialog Cancel/Confirm returns. `npm run test:game -- --smoke-game-physical` instead waits for an operator to use the actual native dialog, clearly marked **NO DSP**. Computer-use verified Escape cancellation, fresh preparation, a physical confirmation click, one synthetic enqueue, retained queue receipts and normal exit. A separate bounded SDK probe reused the existing MiniMax-M3.1-Flash configuration for three real model requests and two tools against a synthetic game; its approval came from a test host, separately from the UI evidence. Both paths made zero real DSP calls.
 
-Real installed Plugin/MCP binding, an authorized owned-world task, save/accepted-budget evidence and native input coordination remain acceptance work. Bounded autonomous mode stays disabled. Requesting takeover freezes future scheduling; it does not claim to cancel an already accepted native action or exclude player input. M3 as a whole has not passed.
+On 2026-10-23, the coherent 0.4.0 Plugin/MCP research-readback repair and Deck's bounded output-budget repair completed one real dedicated-world task with the existing MiniMax-M3.1-Flash profile: three model requests and two observe/propose tools, one durable intent/commit, matching original terminal and fresh queue proof, followed by one normal save covering the accepted action and durable Journal. Native inventory and research-progress preservation flags were checked against the original action. The actual native dialog was operated by Codex under the owner's explicit automatic-mode authorization; this is not a physical-human-click claim or Pi self-approval. The queue changed from empty to the selected technology; technology completion was not tested. Detailed save points, counts and protected evidence remain in the isolated Lab scenario.
+
+Native input coordination, player takeover and real failure coverage remain acceptance work. Bounded autonomous mode stays disabled. Requesting takeover freezes future scheduling; it does not claim to cancel an already accepted native action or exclude player input. M3 as a whole has not passed.
 
 - Development mode may expose source-editing and build tools for explicitly authorized workspace roots, while respecting each repository's instructions.
 - Game mode exposes controlled Spherewright tools. It does not inherit development shell or file permissions.
@@ -170,7 +172,7 @@ Real installed Plugin/MCP binding, an authorized owned-world task, save/accepted
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-The simulator, pinned Pi, M1 development tools/ledger/protected profiles, M2 read-only panels and M3 assisted research have local software evidence. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. M2 real owned-world monitoring/performance and M3 real-game execution remain open. No tag, installer or release has been published.
+The simulator, pinned Pi, M1 development tools/ledger/protected profiles, M2 read-only panels and M3 assisted research have local software evidence; one real research enqueue and covering normal save have now passed. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. M2 real owned-world monitoring/performance and M3 input coordination/takeover/failure coverage remain open. No tag, installer or release has been published.
 
 ## License
 
