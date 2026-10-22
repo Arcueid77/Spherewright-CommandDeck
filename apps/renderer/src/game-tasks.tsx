@@ -55,7 +55,10 @@ export function GameTasksPanel() {
 			{task.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前：{task.intent.terminal.beforeQueue.map((id) => `#${id}`).join(" → ") || "空"}<br />之后：{task.intent.terminal.afterQueue.map((id) => `#${id}`).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">这证明正常入队与读回，科技研究完成需继续观察。</p></div>}
 		</>}
 		{state.unresolved.map((intent) => <div className="game-task-receipt" key={intent.intentId}><b>未决动作：{intent.actionId || "尚无编号"}</b><p>后续写入保持冻结，只查询原动作。</p><button disabled={!c.healthy || c.busy || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
-		{state.events.length > 0 && <section className="game-task-transcript" aria-label="Agent 与执行记录"><h3>Agent 与执行记录</h3>{state.events.map((event) => <div key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</div>)}</section>}
+		{state.events.length > 0 && <section className="game-task-transcript" aria-label="Agent 与执行记录"><h3>Agent 与执行记录</h3>{state.events.map((event) => {
+			const Entry = event.kind === "assistant" ? "span" : "div";
+			return <Entry key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</Entry>;
+		})}</section>}
 		<p className="muted">游戏输入互斥尚未验收。“停止后续”会冻结新提交，已受理的动作继续核销；窗口焦点变化不表示动作已取消。</p>
 		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <p key={value.id}>#{value.scope.techId} · {phases[value.state] ?? value.state}</p>)}</details>}
 	</div>;
