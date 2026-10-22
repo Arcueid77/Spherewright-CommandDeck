@@ -2,6 +2,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { WorkbenchStore } from "./workbench-store.mjs";
 import { WorkspaceService } from "./workspace.mjs";
+import { originalChangeDiff } from "./change-history.mjs";
 import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { createHash } from "node:crypto";
 
@@ -167,6 +168,34 @@ export class Workbench {
 		if (action === "list") return this.workspace.list(args.rootId, args.directory);
 		if (action === "read") return this.workspace.read(args.rootId, args.path, { lineCount: 1000 });
 		if (action === "diff") return this.workspace.diff(args.rootId, args.path);
+		if (action === "change-diff") {
+			const task = this.store.task(args.taskId), root = this.workspace.root(task.rootId);
+			const change = this.store.changes(task.id).find(value => value.id === args.changeId);
+			return originalChangeDiff({ directory: join(this.directory, "history"), root, task, change });
+		}
+		if (action === "attach-reference") {
+			const available = () => { if (this.closing || !this.gameWritesFrozen || this.operation || this.store.activeTask()) throw new Error("REFERENCE_ATTACHMENT_BUSY"); };
+			available();
+			const generation = this.admissionGeneration, task = this.store.task(args.taskId);
+			if (!["succeeded", "failed", "cancelled", "interrupted"].includes(task.state)) throw new Error("REFERENCE_REQUIRES_SETTLED_TASK");
+			this.workspace.root(task.rootId);
+			if (typeof args.label !== "string" || !args.label.trim() || args.label.length > 80 || /[\x00-\x1f]/.test(args.label)) throw new Error("INVALID_REFERENCE_LABEL");
+			const target = await this.workspace.refresh(args.rootId);
+			if (args.revision !== target.metadata.sha) throw new Error("REFERENCE_REVISION_CHANGED");
+			const file = await this.workspace.readAtRevision(target.id, args.revision, args.path);
+			available();
+			if (generation !== this.admissionGeneration) throw new Error("REFERENCE_ATTACHMENT_EXPIRED");
+			this.workspace.root(target.id);
+			return this.store.attachReference(task.id, { rootId: target.id, path: file.path, revision: file.revision, sha256: file.sha256, label: args.label.trim() });
+		}
+		if (action === "read-reference") {
+			const task = this.store.task(args.taskId); this.workspace.root(task.rootId);
+			const reference = this.store.references(task.id).find(value => value.id === args.referenceId);
+			if (!reference) throw new Error("TASK_REFERENCE_NOT_FOUND");
+			const file = await this.workspace.readAtRevision(reference.rootId, reference.revision, reference.path);
+			if (file.sha256 !== reference.sha256) throw new Error("TASK_REFERENCE_CONTENT_CHANGED");
+			return { ...file, referenceId: reference.id, taskId: task.id, label: reference.label };
+		}
 		if (action === "search") return this.workspace.search(args.rootId, args.query, args.directory);
 		if (action === "checks") return this.catalog(args.rootId);
 		if (action === "save") return this.start({ rootId: args.rootId, kind: "edit", prompt: `保存 ${args.path}` }, (task) => this.workspace.write({ taskId: task.id, rootId: task.rootId, path: args.path, expectedSha256: args.expectedSha256, content: args.content, actor: "user" }));
@@ -184,7 +213,7 @@ export class Workbench {
 		if (action === "check") return this.start({ rootId: args.rootId, kind: "check", prompt: args.checkId }, (task, signal) => this.invokeCheck(task, args.checkId, signal));
 		if (action === "task") {
 			const task = this.store.task(args.taskId);
-			return { ...task, invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), events: this.store.events(task.id, args.after ?? 0) };
+			return { ...task, invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), references: this.store.references(task.id), events: this.store.events(task.id, args.after ?? 0) };
 		}
 		if (action === "cancel") {
 			if (this.operation?.id !== args.taskId) throw new Error("TASK_NOT_RUNNING");

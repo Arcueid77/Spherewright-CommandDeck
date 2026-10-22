@@ -332,3 +332,11 @@ ul {
 	--dv-inactivegroup-visiblepanel-tab-background-color: #14212e;
 	--dv-tab-font-size: 12px;
 }
+.history-document { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reference-form { padding: 10px; border-top: 1px solid #263444; }
+.reference-form input, .reference-form select { display: block; width: 100%; margin: 7px 0; }
+.reference-form p { font-size: 12px; color: #91a5b4; }
+.task-references .statusline { flex-wrap: wrap; }
+.output-panel { overflow: auto; }
+.output-panel > pre { flex: 1 0 80px; }
+.task-references .statusline { display: flex; gap: 6px; align-items: center; overflow-wrap: anywhere; }

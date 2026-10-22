@@ -7,7 +7,7 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
-import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout } from "./workbench";
+import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
 import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel } from "./bridge";
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
@@ -454,6 +454,16 @@ function App() {
 	const [settings, setSettings] = useState(false);
 	const [confirmation, setConfirmation] = useState(false);
 	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
+	const navigation = useWorkbenchNavigation();
+	useEffect(() => {
+		const api = dock.current;
+		if (!api || !navigation) return;
+		if (!api.getPanel(navigation.panel)) {
+			const reference = navigation.panel === "editor" ? api.getPanel("research") ?? api.getPanel("game") : api.getPanel("tasks") ?? api.getPanel("events");
+			api.addPanel({ id: navigation.panel, component: navigation.panel, title: navigation.panel === "editor" ? "代码 / 差异" : "检查输出", ...(reference ? { position: { referencePanel: reference.id, direction: "within" as const } } : {}) });
+		}
+		api.getPanel(navigation.panel)?.api.setActive();
+	}, [navigation]);
 	useEffect(() => window.deck.onEvent((event) => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); }), []);
 	useEffect(() => { if (settings || confirmation) document.body.dataset.deckOverlay = settings ? "settings" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation]);
 	return (

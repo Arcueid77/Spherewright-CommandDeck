@@ -12,7 +12,7 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const pathKey = (value) => process.platform === "win32" ? value.toLowerCase() : value;
 const blocked = /^(?:\.git|\.local|\.pi|node_modules|artifacts|userdata|dist|out|coverage|bin|obj|\.env(?:\..*)?|auth\.json|models\.json|.*(?:credentials?|secrets?)\.(?:json|ya?ml|toml|ini)|.*\.(?:pem|pfx|p12|key))$/i;
 const cleanEnvironment = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
-function safeRelative(value, directory = false) {
+export function safeRelative(value, directory = false) {
 	if (directory && (value === "" || value === ".")) return "";
 	if (typeof value !== "string" || value.length > 2048 || /[\x00-\x1f:]/.test(value) || isAbsolute(value)) throw new Error("INVALID_WORKSPACE_PATH");
 	const parts = value.replaceAll("\\", "/").split("/");
@@ -44,7 +44,7 @@ function trustedGit(cwd) {
 }
 
 // Git reads must not activate repository fsmonitor, diff/textconv drivers, clean filters or a pager.
-export async function readGit(cwd, args, { allowMissing = false, maxBuffer = 1024 * 1024 } = {}) {
+export async function readGit(cwd, args, { allowMissing = false, maxBuffer = 1024 * 1024, bytes = false, acceptDifference = false } = {}) {
 	const executable = trustedGit(cwd);
 	const env = { ...cleanEnvironment(), GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_NO_LAZY_FETCH: "1" };
 	const base = ["--no-pager", "--no-lazy-fetch", "--literal-pathspecs", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", `core.hooksPath=${devNull}`, "-c", `core.attributesFile=${devNull}`, "-c", "log.showSignature=false"];
@@ -54,8 +54,8 @@ export async function readGit(cwd, args, { allowMissing = false, maxBuffer = 102
 	const filters = [...new Set(keys.trim().split(/\r?\n/).filter(Boolean).map((key) => key.slice(7, key.lastIndexOf("."))))];
 	if (filters.length > 64 || filters.some((name) => !/^[A-Za-z0-9_.-]{1,100}$/.test(name))) throw new Error("WORKSPACE_GIT_FILTER_CONFIGURATION_UNSUPPORTED");
 	for (const name of filters) for (const operation of ["clean", "smudge", "process", "required"]) base.push("-c", `filter.${name}.${operation}=${operation === "required" ? "false" : ""}`);
-	try { return (await execute(executable, [...base, ...args], { cwd, env, windowsHide: true, timeout: 10000, maxBuffer })).stdout; }
-	catch { if (allowMissing) return null; throw new Error("WORKSPACE_GIT_READ_FAILED"); }
+	try { return (await execute(executable, [...base, ...args], { cwd, env, windowsHide: true, timeout: 10000, maxBuffer, encoding: bytes ? "buffer" : "utf8" })).stdout; }
+	catch (error) { if (acceptDifference && error.code === 1 && !error.killed && typeof error.stdout === "string") return error.stdout; if (allowMissing) return null; throw new Error("WORKSPACE_GIT_READ_FAILED"); }
 }
 function parseStatus(text) {
 	const values = text.split("\0"), changes = [];
@@ -99,6 +99,22 @@ export class WorkspaceService {
 		const root = this.store.root(id);
 		if (!root.enabled) throw new Error("WORKSPACE_ROOT_DISABLED");
 		return root;
+	}
+	async readAtRevision(rootId, revision, requested) {
+		const root = this.root(rootId), path = safeRelative(requested);
+		if (typeof revision !== "string" || !/^[a-f0-9]{40}$/.test(revision)) throw new Error("EXACT_REFERENCE_COMMIT_REQUIRED");
+		if (pathKey(await realpath(root.path)) !== pathKey(root.path)) throw new Error("WORKSPACE_ROOT_CHANGED");
+		const top = (await readGit(root.path, ["rev-parse", "--show-toplevel"])).trim();
+		if (pathKey(await realpath(top)) !== pathKey(root.path)) throw new Error("WORKSPACE_ROOT_CHANGED");
+		if ((await readGit(root.path, ["rev-parse", "--verify", revision + "^{commit}"])).trim() !== revision) throw new Error("EXACT_REFERENCE_COMMIT_REQUIRED");
+		const entry = await readGit(root.path, ["ls-tree", "-z", "--full-tree", revision, "--", path]);
+		const match = /^(100644|100755) blob ([a-f0-9]{40})\t([^\0]+)\0$/.exec(entry);
+		if (!match || match[3] !== path) throw new Error("REFERENCE_REGULAR_TRACKED_FILE_REQUIRED");
+		const size = (await readGit(root.path, ["cat-file", "-s", match[2]])).trim();
+		if (!/^\d+$/.test(size) || !Number.isSafeInteger(Number(size)) || Number(size) > MAX_FILE) throw new Error("WORKSPACE_FILE_TOO_LARGE");
+		const value = await readGit(root.path, ["cat-file", "blob", match[2]], { bytes: true, maxBuffer: MAX_FILE + 1024 });
+		if (value.length !== Number(size)) throw new Error("REFERENCE_BLOB_CHANGED");
+		return { rootId, path, revision, blobId: match[2], sha256: digest(value), fullText: decode(value) };
 	}
 	async refresh(id) {
 		const root = this.root(id);

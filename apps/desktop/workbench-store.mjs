@@ -156,6 +156,26 @@ export class WorkbenchStore {
 	changes(taskId) {
 		return this.db.prepare("SELECT * FROM changes WHERE task_id=? ORDER BY created_at,id").all(taskId).map((row) => ({ id: row.id, taskId: row.task_id, rootId: row.root_id, path: row.path, beforeText: row.before_text, beforeHash: row.before_hash, afterText: row.after_text, afterHash: row.after_hash, state: row.state, createdAt: row.created_at }));
 	}
+	references(taskId) {
+		this.task(taskId);
+		const rows = this.db.prepare("SELECT value FROM events WHERE task_id=? AND kind='reference' ORDER BY sequence LIMIT 33").all(taskId);
+		if (rows.length > 32) throw new Error("TASK_REFERENCE_HISTORY_CORRUPT");
+		return rows.map(row => {
+			const value = parse(row.value);
+			if (!value || value.version !== 1 || value.taskId !== taskId || typeof value.id !== "string" || !value.id || value.id.length > 80 || typeof value.rootId !== "string" || !value.rootId || value.rootId.length > 80 || typeof value.path !== "string" || !value.path || value.path.length > 2048 || typeof value.label !== "string" || !value.label.trim() || value.label.length > 80 || /[\x00-\x1f]/.test(value.label) || !/^[a-f0-9]{40}$/.test(value.revision) || !/^[a-f0-9]{64}$/.test(value.sha256)) throw new Error("TASK_REFERENCE_HISTORY_CORRUPT");
+			return value;
+		});
+	}
+	attachReference(taskId, reference) {
+		return this.transaction(() => {
+			const previous = this.references(taskId), duplicate = previous.find(value => value.rootId === reference.rootId && value.path === reference.path && value.revision === reference.revision);
+			if (duplicate) return duplicate;
+			if (previous.length >= 32) throw new Error("TASK_REFERENCE_LIMIT");
+			const value = { ...reference, version: 1, taskId, id: randomUUID(), createdAt: now() };
+			this.event(taskId, "reference", value);
+			return value;
+		});
+	}
 	wasCreated(rootId, path) { return Boolean(this.db.prepare("SELECT 1 FROM changes WHERE root_id=? AND path=? AND before_text IS NULL AND state='applied' LIMIT 1").get(rootId, path)); }
 	createdPaths(rootId) { return this.db.prepare("SELECT DISTINCT path FROM changes WHERE root_id=? AND before_text IS NULL AND state='applied'").all(rootId).map((row) => row.path); }
 	event(taskId, kind, value) {

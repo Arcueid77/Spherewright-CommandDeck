@@ -107,8 +107,51 @@ export async function runWorkbenchSmoke(driver) {
 	while ((await evaluate("document.querySelector('[aria-label=开发任务]')?.value")) !== "M1 draft survives reload") { assert.ok(Date.now() < hydrationDeadline, "M1_REPLACEMENT_HYDRATION_FAILED"); await delay(100); }
 	assert.equal((await request("task", { taskId: check.id })).state, "succeeded");
 	assert.equal(await readFile(join(source, "count.txt"), "utf8"), "x");
+	// Exercise immutable task history through the real renderer, after the source was committed.
+	git("add", "--", "code.mjs"); git("commit", "-qm", "fixture edit committed");
+	assert.equal((await request("diff", { rootId: root.id, path: "code.mjs" })).text, "");
+	const originalTask = await request("task", { taskId: edit.id }), changeId = originalTask.changes[0].id;
+	const originalDiff = await request("change-diff", { taskId: edit.id, changeId });
+	const lab = join(base, "lab"); await mkdir(lab);
+	const labGit = (...args) => execFileSync("git", ["-c", `core.hooksPath=${devNull}`, "-c", "user.name=CommandDeck fixture", "-c", "user.email=fixture@invalid.example", ...args], { cwd: lab, windowsHide: true, stdio: "pipe" });
+	labGit("init", "-q"); await writeFile(join(lab, "acceptance.md"), "FIXED_LAB_EVIDENCE\n"); labGit("add", "--", "acceptance.md"); labGit("commit", "-qm", "fixture Lab baseline");
+	await request("add", { path: lab, label: "M4 Lab fixture", canWrite: false, canExecute: false });
+	const labRoot = (await request("state")).roots.find(value => value.label === "M4 Lab fixture");
+	const reference = await evaluate(`window.deck.workbench('attach-reference',${JSON.stringify({ taskId: edit.id, rootId: labRoot.id, path: "acceptance.md", revision: labRoot.metadata.sha, label: "M4 fixed acceptance" })})`);
+	await writeFile(join(lab, "acceptance.md"), "LATER_LAB_CONTENT\n"); labGit("add", "--", "acceptance.md"); labGit("commit", "-qm", "later fixture Lab content");
+	const draftText = current.fullText + "// M4 unsaved draft\n";
+	await request("ui-save", { key: "editor", value: { rootId: root.id, path: "code.mjs", sha256: current.sha256, text: draftText, diskText: current.fullText } });
+	await driver.testCommand("reload");
+	async function untilUi(predicate, label) { const by = Date.now() + 10000; while (!await predicate()) { assert.ok(Date.now() < by, label); await delay(60); } }
+	await untilUi(async () => await evaluate("document.querySelector('[aria-label=代码编辑器]')?.value") === draftText, "M4_DRAFT_HYDRATION");
+	async function showTask(taskId) {
+		await untilUi(async () => await evaluate("[...document.querySelectorAll('.dv-tab')].some(tab=>tab.textContent.trim()==='任务记录')"), "M4_TASK_TAB");
+		await evaluate("[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='任务记录').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");
+		await untilUi(async () => await evaluate(`[...document.querySelectorAll('.task-row')].some(row=>row.textContent.includes(${JSON.stringify(taskId.slice(0, 8))}))`), "M4_TASK_ROW");
+		await evaluate(`[...document.querySelectorAll('.task-row')].find(row=>row.textContent.includes(${JSON.stringify(taskId.slice(0, 8))})).click()`);
+	}
+	await showTask(edit.id);
+	await untilUi(async () => await evaluate("[...document.querySelectorAll('.output-panel button')].some(button=>button.textContent==='打开原始差异')"), "M4_HISTORY_BUTTON");
+	await evaluate("[...document.querySelectorAll('.output-panel button')].find(button=>button.textContent==='打开原始差异').click()");
+	await untilUi(async () => await evaluate("document.querySelector('[aria-label=原始任务差异]')?.textContent") === originalDiff.text, "M4_ORIGINAL_DIFF");
+	assert.equal((await request("ui-get", { key: "editor" })).text, draftText);
+	await untilUi(async () => await evaluate("[...document.querySelectorAll('.output-panel button')].some(button=>button.textContent.includes('M4 fixed acceptance'))"), "M4_REFERENCE_BUTTON");
+	await evaluate("[...document.querySelectorAll('.output-panel button')].find(button=>button.textContent.includes('M4 fixed acceptance')).click()");
+	await untilUi(async () => await evaluate("document.querySelector('[aria-label=固定版本记录]')?.textContent") === "FIXED_LAB_EVIDENCE\n", "M4_FIXED_REFERENCE");
+	assert.equal((await request("task", { taskId: edit.id })).references[0].id, reference.id);
+	await driver.testCommand("reload"); await showTask(edit.id);
+	await untilUi(async () => await evaluate("[...document.querySelectorAll('.output-panel button')].some(button=>button.textContent.includes('M4 fixed acceptance'))"), "M4_REFERENCE_AFTER_RELOAD");
+	await evaluate("[...document.querySelectorAll('.output-panel button')].find(button=>button.textContent.includes('M4 fixed acceptance')).click()");
+	await untilUi(async () => await evaluate("document.querySelector('[aria-label=固定版本记录]')?.textContent") === "FIXED_LAB_EVIDENCE\n", "M4_PIN_AFTER_RELOAD");
+	await evaluate("[...document.querySelectorAll('.history-view button')].find(button=>button.textContent==='返回当前文件').click()");
+	await untilUi(async () => await evaluate("document.querySelector('[aria-label=代码编辑器]')?.value") === draftText, "M4_RETURN_DRAFT");
+	await showTask(check.id);
+	await untilUi(async () => await evaluate("document.querySelector('.output-panel')?.textContent.includes('CHECK_RAN')"), "M4_CHECK_LOG_NAVIGATION");
+	assert.equal(await readFile(join(source, "count.txt"), "utf8"), "x");
+	assert.equal((await request("task", { taskId: check.id })).invocations.length, 1);
 	const native = await driver.api("status");
 	assert.equal(native.attached, false);
 	const proof = { runId: driver.runId, edited: true, checkExitCode: 0, checkStarts: 1, uiReloadDuringCheck: true, uiProcessReplaced: true, replacementHydrated: true, sameRuntime: true, draftRestored: true, editorRestored: true, historicalResultRestored: true, ipcWhitelistRejectsControlActions: true, protectedProfileRoundtrip: true, rendererCannotResolveCredential: true, profileMutationBlockedDuringTask: true, splitEchoRedacted: true, providerSettingsRenderAndDismiss: true, syntheticCredentialOnly: true, externalModelRequests: 0, noNodeInRenderer: true, visualCapture: capture.captured ? "captured" : "unavailable", gameCalls: 0, realDsp: "not_attached", physicalInput: "not_tested" };
+	Object.assign(proof, { originalDiffAfterCommit: true, crossRepositoryReference: true, referencePinsOldCommit: true, referenceSurvivesReload: true, historyPreservesUnsavedDraft: true, taskClickNavigatesToLog: true, navigationDoesNotRepeatCommand: true });
 	await writeFile(join(driver.root, ".local/desktop-smoke-workbench.json"), JSON.stringify(proof, null, 2));
 }

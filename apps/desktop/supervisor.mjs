@@ -177,7 +177,7 @@ async function api(action, args, source) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "search", "checks"].includes(args?.action) || ["bridge", "game"].includes(action) && args?.action === "snapshot";
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game"].includes(action) && args?.action === "snapshot";
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -219,8 +219,8 @@ async function api(action, args, source) {
 		return bridge.connect();
 	}
 	if (action === "workbench") {
-		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
-		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
+		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "change-diff", "attach-reference", "read-reference", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
+		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent", "attach-reference"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
 		return workbenchCall(args.action, args.args ?? {});
 	}

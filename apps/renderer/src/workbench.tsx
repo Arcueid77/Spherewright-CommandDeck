@@ -3,13 +3,17 @@ import { DocumentLease } from "./document-state";
 import { profileToken, type Profile } from "./providers";
 
 type Root = { id: string; label: string; path: string; canWrite: boolean; canExecute: boolean; metadata: { branch: string | null; sha: string | null; submodule: boolean; dirtyCount: number; protectedCount: number; changes: { path: string; code: string }[] } };
-type Task = { id: string; rootId: string; prompt: string; response?: string; kind: string; state: string; error?: string; result?: unknown; events?: { sequence: number; kind: string; value: { text?: string; stream?: string } }[]; changes?: { id: string; path: string; state: string; afterHash: string; beforeHash: string | null }[] };
+type TaskReference = { id: string; taskId: string; rootId: string; path: string; revision: string; sha256: string; label: string };
+type Task = { id: string; rootId: string; prompt: string; response?: string; kind: string; state: string; error?: string; result?: unknown; events?: { sequence: number; kind: string; value: { text?: string; stream?: string } }[]; changes?: { id: string; path: string; state: string; afterHash: string; beforeHash: string | null }[]; references?: TaskReference[] };
 type State = { roots: Root[]; tasks: Task[]; activeTask: string | null; executionBlocked: boolean };
 type Document = { rootId: string; path: string; sha256: string | null; text: string; diskText: string };
+type HistoryView = { kind: "change" | "reference"; taskId: string; rootId: string; path: string; text: string; label: string; revision?: string | null; beforeHash?: string | null; afterHash?: string; state?: string };
+type Navigation = { panel: "editor" | "output"; sequence: number };
 const wb = <T,>(action: string, args: Record<string, unknown> = {}) => window.deck.workbench<T>(action, args);
-type ContextValue = State & { rootId: string; root?: Root; taskId: string; document: Document | null; notice: string; selectRoot: (id: string) => void; selectTask: (id: string) => void; refresh: () => Promise<void>; open: (path: string) => Promise<void>; setDocument: (value: Document | null, expected?: Document) => void; report: (error: unknown) => void };
+type ContextValue = State & { rootId: string; root?: Root; taskId: string; document: Document | null; history: HistoryView | null; navigation: Navigation | null; notice: string; selectRoot: (id: string) => void; selectTask: (id: string) => void; showTask: (id: string) => void; showChange: (taskId: string, changeId: string) => Promise<void>; showReference: (taskId: string, referenceId: string) => Promise<void>; closeHistory: () => void; refresh: () => Promise<void>; open: (path: string) => Promise<void>; setDocument: (value: Document | null, expected?: Document) => void; report: (error: unknown) => void };
 const Context = createContext<ContextValue>(null!);
 const useWorkbench = () => useContext(Context);
+export const useWorkbenchNavigation = () => useWorkbench().navigation;
 const labels: Record<string, string> = { queued: "等待", running: "进行中", cancelling: "正在停止", succeeded: "完成", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 const changeLabels: Record<string, string> = { applied: "已写入", reverted: "已撤回", failed: "失败", unknown: "待核对" };
 function taskText(task: Task) {
@@ -24,14 +28,27 @@ function taskText(task: Task) {
 export function WorkbenchProvider({ children }: { children: ReactNode }) {
 	const [state, setState] = useState<State>({ roots: [], tasks: [], activeTask: null, executionBlocked: false });
 	const [rootId, setRootId] = useState(""), [taskId, setTaskId] = useState(""), [document, setDocumentState] = useState<Document | null>(null), [notice, setNotice] = useState("");
+	const [history, setHistory] = useState<HistoryView | null>(null), [navigation, setNavigation] = useState<Navigation | null>(null);
 	const hydrated = useRef(false), currentDocument = useRef(document);
 	const documentLease = useRef(new DocumentLease());
 	currentDocument.current = document;
 	const report = (error: unknown) => setNotice(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : "操作未完成");
 	async function refresh() { setState(await wb<State>("state")); }
+	function navigate(panel: Navigation["panel"]) { setNavigation(value => ({ panel, sequence: (value?.sequence ?? 0) + 1 })); }
+	function showTask(id: string) { setTaskId(id); navigate("output"); }
+	function closeHistory() { documentLease.current.changed(); setHistory(null); }
+	async function showChange(sourceTaskId: string, changeId: string) {
+		const applied = await documentLease.current.load(() => wb<HistoryView & { baseRevision: string | null }>("change-diff", { taskId: sourceTaskId, changeId }), value => { setHistory({ ...value, kind: "change", label: "任务原始差异", revision: value.baseRevision }); navigate("editor"); });
+		if (!applied) setNotice("读取期间文档已变化，保留当前草稿。");
+	}
+	async function showReference(sourceTaskId: string, referenceId: string) {
+		const applied = await documentLease.current.load(() => wb<{ taskId: string; rootId: string; path: string; revision: string; fullText: string; label: string; sha256: string }>("read-reference", { taskId: sourceTaskId, referenceId }), value => { setHistory({ ...value, kind: "reference", text: value.fullText, afterHash: value.sha256 }); navigate("editor"); });
+		if (!applied) setNotice("读取期间文档已变化，保留当前草稿。");
+	}
 	function setDocument(value: Document | null, expected?: Document) {
 		if (expected && currentDocument.current !== expected) { setNotice("文件已保存，当前打开的文档保持原样。"); return; }
 		documentLease.current.changed(); currentDocument.current = value;
+		if (!expected) setHistory(null);
 		setDocumentState(value);
 		void wb("ui-save", { key: "editor", value }).catch(report);
 	}
@@ -59,7 +76,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
 		const applied = await documentLease.current.load(() => wb<{ fullText: string; sha256: string }>("read", { rootId, path }), (value) => setDocument({ rootId, path, sha256: value.sha256, text: value.fullText, diskText: value.fullText }));
 		setNotice(applied ? "" : "读取期间文档已发生变化，保留当前草稿。");
 	}
-	return <Context.Provider value={{ ...state, rootId, root: state.roots.find((root) => root.id === rootId), taskId, document, notice, selectRoot: setRootId, selectTask: setTaskId, refresh, open, setDocument, report }}>{children}</Context.Provider>;
+	return <Context.Provider value={{ ...state, rootId, root: state.roots.find((root) => root.id === rootId), taskId, document, history, navigation, notice, selectRoot: setRootId, selectTask: setTaskId, showTask, showChange, showReference, closeHistory, refresh, open, setDocument, report }}>{children}</Context.Provider>;
 }
 export function FilesPanel() {
 	const c = useWorkbench(), [directory, setDirectory] = useState(""), [entries, setEntries] = useState<{ path: string; name: string; directory: boolean; protected: boolean }[]>([]), [truncated, setTruncated] = useState(false);
@@ -104,6 +121,10 @@ export function EditorPanel() {
 		c.setDocument({ ...doc, text: value.fullText, diskText: value.fullText, sha256: value.sha256 }, doc); await c.refresh();
 		} finally { setSaving(false); }
 	}
+	if (c.history) return <div className="editor-panel history-view" aria-label="历史任务视图"><div className="toolbar"><span className="editor-title">{c.history.label} · {c.roots.find(root => root.id === c.history!.rootId)?.label} / {c.history.path}</span><button onClick={c.closeHistory}>返回当前文件</button></div>
+		<div className="statusline">只读 · 原任务 {c.history.taskId.slice(0, 8)}{c.history.revision ? ` · ${c.history.kind === "reference" ? "固定提交" : "起始提交"} ${c.history.revision}` : ""}{c.history.state ? ` · ${changeLabels[c.history.state] ?? c.history.state}` : ""}</div>
+		<pre className={`code-diff ${c.history.kind === "reference" ? "history-document" : ""}`} aria-label={c.history.kind === "change" ? "原始任务差异" : "固定版本记录"}>{c.history.text || "此次保存未改变文本。"}</pre>
+		<div className="statusline">来源哈希 {c.history.afterHash}{c.history.kind === "reference" ? " · 固定版本文件，引用本身不代表验收通过。" : " · 来自任务保存的前后内容，与当前 Git 差异分别保留。"}</div></div>;
 	return <div className="editor-panel">
 		<div className="toolbar"><span className="editor-title">{doc ? `${documentRoot?.label ?? "仓库"} / ${doc.path}${doc.text !== doc.diskText ? " ●" : ""}` : "选择一个文件"}</span>
 			<button disabled={!doc || !documentRoot?.canWrite || Boolean(c.activeTask) || large || saving} onClick={() => void save().catch(c.report)}>保存</button>
@@ -150,7 +171,26 @@ export function DevelopmentPanel() {
 }
 export function TasksPanel() {
 	const c = useWorkbench();
-	return <div className="panel tasks-panel"><div className="eyebrow">PERSISTENT TASKS</div><p>关闭面板或重载界面后，任务仍由后台管理。重启应用不会自动重跑。</p>{c.tasks.map((task) => <button className={c.taskId === task.id ? "task-row selected" : "task-row"} key={task.id} onClick={() => c.selectTask(task.id)}><span>{labels[task.state] ?? task.state}</span><strong>{task.prompt || task.kind}</strong><small>{c.roots.find((root) => root.id === task.rootId)?.label} · {task.id.slice(0, 8)}</small></button>)}</div>;
+	return <div className="panel tasks-panel"><div className="eyebrow">PERSISTENT TASKS</div><p>选择任务打开原日志；代码原始差异和固定版本记录在任务内保留。重启应用不会自动重跑。</p>{c.tasks.map((task) => <button className={c.taskId === task.id ? "task-row selected" : "task-row"} key={task.id} onClick={() => c.showTask(task.id)}><span>{labels[task.state] ?? task.state}</span><strong>{task.prompt || task.kind}</strong><small>{c.roots.find((root) => root.id === task.rootId)?.label} · {task.id.slice(0, 8)}</small></button>)}</div>;
+}
+function TaskReferences({ task }: { task: Task }) {
+	const c = useWorkbench(), [rootId, setRootId] = useState(""), [path, setPath] = useState(""), [label, setLabel] = useState("Lab 验收记录"), [attaching, setAttaching] = useState(false), [message, setMessage] = useState("");
+	const root = c.roots.find(value => value.id === rootId);
+	async function attach() {
+		if (!root?.metadata.sha) return;
+		setAttaching(true); setMessage("");
+		try { await wb("attach-reference", { taskId: task.id, rootId, path, revision: root.metadata.sha, label }); setMessage("记录已关联到原任务，内容固定在所示提交。"); }
+		catch (error) { c.report(error); }
+		finally { setAttaching(false); await c.refresh().catch(c.report); }
+	}
+	return <div className="task-references">{task.references?.map(reference => <div className="statusline" key={reference.id}><button onClick={() => void c.showReference(task.id, reference.id).catch(c.report)}>打开记录 · {reference.label}</button><span>{c.roots.find(value => value.id === reference.rootId)?.label} / {reference.path} · {reference.revision.slice(0, 8)}</span></div>)}
+		<details className="reference-form"><summary>关联验收记录</summary><p>从已添加的仓库选择文件，固定到该仓库提交中的内容。未提交修改不包含在引用内，关联记录不代表验收通过。</p>
+			<select aria-label="记录所在仓库" value={rootId} disabled={attaching} onChange={event => setRootId(event.target.value)}><option value="">选择记录仓库</option>{c.roots.filter(value => value.metadata.sha).map(value => <option key={value.id} value={value.id}>{value.label}</option>)}</select>
+			<input aria-label="记录文件路径" maxLength={2048} placeholder="例如 scenarios/example/README.md" value={path} disabled={attaching} onChange={event => setPath(event.target.value)} />
+			<input aria-label="记录名称" maxLength={80} value={label} disabled={attaching} onChange={event => setLabel(event.target.value)} />
+			{root?.metadata.sha && <p className="muted">固定提交 {root.metadata.sha}</p>}
+			<button disabled={!root?.metadata.sha || !path || !label.trim() || attaching || Boolean(c.activeTask) || c.executionBlocked || ["queued", "running", "cancelling"].includes(task.state)} onClick={() => void attach()}>关联到此任务</button>{message && <p role="status">{message}</p>}
+		</details></div>;
 }
 export function OutputPanel() {
 	const c = useWorkbench(), [task, setTask] = useState<Task | null>(null);
@@ -162,7 +202,7 @@ export function OutputPanel() {
 	}, [c.taskId]);
 	const result = task?.result && typeof task.result === "object" ? task.result as Record<string, unknown> : null;
 	const output = task?.events?.filter((event) => event.kind === "command-output").map((event) => event.value.text).join("");
-	return <div className="output-panel"><div className="statusline">{task ? `${task.id.slice(0, 8)} · ${labels[task.state] ?? task.state}` : "选择一项任务查看日志"}{typeof result?.exitCode === "number" ? ` · 退出码 ${result.exitCode}` : ""}</div><pre>{output || (task ? taskText(task) : "尚未选择任务。")}</pre>{task?.changes?.map((change) => <div className="statusline" key={change.id}>{change.path} · {changeLabels[change.state] ?? change.state}<button disabled={Boolean(c.activeTask) || change.state !== "applied" || !c.roots.find((root) => root.id === task.rootId)?.canWrite} onClick={() => void wb<Task>("revert", { sourceTaskId: task.id, changeId: change.id }).then((next) => { c.selectTask(next.id); return c.refresh(); }).catch(c.report)}>撤回此文件修改</button></div>)}{result && <details className="receipt"><summary>详细回执</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}</div>;
+	return <div className="output-panel"><div className="statusline">{task ? `${task.id.slice(0, 8)} · ${labels[task.state] ?? task.state}` : "选择一项任务查看日志"}{typeof result?.exitCode === "number" ? ` · 退出码 ${result.exitCode}` : ""}</div><pre>{output || (task ? taskText(task) : "尚未选择任务。")}</pre>{task?.changes?.map((change) => <div className="statusline" key={change.id}>{change.path} · {changeLabels[change.state] ?? change.state}<button disabled={!["applied", "reverted"].includes(change.state)} onClick={() => void c.showChange(task.id, change.id).catch(c.report)}>打开原始差异</button><button disabled={Boolean(c.activeTask) || change.state !== "applied" || !c.roots.find((root) => root.id === task.rootId)?.canWrite} onClick={() => void wb<Task>("revert", { sourceTaskId: task.id, changeId: change.id }).then((next) => { c.selectTask(next.id); return c.refresh(); }).catch(c.report)}>撤回此文件修改</button></div>)}{task && <TaskReferences key={task.id} task={task} />}{result && <details className="receipt"><summary>详细回执</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}{c.notice && <p className="notice">{c.notice}</p>}</div>;
 }
 
 export const persistedLayout = { load: () => wb<Record<string, unknown> | null>("ui-get", { key: "layout" }), save: (value: unknown) => wb("ui-save", { key: "layout", value }) };
