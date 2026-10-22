@@ -1,5 +1,5 @@
 import { readFile, realpath, lstat, readdir, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative, isAbsolute, sep } from "node:path";
+import { dirname, basename, join, relative, isAbsolute, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 const packageName = /^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/;
@@ -79,7 +79,12 @@ export async function collectPiRuntime(directory) {
 
 export async function materializePiRuntime(source, target) {
 	const plan = await collectPiRuntime(source);
-	if (!isAbsolute(target) || inside(plan.root, target)) throw new Error("PI_RUNTIME_OUTPUT_INVALID");
+	if (!isAbsolute(target)) throw new Error("PI_RUNTIME_OUTPUT_INVALID");
+	// Windows temporary paths may contain an 8.3 alias. Bind the existing parent
+	// once, then create and address the new physical root through that canonical
+	// path. Never copy through a subsequently changed parent link.
+	target = join(await realpath(dirname(target)), basename(target));
+	if (inside(plan.root, target)) throw new Error("PI_RUNTIME_OUTPUT_INVALID");
 	await mkdir(target); // A new physical directory only; never replace an old candidate.
 	if ((await realpath(target)).toLowerCase() !== target.toLowerCase()) throw new Error("PI_RUNTIME_OUTPUT_REDIRECTED");
 	const files = []; let bytesTotal = 0;

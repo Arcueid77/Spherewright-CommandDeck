@@ -44,6 +44,20 @@ test("a physical portable Pi tree preserves fork identities and nested dependenc
 	await assert.rejects(materializePiRuntime(f.source, f.target), { code: "EEXIST" });
 });
 
+test("an aliased temporary parent is bound canonically before creating a new physical runtime", async t => {
+	const f = await fixture(t), parent = join(f.directory, "physical"), alias = join(f.directory, "alias");
+	await mkdir(parent); await symlink(parent, alias, process.platform === "win32" ? "junction" : "dir");
+	const target = join(alias, "runtime"); await materializePiRuntime(f.source, target);
+	assert.equal((await realpath(target)).toLowerCase(), join(await realpath(parent), "runtime").toLowerCase());
+	assert.equal((await lstat(join(parent, "runtime"))).isSymbolicLink(), false);
+	assert.deepEqual((await import(pathToFileURL(join(parent, "runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js")))).default, [1, 2]);
+	await assert.rejects(materializePiRuntime(f.source, join(parent, "runtime")), { code: "EEXIST" });
+	const sourceAlias = join(f.directory, "source-alias");
+	await symlink(f.source, sourceAlias, process.platform === "win32" ? "junction" : "dir");
+	await assert.rejects(materializePiRuntime(f.source, join(sourceAlias, "must-not-create")), /OUTPUT_INVALID/);
+	await assert.rejects(lstat(join(f.source, "must-not-create")), { code: "ENOENT" });
+});
+
 test("missing required dependencies and registry substitutes for fork packages are rejected", async t => {
 	const f = await fixture(t);
 	await removeFixtureTree(f, join(f.source, "node_modules/tree-leaf"));
