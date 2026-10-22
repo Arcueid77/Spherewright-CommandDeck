@@ -40,6 +40,7 @@ jobs:
       - run: npm run test:portable-pi -- --require-clean-source
       - run: npm run test:vault
       - run: npm run test:native
+      - run: npm run test:process-cohort
       - run: npm run test:ui-watchdog
       - run: npm run probe:native-hang
       - run: npm run probe:native-focus
@@ -65,6 +66,7 @@ jobs:
           name: synthetic-m0-results
           path: |
             .local/native-smoke.json
+            .local/process-cohort-observer.json
             .local/ui-watchdog-native.json
             .local/native-hang-probe.json
             .local/native-input-hang-probe.json

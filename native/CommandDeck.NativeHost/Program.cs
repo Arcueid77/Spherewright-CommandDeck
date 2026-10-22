@@ -17,6 +17,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--inspect-process-cohort")
+        {
+            Environment.ExitCode = ProcessCohort.Inspect(args.Skip(1).ToArray());
+            return;
+        }
         if (args.Length == 4 && args[0] == "--inspect-adapter-process")
         {
             Console.WriteLine(JsonSerializer.Serialize(AdapterPipeClient.InspectProcess(int.Parse(args[1]), args[2], args[3]), Json));
