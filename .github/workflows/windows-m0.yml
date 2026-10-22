@@ -8,7 +8,7 @@ permissions:
 jobs:
   prototype:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +60,14 @@ jobs:
       - run: npm run test:game
       - run: npm run package:desktop -- --output artifacts/portable-desktop
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop
+      - run: npm run installer:toolchain
+      - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
+      - name: Build isolated installer candidate
+        shell: pwsh
+        run: |
+          $installerTestId = [guid]::NewGuid().ToString()
+          npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer-test --test-id $installerTestId
+      - run: npm run test:installer -- --source artifacts/installer-test
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -89,5 +97,8 @@ jobs:
             .local/portable-pi-smoke.json
             .local/portable-desktop-smoke.json
             .local/portable-desktop-application.json
+            .local/installer-smoke.json
             artifacts/portable-desktop/commanddeck-bundle.json
+            artifacts/installer/commanddeck-installer.json
+            artifacts/installer-test/commanddeck-installer.json
           if-no-files-found: ignore

@@ -83,6 +83,20 @@ npm run test:portable-desktop -- --source artifacts/portable-desktop
 
 The output directory must be new. The builder freezes native sources into a separate build copy, derives only empty Windows RID lock metadata there, publishes both helpers with locked package dependencies, embeds Electron and the physical Pi runtime tree, and records every shipped file hash and source pin. It excludes Lab, user data and proprietary game DLLs. The test verifies the bundle, copies it outside the checkout, uses a new temporary profile, hides developer tools/shared .NET roots and starts the packaged executable. Its built-in fixture-only mode rejects real models, MCP connections, game tasks and developer commands. Raw runtime traces remain local; only the anonymous summary and bundle manifest are uploaded by CI. This candidate and check do not constitute an installer, clean-Windows VM acceptance, game-input acceptance or release.
 
+An explicit verified bundle can also be wrapped in a per-user development installer:
+
+```powershell
+npm run installer:toolchain
+npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
+$installerTestId = [guid]::NewGuid().ToString()
+npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer-test --test-id $installerTestId
+npm run test:installer -- --source artifacts/installer-test
+```
+
+The compiler is the pinned official Inno Setup 7.1.0 distribution, checked by download hash, publisher signature and all 132 extracted file hashes, in an unregistered local portable toolchain. Each output directory is new; the wrapper records the exact bundle and builder revisions separately. Installation uses the current user, keeps each source revision in its own `releases` directory, never auto-starts the app/game and asks for normal closure when installed Deck/helper processes are still running or their identity cannot be verified. It does not edit user profiles. Uninstall removes registered program files and retains unregistered files; there are no wildcard cleanup rules. These installers are unsigned development candidates, not published releases.
+
+The automated check accepts only an explicitly compiled test identity, requires its marked temporary installation directory and creates no Start-menu shortcuts. It verifies installation, running-process refusal, direct installed-app startup, same-candidate repair, profile preservation and normal uninstall. It launches the installed executable itself, rather than testing a copy extracted from the installation. Its app mode is fixture-only and cannot reach a real game/model. Upgrade/rollback, profile-schema migration and a clean Windows VM remain separate gates; implementing the test entry does not by itself prove those or M5 passed.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

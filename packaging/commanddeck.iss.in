@@ -1,0 +1,97 @@
+; Generated only from a verified, explicit desktop bundle. No wildcard deletes.
+[Setup]
+AppId=@@APP_ID@@
+AppName=Spherewright CommandDeck@@TEST_LABEL@@
+AppVersion=@@APP_VERSION@@+@@SHORT_REVISION@@
+AppVerName=Spherewright CommandDeck @@APP_VERSION@@ (@@SHORT_REVISION@@)@@TEST_LABEL@@
+AppPublisher=Spherewright
+DefaultDirName={localappdata}\Programs\Spherewright\CommandDeck
+DefaultGroupName=Spherewright CommandDeck@@TEST_LABEL@@
+PrivilegesRequired=lowest
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
+MinVersion=10.0.19045
+OutputDir=@@OUTPUT@@
+OutputBaseFilename=Spherewright-CommandDeck-Setup
+VersionInfoVersion=@@APP_VERSION@@.0
+LicenseFile=@@LICENSE@@
+Compression=lzma2/fast
+SolidCompression=yes
+WizardStyle=modern
+DisableProgramGroupPage=yes
+AllowNoIcons=yes
+AllowRootDirectory=no
+CloseApplications=no
+RestartApplications=no
+AlwaysRestart=no
+UninstallDisplayIcon={app}\releases\@@REVISION@@\Spherewright-CommandDeck.exe
+UninstallDisplayName=Spherewright CommandDeck@@TEST_LABEL@@
+UsePreviousAppDir=yes
+
+[Files]
+@@FILES@@
+
+[Icons]
+@@ICONS@@
+
+[Code]
+const
+  TestIdentity = '@@TEST_ID@@';
+
+function TestScopeValid: Boolean;
+var
+  Scope, Marker: String;
+  Contents: AnsiString;
+begin
+  Result := True;
+  if TestIdentity = '' then exit;
+  Result := False;
+  if ExpandConstant('{param:DECKTESTID|}') <> TestIdentity then exit;
+  Scope := ExpandConstant('{param:DECKTESTROOT|}');
+  if (Scope = '') or (Pos('commanddeck-installer-smoke-', ExtractFileName(Scope)) <> 1) then exit;
+  Marker := AddBackslash(Scope) + 'installer-test-scope.txt';
+  if not LoadStringFromFile(Marker, Contents) then exit;
+  Result := (String(Contents) = TestIdentity) and
+    (CompareText(RemoveBackslashUnlessRoot(ExpandConstant('{app}')), AddBackslash(Scope) + 'install') = 0);
+end;
+
+function InstallProcessesStopped: Boolean;
+var
+  Locator, Services, Processes, Item: Variant;
+  Index: Integer;
+  Prefix, Image: String;
+begin
+  Result := False;
+  try
+    Prefix := Lowercase(AddBackslash(ExpandConstant('{app}')));
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('', 'root\CIMV2');
+    Processes := Services.ExecQuery('SELECT ExecutablePath FROM Win32_Process WHERE Name = ''Spherewright-CommandDeck.exe'' OR Name = ''CommandDeck.NativeHost.exe'' OR Name = ''CommandDeck.CommandHost.exe''');
+    if Processes.Count > 128 then exit;
+    for Index := 0 to Processes.Count - 1 do begin
+      Item := Processes.ItemIndex(Index);
+      if VarIsNull(Item.ExecutablePath) or VarIsEmpty(Item.ExecutablePath) then exit;
+      Image := Lowercase(String(Item.ExecutablePath));
+      if (Image = '') or (Pos(Prefix, Image) = 1) then exit;
+    end;
+    Result := True;
+  except
+    Log('INSTALL_PROCESS_IDENTITY_UNAVAILABLE');
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not TestScopeValid then
+    Result := 'The isolated test installer requires its exact temporary test scope.'
+  else if not InstallProcessesStopped then
+    Result := 'Please close CommandDeck normally before installing. A running process could not be excluded.';
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := TestScopeValid and InstallProcessesStopped;
+  if not Result then
+    SuppressibleMsgBox('Please close CommandDeck normally before uninstalling. No application or game will be forcibly closed.', mbError, MB_OK, IDOK);
+end;
