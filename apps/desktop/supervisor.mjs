@@ -20,9 +20,12 @@ import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
 import { settleShutdown } from "./shutdown-drain.mjs";
 import { GameTasks } from "./game-tasks.mjs";
 import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
+import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
+import { runObservationSmoke } from "./observation-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const smoke = process.argv.includes("--smoke");
+const observationPolicy = observationArguments(process.argv);
 const watchdogMs = 1000;
 const privateDirectory = join(app.getPath("userData"), "supervisor");
 mkdirSync(privateDirectory, { recursive: true });
@@ -37,7 +40,7 @@ const native = new WindowHost();
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && process.argv.includes("--smoke-game");
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : smoke && process.argv.includes("--smoke-bridge") ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, emit: () => emit({ type: "bridge-changed" }) });
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
 	releaseDevelopment: () => workbenchCall("game-end"), planner: runGamePlanner, emit: () => emit({ type: "game-changed" }),
@@ -69,7 +72,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const safeEnvironment = () =>
@@ -168,6 +171,7 @@ async function probe(config) {
 	}
 }
 async function api(action, args, source) {
+	assertObservationAction(observationPolicy, action, args);
 	if (ui?.nativeProbePending && ["viewport", "focus-ui"].includes(action)) return { deferred: true };
 	if (ui?.nativeProbePending && ["attach", "start-fixture", "probe"].includes(action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 	if (stopping && ["viewport", "focus-ui"].includes(action))
@@ -193,7 +197,7 @@ async function api(action, args, source) {
 	if (action === "snapshot") return { ...state, events: [...state.events] };
 	if (action === "game") {
 		if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
-		if (args.action === "snapshot") return game.snapshot();
+		if (args.action === "snapshot") return { ...game.snapshot(), readOnlyObservation: Boolean(observationPolicy) };
 		if (ui?.nativeProbePending || !workbenchReady) throw new Error("GAME_RUNTIME_UNAVAILABLE");
 		if (args.action === "catalog") return game.catalog();
 		if (args.action === "start") return game.start(args.args);
@@ -208,6 +212,11 @@ async function api(action, args, source) {
 	}
 	if (action === "bridge-select") {
 		if (typeof args !== "string" || !isAbsolute(args) || args.length > 4096 || args.includes("\0")) throw new Error("INVALID_MCP_SELECTION");
+		if (observationPolicy) {
+			if (!workbenchReady || state.busy || game.operation || game.snapshot().unresolved.length) throw new Error('OBSERVATION_REQUIRES_SETTLED_RUNTIME');
+			const work = await workbenchCall('state');
+			if (work.activeTask || work.executionBlocked || game.operation || game.snapshot().unresolved.length) throw new Error('OBSERVATION_REQUIRES_SETTLED_RUNTIME');
+		}
 		return bridge.select(args);
 	}
 	if (action === "bridge") {
@@ -222,7 +231,8 @@ async function api(action, args, source) {
 		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "change-diff", "attach-reference", "read-reference", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent", "attach-reference"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
-		return workbenchCall(args.action, args.args ?? {});
+		const result = await workbenchCall(args.action, args.args ?? {});
+		return observationPolicy && args.action === 'state' ? { ...result, observationOnly: true, executionBlocked: true } : result;
 	}
 	if (action === "profiles") {
 		let profiles = []; try { profiles = (await vault.list()).profiles; } catch {}
@@ -706,7 +716,7 @@ if (!app.requestSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),

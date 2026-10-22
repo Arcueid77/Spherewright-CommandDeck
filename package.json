@@ -26,6 +26,7 @@
 		"test:workbench": "node scripts/run-desktop-smoke.mjs --smoke-workbench",
 		"test:vault": "node scripts/run-vault-smoke.mjs",
 		"test:bridge": "node scripts/run-desktop-smoke.mjs --smoke-bridge",
+		"test:observation": "node scripts/run-desktop-smoke.mjs --smoke-observation --observe-only --observe-max-tools 12 --observe-max-ms 10000",
 		"test:game": "node scripts/run-desktop-smoke.mjs --smoke-game",
 		"test:ui-watchdog": "node scripts/ui-watchdog-native.mjs",
 		"test:desktop-host-exit": "node scripts/run-desktop-smoke.mjs --smoke-host-exit",

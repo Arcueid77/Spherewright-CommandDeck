@@ -5,6 +5,7 @@ import { basename, dirname, join, toNamespacedPath } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { researchDefinitions, supportedResearchTool, validResearchArguments, researchPlaybookUri } from "./research-contract.mjs";
 import { McpPerformance } from "./mcp-performance.mjs";
+import { observationLimits } from "./observation-policy.mjs";
 
 const definitions = {
 	spherewright_get_status: {}, spherewright_get_session_state: {},
@@ -41,11 +42,13 @@ export async function fingerprintMcp(executable) {
 	}
 	return { path, cohortHash: hash.digest("hex"), fileCount: names.length };
 }
-export function launchMcp(selection, { descriptorPath, researchAuthority } = {}) {
+export function launchMcp(selection, { descriptorPath, researchAuthority, observation } = {}) {
+	const limits = observationLimits(observation);
+	if (limits && researchAuthority) throw new Error('OBSERVATION_REQUIRES_READ_ONLY_CLIENT');
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|SPHEREWRIGHT_BRIDGE_DESCRIPTOR)/i.test(key)));
 	const startedAt = performance.now();
 	const child = spawn(toNamespacedPath(selection.path), descriptorPath ? ["--bridge-descriptor", descriptorPath] : [], { cwd: dirname(selection.path), env, shell: false, windowsHide: true, stdio: "pipe" });
-	return new ReadOnlyMcpClient(child, { researchAuthority, startedAt });
+	return new ReadOnlyMcpClient(child, { researchAuthority, startedAt, observation: limits });
 }
 
 // Closed MCP adapter. Public read() stays M2-only; research requires the supervisor's object identity.
@@ -53,12 +56,16 @@ export class ReadOnlyMcpClient {
 	#pending = new Map(); #sequence = 0; #buffer = ""; #tools = new Map(); #stage = "new"; #discoveryDeadline = Infinity;
 	#researchTools = new Set(); #researchAuthority; #hasPlaybook = false;
 	#performance;
-	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000, researchAuthority, startedAt } = {}) {
+	#observation; #observationStarted; #observationTools = 0; #observationTimer = null; #stopReason = null;
+	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000, researchAuthority, startedAt, observation } = {}) {
+		this.#observation = observationLimits(observation);
+		if (this.#observation && researchAuthority) throw new Error('OBSERVATION_REQUIRES_READ_ONLY_CLIENT');
+		this.#observationStarted = startedAt ?? performance.now();
 		this.#performance = new McpPerformance({ startedAt });
 		this.#researchAuthority = researchAuthority && typeof researchAuthority === "object" ? researchAuthority : null;
 		this.child = child; this.timeoutMs = timeoutMs; this.discoveryTimeoutMs = discoveryTimeoutMs; this.closed = false; this.exitConfirmed = false;
 		this.stats = { requests: 0, toolCalls: 0, duplicateReplies: 0, rejectedCalls: 0 };
-		this.exited = new Promise((resolve) => { child.once("exit", () => { this.exitConfirmed = true; this.#performance.endLifetime('exit_observed'); this.#fail("MCP_EXITED"); resolve(); }); child.once("error", () => { if (!child.pid) { this.exitConfirmed = true; this.#performance.endLifetime('launch_failed'); } this.#fail("MCP_LAUNCH_FAILED"); resolve(); }); });
+		this.exited = new Promise((resolve) => { child.once("exit", () => { this.exitConfirmed = true; this.#performance.endLifetime('exit_observed'); this.#fail("MCP_EXITED"); this.#clearObservationTimer(); resolve(); }); child.once("error", () => { if (!child.pid) { this.exitConfirmed = true; this.#performance.endLifetime('launch_failed'); } this.#fail("MCP_LAUNCH_FAILED"); resolve(); }); });
 		const decoder = new StringDecoder("utf8");
 		child.stderr.on("data", () => {}); // Never expose raw subprocess diagnostics or descriptor data.
 		child.stdout.on("data", (bytes) => {
@@ -72,7 +79,9 @@ export class ReadOnlyMcpClient {
 			}
 		});
 		child.stdin.on("error", () => this.#fail("MCP_STDIN_CLOSED"));
+		if (this.#observation) this.#observationTimer = setTimeout(() => this.#fail('MCP_OBSERVATION_TIME_LIMIT'), Math.max(0, this.#observation.maxDurationMs - (performance.now() - this.#observationStarted)));
 	}
+	#clearObservationTimer() { if (this.#observationTimer !== null) clearTimeout(this.#observationTimer); this.#observationTimer = null; }
 	#send(message) { if (this.closed) throw new Error("MCP_DISCONNECTED"); this.child.stdin.write(JSON.stringify(message) + "\n", (error) => { if (error) this.#fail("MCP_STDIN_CLOSED"); }); }
 	#receive(message) {
 		if (!message || message.jsonrpc !== "2.0") throw new Error("MCP_INVALID_MESSAGE");
@@ -85,17 +94,24 @@ export class ReadOnlyMcpClient {
 		if (!pending) { this.stats.duplicateReplies++; return; }
 		this.#pending.delete(message.id); clearTimeout(pending.timer);
 		message.error ? pending.reject(new Error("MCP_REQUEST_REJECTED")) : pending.resolve(message.result);
+		if (this.#observation && this.#observationTools >= this.#observation.maxToolRequests && this.#pending.size === 0) this.#fail('MCP_OBSERVATION_REQUEST_LIMIT');
 	}
 	#fail(code) {
 		if (this.closed) return; this.closed = true;
+		if (this.#observation) this.#stopReason = code;
+		this.#clearObservationTimer();
 		for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(new Error(code)); }
 		this.#pending.clear(); if (!this.exitConfirmed) this.child.kill();
 	}
 	#request(method, params) {
 		if (this.closed || this.#pending.size >= pendingCapacity) return Promise.reject(new Error("MCP_UNAVAILABLE_OR_BUSY"));
+		if (this.#observation && (performance.now() - this.#observationStarted >= this.#observation.maxDurationMs || method === 'tools/call' && this.#observationTools >= this.#observation.maxToolRequests)) {
+			const reason = performance.now() - this.#observationStarted >= this.#observation.maxDurationMs ? 'MCP_OBSERVATION_TIME_LIMIT' : 'MCP_OBSERVATION_REQUEST_LIMIT'; this.#fail(reason); return Promise.reject(new Error(reason));
+		}
 		const remaining = this.#stage === "discovering" ? this.#discoveryDeadline - performance.now() : Infinity;
 		if (remaining <= 0) return Promise.reject(new Error("MCP_DISCOVERY_TIMEOUT"));
 		const id = "deck-read:" + String(++this.#sequence); this.stats.requests++;
+		if (this.#observation && method === 'tools/call') this.#observationTools++;
 		const finish = this.#performance.begin(method === "tools/call" ? "tool" : method === "resources/read" ? "resource" : "metadata");
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => this.#fail(remaining < this.timeoutMs ? "MCP_DISCOVERY_TIMEOUT" : "MCP_REQUEST_TIMEOUT"), Math.min(this.timeoutMs, remaining));
@@ -103,7 +119,7 @@ export class ReadOnlyMcpClient {
 			try { this.#send({ jsonrpc: "2.0", id, method, params }); } catch { this.#fail("MCP_SEND_FAILED"); }
 		});
 	}
-	requestPerformance() { return { ...this.#performance.snapshot(), pendingCapacity, transportClosed: this.closed, duplicateReplies: this.stats.duplicateReplies, rejectedBeforeAdmission: this.stats.rejectedCalls }; }
+	requestPerformance() { return { ...this.#performance.snapshot(), pendingCapacity, transportClosed: this.closed, duplicateReplies: this.stats.duplicateReplies, rejectedBeforeAdmission: this.stats.rejectedCalls, ...(this.#observation ? { observationLimit: { ...this.#observation, toolRequests: this.#observationTools, remainingToolRequests: this.#observation.maxToolRequests - this.#observationTools, stopReason: this.#stopReason } } : {}) }; }
 	async discover() {
 		if (this.#stage !== "new") throw new Error("MCP_DISCOVERY_ALREADY_STARTED");
 		this.#stage = "discovering";
@@ -133,7 +149,7 @@ export class ReadOnlyMcpClient {
 		for (const tool of tools) { if (typeof tool?.name !== "string" || names.has(tool.name)) throw new Error("MCP_DUPLICATE_OR_INVALID_TOOL"); names.add(tool.name); if (supportedReadTool(tool)) accepted.set(tool.name, tool); if (supportedResearchTool(tool)) research.add(tool.name); }
 		this.#tools = accepted; this.#stage = "ready";
 		this.#researchTools = research; this.#hasPlaybook = resources.filter((value) => value?.uri === researchPlaybookUri).length === 1;
-		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
+		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: !this.#observation && this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
 		return this.metadata;
 	}
 	supports(name) { return !this.closed && this.#stage === "ready" && this.#tools.has(name); }
@@ -170,6 +186,8 @@ export class ReadOnlyMcpClient {
 		return reply.structuredContent;
 	}
 	async close() {
+		if (this.#observation && !this.#stopReason) this.#stopReason = 'MCP_OBSERVATION_DISCONNECTED';
+		this.#clearObservationTimer();
 		if (!this.closed) { this.closed = true; for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("MCP_DISCONNECTED")); } this.#pending.clear(); this.child.stdin.end(); }
 		let timer;
 		try { await Promise.race([this.exited, new Promise((done) => { timer = setTimeout(done, 1500); })]); } finally { clearTimeout(timer); }

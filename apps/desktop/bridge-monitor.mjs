@@ -1,12 +1,14 @@
 import { fingerprintMcp, launchMcp } from "./mcp-client.mjs";
 import { ReadOnlyTelemetry } from "./telemetry.mjs";
+import { observationLimits } from "./observation-policy.mjs";
 
 export class BridgeMonitor {
-	constructor({ fingerprint = fingerprintMcp, launch = launchMcp, emit = () => {}, researchAuthority } = {}) {
+	constructor({ fingerprint = fingerprintMcp, launch = launchMcp, emit = () => {}, researchAuthority, observation } = {}) {
 		this.fingerprint = fingerprint; this.launch = launch; this.emit = emit; this.selection = null; this.metadata = null; this.telemetry = null; this.pendingClient = null; this.operation = null; this.closing = false; this.error = null;
-		this.researchAuthority = researchAuthority; this.researchLease = null;
+		this.observation = observationLimits(observation); this.observationStarted = false;
+		this.researchAuthority = this.observation ? null : researchAuthority; this.researchLease = null;
 	}
-	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null, requestPerformance: (this.pendingClient ?? this.telemetry?.client)?.requestPerformance?.() ?? null }; }
+	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null, requestPerformance: (this.pendingClient ?? this.telemetry?.client)?.requestPerformance?.() ?? null, observationPolicy: this.observation }; }
 	mutate(action) {
 		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
 		if (this.researchLease) return Promise.reject(new Error("GAME_TASK_OWNS_BRIDGE"));
@@ -14,7 +16,7 @@ export class BridgeMonitor {
 		this.operation = Promise.resolve().then(action).catch((error) => { this.error = /^[A-Z_]+$/.test(error?.message) ? error.message : "BRIDGE_CONNECTION_FAILED"; throw new Error(this.error); }).finally(() => { this.operation = null; this.emit(); });
 		return this.operation;
 	}
-	select(path) { return this.mutate(async () => { const selection = await this.fingerprint(path); await this.#disconnect(); this.selection = selection; this.metadata = null; this.telemetry = null; this.error = null; await this.#connect(); return this.snapshot(); }); }
+	select(path) { return this.mutate(async () => { if (this.observation && this.observationStarted) throw new Error('OBSERVATION_SCOPE_CONSUMED'); const selection = await this.fingerprint(path); await this.#disconnect(); this.selection = selection; this.metadata = null; this.telemetry = null; this.error = null; await this.#connect(); return this.snapshot(); }); }
 	connect() { return this.mutate(async () => { if (this.telemetry?.snapshot().connected) return this.snapshot(); await this.#disconnect(); this.error = null; await this.#connect(); return this.snapshot(); }); }
 	disconnect() { return this.mutate(async () => { await this.#disconnect(); return this.snapshot(); }); }
 	async #disconnect() {
@@ -23,11 +25,13 @@ export class BridgeMonitor {
 		// Keep the previous, explicitly stale snapshot. No new process is created until close confirms.
 	}
 	async #connect() {
+		if (this.observation && this.observationStarted) throw new Error('OBSERVATION_SCOPE_CONSUMED');
 		if (!this.selection) throw new Error("SELECT_MCP_EXECUTABLE_FIRST");
 		const selection = await this.fingerprint(this.selection.path);
 		if (selection.path !== this.selection.path || selection.cohortHash !== this.selection.cohortHash || selection.fileCount !== this.selection.fileCount) throw new Error("MCP_COHORT_CHANGED_RESELECT_REQUIRED");
 		if (this.closing) throw new Error("BRIDGE_MONITOR_CLOSING");
-		const client = this.launch(selection, { researchAuthority: this.researchAuthority }); this.pendingClient = client;
+		if (this.observation) this.observationStarted = true;
+		const client = this.launch(selection, { researchAuthority: this.researchAuthority, observation: this.observation }); this.pendingClient = client;
 		try {
 			const metadata = await client.discover(), after = await this.fingerprint(selection.path);
 			if (after.cohortHash !== selection.cohortHash || after.path !== selection.path || after.fileCount !== selection.fileCount) throw new Error("MCP_COHORT_CHANGED_DURING_START");

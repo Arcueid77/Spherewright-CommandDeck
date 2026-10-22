@@ -9,7 +9,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
-import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel } from "./bridge";
+import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 
 type Target = { id: string; pid: number; kind: string; title: string };
@@ -451,6 +451,7 @@ async function ready(event: DockviewReadyEvent) {
 	});
 }
 function App() {
+	const observationOnly = Boolean(useBridge().state.observationPolicy);
 	const [settings, setSettings] = useState(false);
 	const [confirmation, setConfirmation] = useState(false);
 	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
@@ -472,12 +473,12 @@ function App() {
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
-				<div className="tag">开发 · 观察 · 有限研究</div>
+				<div className="tag">{observationOnly ? "限时只读观测" : "开发 · 观察 · 有限研究"}</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
-				<button onClick={() => setSettings(true)}>模型设置</button>
+				<button disabled={observationOnly} onClick={() => setSettings(true)}>模型设置</button>
 				<button onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
 				<button onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
-				<div className="header-note">游戏执行逐项确认 · 中央点击暂缓</div>
+				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
 			<div className="workspace" inert={settings || confirmation}>
 				<DockviewReact

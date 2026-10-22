@@ -11,7 +11,7 @@ export function bridgeFixtureOptions(root, runId) {
 	const marker = join(root, ".local/m2-smoke", runId, "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M2_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
-		launch() { return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/mcp-server.mjs"), "telemetry"], { windowsHide: true, stdio: "pipe", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } })); },
+		launch(_selection, options) { return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/mcp-server.mjs"), "telemetry"], { windowsHide: true, stdio: "pipe", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }), options); },
 	};
 }
 export async function runBridgeSmoke(driver) {
