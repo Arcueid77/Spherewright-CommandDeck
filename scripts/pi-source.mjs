@@ -10,6 +10,7 @@ import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { preserveModelDataLock } from "./pi-model-data-lock.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const pi = join(root, "vendor/pi");
 const expected = "71023aec1546d6d677a65669c5665c0927ce0dd0";
@@ -108,20 +109,13 @@ if (operation === "hydrate") {
 	}
 	if (count < 2)
 		throw new Error("Versioned package has no complete model-data catalog.");
-	writeFileSync(
-		lockPath,
-		JSON.stringify(
-			{
-				package: "@earendil-works/pi-ai",
-				version: "1.3.0",
-				integrity,
-				dataFiles: count,
-				sourceCommit: expected,
-			},
-			null,
-			2,
-		) + "\n",
-	);
+	preserveModelDataLock(lockPath, {
+		package: "@earendil-works/pi-ai",
+		version: "1.3.0",
+		integrity,
+		dataFiles: count,
+		sourceCommit: expected,
+	});
 	console.log(
 		`Hydrated ${count} JSON metadata files; no registry source modules are used.`,
 	);
