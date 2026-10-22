@@ -2,7 +2,7 @@
 
 A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
 
-**Status: M1 development, main-window docking/layout restoration and M2 read-only panels have implementation and validation evidence. M3 has completed one real MiniMax → native confirmation → ordinary DSP research enqueue → original-action/queue readback → normal-save workflow in a dedicated owned world. Live monitoring/performance, native input coordination and real failure coverage remain open. The owner has deferred the unresponsive embedded DSP menu; this behavior is not an input lock.**
+**Status: M1 development and main-window docking/layout restoration have validation evidence. M2 has displayed basic live process timings and queue depth in a dedicated world; controlled load/latency and long-run evidence remain open. M3 has completed one real MiniMax → native confirmation → ordinary DSP research enqueue → original-action/queue readback → normal-save workflow. M4 has exercised a real source change, checks, exact CI, Lab adoption, cold installation/recovery and basic live display; original-diff/evidence navigation is still incomplete. Native input coordination and real failure coverage remain open. The owner has deferred the unresponsive embedded DSP menu; this behavior is not an input lock.**
 
 Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
 
@@ -107,7 +107,7 @@ Pages are bound to session, snapshot, game tick, item selection and coverage, wi
 
 Actual production is shown only for the current source's complete inclusive 600-game-tick window. Warming/discontinuous/invalid windows show unknown actual rates. Theoretical capacity is labeled an estimate and never substituted for actual output. Power uses observed J/game-tick converted at 60 game ticks/second; current service is not proof of sustained fuel or headroom. Missing fields show `—`, not zero. The first UI exposes up to sixteen explicitly selected item IDs and at most 300 visible production rows, with coverage/truncation stated.
 
-The connection panel also accepts optional version-1 runtime performance from the same status reads: the most recent bounded Unity Update intervals and full Bridge main-thread pump durations (mean/P95/max in milliseconds), actual sample/window coverage and the instantaneous pending-request count with configured limits. Update intervals are not GPU presentation FPS. Empty windows remain unknown; old Plugins show unsupported, malformed metrics stay unavailable, and native sample age plus conservative delivery/UI time determines staleness. No additional game request or model is used. The [Spherewright source contract](https://github.com/Arcueid77/Spherewright/blob/9a4ec982b485db634a3cdbc7129d8b5c41fb86b7/docs/protocol.md#read-only-runtime-performance) has passed 3,201 local tests, a full current-native Plugin build and exact CI; cold adoption and real performance remain separate pending checks.
+The connection panel also accepts optional version-1 runtime performance from the same status reads: the most recent bounded Unity Update intervals and full Bridge main-thread pump durations (mean/P95/max in milliseconds), actual sample/window coverage and the instantaneous pending-request count with configured limits. Update intervals are not GPU presentation FPS. Empty windows remain unknown; old Plugins show unsupported, malformed metrics stay unavailable, and native sample age plus conservative delivery/UI time determines staleness. No additional game request or model is used. The [Spherewright source contract](https://github.com/Arcueid77/Spherewright/blob/9a4ec982b485db634a3cdbc7129d8b5c41fb86b7/docs/protocol.md#read-only-runtime-performance) passed 3,201 local tests, a full current-native Plugin build and exact CI. Its coherent cold installation and basic real Deck display are separately recorded in [Lab](https://github.com/Arcueid77/Spherewright-Lab/blob/fe55a485999bc0771822ebede994a147eed6b7c1/scenarios/commanddeck-m4-runtime-observation/README.md); controlled timing/load acceptance remains open, including an unproved observation-duration boundary.
 
 `npm run test:bridge` runs an owned synthetic MCP through the real Electron connection/UI path: pagination, research/production/power/logistics rendering, private-field removal, reload without process restart, and stale data plus confirmed server exit after disconnect. This is zero-model and zero-real-game evidence, not physical mouse or DSP performance verification. A separate metadata-only probe can inspect an explicitly selected source-built MCP with its Bridge descriptor disabled:
 
@@ -115,7 +115,7 @@ The connection panel also accepts optional version-1 runtime performance from th
 node scripts/probe-mcp-metadata.mjs --executable '<absolute path to Spherewright.Mcp.exe>'
 ~~~
 
-The local source-built probe observed protocol `2025-06-18`, server `0.4.0.0`, 64 tools and one resource, with zero `tools/call`. Real owned-world monitoring, game frame time, panel latency under load and installed-cohort validation remain open.
+The local source-built probe observed protocol `2025-06-18`, server `0.4.0.0`, 64 tools and one resource, with zero `tools/call`. A later live source-cohort validation proved basic dedicated-world timing display and stale marking. Loaded-factory performance, panel/request latency, multiple-world and long-run validation remain open.
 
 ## CC Switch / Pi provider configuration
 
@@ -178,7 +178,7 @@ Native input coordination, player takeover and real failure coverage remain acce
 2. Integrate the pinned Pi source with explicit tools and resource loading.
 3. Add development-workspace access and a read-only game dashboard, then a bounded approved game task with durable action evidence and a Spherewright-to-Lab development/validation workflow.
 
-The simulator, pinned Pi, M1 development tools/ledger/protected profiles, M2 read-only panels and M3 assisted research have local software evidence; one real research enqueue and covering normal save have now passed. Actual game input and the remaining display, docking and failure gates still need separate validation before M0 can pass. M2 real owned-world monitoring/performance and M3 input coordination/takeover/failure coverage remain open. No tag, installer or release has been published.
+The simulator, pinned Pi, M1 development tools/ledger/protected profiles, M2 read-only panels and M3 assisted research have local software evidence; one real research enqueue and covering normal save have passed. Actual game input and the remaining native-display/docking/failure gates still need separate validation before M0 can pass. M2 controlled performance, M3 input coordination/takeover/failures and M4 original-diff/evidence navigation remain open. No tag, installer or release has been published.
 
 ## License
 
