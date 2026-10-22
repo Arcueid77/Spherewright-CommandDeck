@@ -74,6 +74,15 @@ This materializes the actual runtime dependency graph, including nested versions
 
 `npm run test:renamed-ui` runs the existing workbench integration check with a separate Electron distribution whose executable is renamed `Spherewright-CommandDeck.exe`. The supervisor admits only its own current Electron executable in the explicit UI role; the registered creation handle remains necessary for termination. The check covers UI reload/replacement and single command execution. It still loads the source checkout and does not validate a complete installed bundle.
 
+Build an unpacked Windows x64 desktop candidate from clean committed source:
+
+```powershell
+npm run package:desktop -- --output artifacts/portable-desktop
+npm run test:portable-desktop -- --source artifacts/portable-desktop
+```
+
+The output directory must be new. The builder freezes native sources into a separate build copy, derives only empty Windows RID lock metadata there, publishes both helpers with locked package dependencies, embeds Electron and the physical Pi runtime tree, and records every shipped file hash and source pin. It excludes Lab, user data and proprietary game DLLs. The test verifies the bundle, copies it outside the checkout, uses a new temporary profile, hides developer tools/shared .NET roots and starts the packaged executable. Its built-in fixture-only mode rejects real models, MCP connections, game tasks and developer commands. Raw runtime traces remain local; only the anonymous summary and bundle manifest are uploaded by CI. This candidate and check do not constitute an installer, clean-Windows VM acceptance, game-input acceptance or release.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

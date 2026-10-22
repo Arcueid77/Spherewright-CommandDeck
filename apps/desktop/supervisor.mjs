@@ -22,9 +22,12 @@ import { GameTasks } from "./game-tasks.mjs";
 import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
+import { OwnedFixtureHost } from "./owned-fixture.mjs";
+import { assertPortableAction } from "./portable-mode.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const smoke = process.argv.includes("--smoke");
+const portableSmoke = process.argv.includes("--portable-smoke");
+const smoke = process.argv.includes("--smoke") || portableSmoke;
 const observationPolicy = observationArguments(process.argv);
 const watchdogMs = 1000;
 const privateDirectory = join(app.getPath("userData"), "supervisor");
@@ -36,7 +39,7 @@ const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smo
 });
 let changingProfiles = false;
 function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
-const native = new WindowHost();
+const native = portableSmoke ? new OwnedFixtureHost() : new WindowHost();
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && process.argv.includes("--smoke-game");
@@ -171,6 +174,7 @@ async function probe(config) {
 	}
 }
 async function api(action, args, source) {
+	if (portableSmoke) assertPortableAction(action, args);
 	assertObservationAction(observationPolicy, action, args);
 	if (ui?.nativeProbePending && ["viewport", "focus-ui"].includes(action)) return { deferred: true };
 	if (ui?.nativeProbePending && ["attach", "start-fixture", "probe"].includes(action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
@@ -330,7 +334,7 @@ function clearUiTests(record) {
 		}
 }
 function startUi() {
-	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
+	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
 	const child = spawnOwnedUi(process.execPath, args, {
 		cwd: root,
 		env: safeEnvironment(),
@@ -710,6 +714,11 @@ if (!app.requestSingleInstanceLock()) {
 			watchdog = setInterval(() => { void checkUi().catch(recoveryFailed); }, 100);
 			await startUi();
 			await attachFromCommandLine(process.argv);
+			if (portableSmoke) {
+				const { runPortableSmoke } = await import("./portable-smoke.mjs");
+				await runPortableSmoke({ root, privateDirectory, context: { root: process.env.COMMANDDECK_PORTABLE_ROOT, runId: process.env.COMMANDDECK_PORTABLE_RUN_ID }, api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui });
+				await shutdown(); return;
+			}
 			if (process.argv.includes("--demo-fixture")) {
 				await api("start-fixture");
 				await api("attach", "owned-fixture");

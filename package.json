@@ -15,6 +15,8 @@
 		"publish:commands": "node scripts/publish-command-host.mjs",
 		"test:portable-command": "node scripts/portable-command-smoke.mjs",
 		"test:portable-pi": "node scripts/portable-pi-smoke.mjs",
+		"package:desktop": "node scripts/package-desktop.mjs",
+		"test:portable-desktop": "node scripts/portable-desktop-smoke.mjs",
 		"build": "npm run build:native && npm run build:commands && npm run build:renderer",
 		"pi:install": "node scripts/pi-source.mjs install",
 		"pi:hydrate": "node scripts/pi-source.mjs hydrate",
