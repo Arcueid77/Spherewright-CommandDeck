@@ -53,6 +53,17 @@ The prototype imports the built coding-agent entry directly from the submodule. 
 
 Developer prerequisites: Git, Node.js 22.19 or newer, and the .NET 8 SDK with Windows desktop support. The current native fixture targets Windows x64; this is a source prototype, not an installer.
 
+The command helper can also be published as a self-contained Windows x64 cohort from clean committed source:
+
+~~~powershell
+npm run publish:commands -- --output artifacts/portable-commands
+npm run test:portable-command -- --source artifacts/portable-commands
+~~~
+
+The output must be a new direct child of `artifacts`; the publisher never overwrites or deletes an existing output. It records the source revision/SDK and seals a bounded manifest of the complete published file group. Self-contained command helpers require that manifest and their app-local runtime; cache preparation checks every listed file's size/hash and exact membership, rejects links/unsafe names/partial or altered groups, and never overwrites existing cache bytes. Framework-dependent development helpers retain their original four-file cache identity. The manifest establishes byte coherence, not an author signature or execution permission; Windows Job/unknown-outcome and workspace grants remain separate.
+
+The portable smoke runs the **cached** helper with developer tools absent from PATH and invalid .NET-root paths, and checks actual app-local runtime loading, exit codes, cancellation/timeout, descendant termination and a cache path longer than260 characters. Its child fixture uses the existing test runner at an absolute path. This is a targeted helper/runtime check on the current Windows host, not a clean-Windows VM, complete Electron/Pi installer or M5 acceptance. No game or model call is made.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

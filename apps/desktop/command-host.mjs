@@ -1,24 +1,27 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, copyFile, realpath } from "node:fs/promises";
-import { constants } from "node:fs";
+import { mkdir, writeFile, realpath, lstat } from "node:fs/promises";
 import { join, isAbsolute, toNamespacedPath } from "node:path";
-
-const files = ["CommandDeck.CommandHost.exe", "CommandDeck.CommandHost.dll", "CommandDeck.CommandHost.deps.json", "CommandDeck.CommandHost.runtimeconfig.json"];
-const hash = (value) => createHash("sha256").update(value).digest("hex");
+import {readCommandCohort,commandFile,commandMembership,commandHash,commandHostFiles,commandManifestName} from './command-cohort.mjs';
 
 // Run a frozen cohort so a source rebuild cannot replace or lock the helper in use.
 export async function prepareCommandHost(source, cache) {
-	const bytes = await Promise.all(files.map((name) => readFile(join(source, name))));
-	const identity = hash(Buffer.concat(bytes));
+	const cohort = await readCommandCohort(source), {identity}=cohort;
 	const directory = join(cache, identity);
 	await mkdir(directory, { recursive: true });
-	for (const [index, name] of files.entries()) {
-		const target = join(directory, name);
-		try { await copyFile(join(source, name), target, constants.COPYFILE_EXCL); } catch (error) { if (error.code !== "EEXIST") throw error; }
-		if (hash(await readFile(target)) !== hash(bytes[index])) throw new Error("COMMAND_HOST_COHORT_CHANGED");
+	const info=await lstat(directory);if(!info.isDirectory()||info.isSymbolicLink())throw new Error('COMMAND_HOST_COHORT_INVALID');
+	const entries=[...cohort.files,...(cohort.manifestBytes?[{name:commandManifestName,bytes:cohort.manifestBytes.length,sha256:commandHash(cohort.manifestBytes)}]:[])];
+	for (const file of entries) {
+		const bytes=file.name===commandManifestName?cohort.manifestBytes:await commandFile(source,file.name,file.bytes);
+		if(bytes.length!==file.bytes||commandHash(bytes)!==file.sha256)throw new Error('COMMAND_HOST_COHORT_CHANGED');
+		try { await writeFile(join(directory,file.name), bytes, {flag:'wx'}); } catch (error) { if (error.code !== "EEXIST") throw error; }
+		const cached=await commandFile(directory,file.name,file.bytes);
+		if(cached.length!==file.bytes||commandHash(cached)!==file.sha256)throw new Error('COMMAND_HOST_COHORT_CHANGED');
 	}
-	return { executable: await realpath(join(directory, files[0])), identity };
+	if(cohort.manifestBytes){
+		const expected=entries.map(file=>file.name).sort();
+		if(JSON.stringify(await commandMembership(directory))!==JSON.stringify(expected)||JSON.stringify(await commandMembership(source))!==JSON.stringify(expected)||commandHash(await commandFile(source,commandManifestName,cohort.manifestBytes.length))!==commandHash(cohort.manifestBytes))throw new Error('COMMAND_HOST_COHORT_CHANGED');
+	}
+	return { executable: await realpath(join(directory, commandHostFiles[0])), identity, selfContained:cohort.selfContained, fileCount:entries.length };
 }
 
 // This manages normal Windows job descendants, not an OS sandbox for arbitrary same-user repository code.
