@@ -6,7 +6,7 @@ export class BridgeMonitor {
 		this.fingerprint = fingerprint; this.launch = launch; this.emit = emit; this.selection = null; this.metadata = null; this.telemetry = null; this.pendingClient = null; this.operation = null; this.closing = false; this.error = null;
 		this.researchAuthority = researchAuthority; this.researchLease = null;
 	}
-	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null }; }
+	snapshot() { return { busy: Boolean(this.operation), selected: this.selection, metadata: this.metadata, error: this.error, observation: this.telemetry?.snapshot() ?? null, requestPerformance: (this.pendingClient ?? this.telemetry?.client)?.requestPerformance?.() ?? null }; }
 	mutate(action) {
 		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
 		if (this.researchLease) return Promise.reject(new Error("GAME_TASK_OWNS_BRIDGE"));

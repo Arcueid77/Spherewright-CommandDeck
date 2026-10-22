@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 
@@ -58,4 +60,34 @@ test("MCP tool-level errors and malformed error flags cannot become successful s
 		await assert.rejects(c.read("spherewright_get_status"), (error) => ["MCP_TOOL_REJECTED", "MCP_TOOL_ERROR_FLAG_INVALID"].includes(error.message) && error.cause === undefined && !JSON.stringify(error, Object.getOwnPropertyNames(error)).includes("SYNTHETIC_RAW_TOOL_ERROR"));
 		assert.equal(c.stats.toolCalls, 1);
 	}
+});
+
+test("client measurements count admitted requests independently of snapshots, duplicates and local rejections", async t => {
+	const c=client(t,'duplicate');await c.discover();
+	assert.equal(c.requestPerformance().byKind.metadata.started,4);assert.equal(c.requestPerformance().byKind.tool.durationMs,null);
+	await assert.rejects(c.read('spherewright_get_status',{unexpected:true}),/READ_NOT_SUPPORTED/);
+	const reads=Array.from({length:8},()=>c.read('spherewright_get_status'));
+	const rejected=assert.rejects(c.read('spherewright_get_status'),/UNAVAILABLE_OR_BUSY/);
+	assert.equal(c.requestPerformance().pending,8);assert.equal(c.requestPerformance().byKind.tool.started,8);
+	await Promise.all(reads);await rejected;await c.read('spherewright_get_session_state');
+	const before=c.stats.requests;for(let index=0;index<50;index++)c.requestPerformance();assert.equal(c.stats.requests,before);
+	const value=c.requestPerformance();assert.equal(value.started,c.stats.requests);assert.equal(value.byKind.tool.started,9);assert.equal(value.responses,value.started);assert.equal(value.pending,0);assert.equal(value.peakPending,8);
+	assert.equal(value.rejectedBeforeAdmission,1);assert.ok(value.duplicateReplies>=8);assert.ok(value.byKind.tool.durationMs.meanMs>=0);
+	assert.equal(value.source,'mcp_client_monotonic_v1');assert.ok(!JSON.stringify(value).includes('spherewright_get_status'));
+	await c.close();const duration=c.requestPerformance().lifetime.durationMs;await new Promise(done=>setTimeout(done,20));
+	assert.equal(c.requestPerformance().lifetime.state,'exit_observed');assert.equal(c.requestPerformance().lifetime.durationMs,duration);
+});
+test("RPC responses, RPC errors and aborted transport remain distinct from tool success", async t => {
+	const bad=client(t,'error');await bad.discover();await assert.rejects(bad.read('spherewright_get_status'),/REQUEST_REJECTED/);
+	assert.equal(bad.requestPerformance().byKind.tool.rpcErrors,1);assert.equal(bad.requestPerformance().byKind.tool.responses,0);
+	const tool=client(t,'tool-error');await tool.discover();await assert.rejects(tool.read('spherewright_get_status'),/TOOL_REJECTED/);
+	assert.equal(tool.requestPerformance().byKind.tool.responses,1);assert.equal(tool.requestPerformance().byKind.tool.rpcErrors,0);
+	const stalled=client(t,'stall',200);await assert.rejects(stalled.discover(),/REQUEST_TIMEOUT/);await stalled.close();
+	const value=stalled.requestPerformance();assert.equal(value.started,1);assert.equal(value.aborted,1);assert.equal(value.pending,0);assert.equal(value.lifetime.state,'exit_observed');
+});
+test('an unconfirmed child exit cannot become a completed lifetime measurement',async()=>{
+	const child=Object.assign(new EventEmitter(),{pid:12345,stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough(),kill(){}});
+	const c=new ReadOnlyMcpClient(child);await assert.rejects(c.close(),/MCP_EXIT_NOT_CONFIRMED/);
+	const value=c.requestPerformance();assert.equal(value.transportClosed,true);assert.equal(value.lifetime.state,'running');assert.equal(value.lifetime.endedAgeMs,null);
+	child.emit('exit',0);await c.close();assert.equal(c.requestPerformance().lifetime.state,'exit_observed');
 });
