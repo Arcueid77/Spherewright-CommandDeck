@@ -1,6 +1,6 @@
-import { ModelRuntime } from "../../vendor/pi/packages/coding-agent/dist/index.js";
-import { AuthStorage } from "../../vendor/pi/packages/coding-agent/dist/core/auth-storage.js";
-import { AssistantMessageEventStream } from "../../vendor/pi/packages/ai/dist/index.js";
+import { ModelRuntime } from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
+import { AuthStorage } from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
+import { AssistantMessageEventStream } from "../../vendor/pi/node_modules/@earendil-works/pi-ai/dist/index.js";
 
 const structural = new Set(["type", "role", "stopReason", "api", "provider", "model", "id", "name", "toolName"]);
 function scrub(value, key, field = "") {

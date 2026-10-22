@@ -8,7 +8,7 @@ import {
 	ModelRuntime,
 	SessionManager,
 	SettingsManager,
-} from "../../vendor/pi/packages/coding-agent/dist/index.js";
+} from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
 import { readProfiles } from "./profiles.mjs";
 
 export const PI_COMMIT = "71023aec1546d6d677a65669c5665c0927ce0dd0";

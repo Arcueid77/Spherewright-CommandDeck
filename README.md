@@ -64,6 +64,14 @@ The output must be a new direct child of `artifacts`; the publisher never overwr
 
 The portable smoke runs the **cached** helper with developer tools absent from PATH and invalid .NET-root paths, and checks actual app-local runtime loading, exit codes, cancellation/timeout, descendant termination and a cache path longer than260 characters. Its child fixture uses the existing test runner at an absolute path. This is a targeted helper/runtime check on the current Windows host, not a clean-Windows VM, complete Electron/Pi installer or M5 acceptance. No game or model call is made.
 
+The embedded Pi SDK can also be verified independently of the checkout:
+
+```powershell
+npm run test:portable-pi -- --require-clean-source
+```
+
+This materializes the actual runtime dependency graph, including nested versions and the fixed fork's seven internal packages, into a new physical temporary tree outside the checkout. It preserves package resolution without shipping workspace links, refuses registry substitutes for internal Pi packages, and records file hashes and missing optional dependencies. The copied desktop runtime completes an offline synthetic tool roundtrip with global Node package lookup disabled and developer tools absent from PATH. The existing absolute Node test runner is still used; this is dependency portability evidence, not the full Electron bundle, installer or clean-Windows acceptance. The normal checkout continues resolving these same paths through its pinned workspace links.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

@@ -14,6 +14,7 @@
 		"build:commands": "dotnet build native/CommandDeck.CommandHost/CommandDeck.CommandHost.csproj -c Release --nologo -o artifacts/commands",
 		"publish:commands": "node scripts/publish-command-host.mjs",
 		"test:portable-command": "node scripts/portable-command-smoke.mjs",
+		"test:portable-pi": "node scripts/portable-pi-smoke.mjs",
 		"build": "npm run build:native && npm run build:commands && npm run build:renderer",
 		"pi:install": "node scripts/pi-source.mjs install",
 		"pi:hydrate": "node scripts/pi-source.mjs hydrate",

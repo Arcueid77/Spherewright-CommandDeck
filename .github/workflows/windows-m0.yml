@@ -37,6 +37,7 @@ jobs:
           git submodule foreach --recursive git status --porcelain=v1 --untracked-files=normal
       - run: npm run publish:commands -- --output artifacts/portable-commands
       - run: npm run test:portable-command -- --source artifacts/portable-commands
+      - run: npm run test:portable-pi -- --require-clean-source
       - run: npm run test:vault
       - run: npm run test:native
       - run: npm run test:ui-watchdog
@@ -79,4 +80,5 @@ jobs:
             .local/desktop-smoke-observation.json
             .local/desktop-smoke-game.json
             .local/portable-command-smoke.json
+            .local/portable-pi-smoke.json
           if-no-files-found: ignore

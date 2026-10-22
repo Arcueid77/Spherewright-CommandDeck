@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager } from "../../vendor/pi/packages/coding-agent/dist/index.js";
+import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager } from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
 import { readProfiles } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
