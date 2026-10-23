@@ -12,9 +12,9 @@ if (persistent) {
 	try {
 	const path = process.argv[3], runId = process.argv[4]; assert.match(runId ?? "", /^[0-9a-f-]{36}$/);
 	stage = "DIRECTORY_REALPATH";
-	const directory = realpathSync(dirname(path)), scoped = relative(realpathSync(tmpdir()), directory);
+	const directory = realpathSync.native(dirname(path)), scoped = relative(realpathSync.native(tmpdir()), directory);
 	stage = "TEMP_ESCAPE"; assert.ok(!scoped.startsWith("..")); stage = "TEMP_PREFIX"; assert.match(scoped.split(sep)[0], /^commanddeck-(?:mcp-recovery|desktop-smoke)-/);
-	stage = "FILE_NAME"; assert.equal(basename(path), "synthetic-research-world.json"); worldPath = join(directory, basename(path)); stage = "FILE_REALPATH"; assert.equal(realpathSync(path).toLowerCase(), worldPath.toLowerCase());
+	stage = "FILE_NAME"; assert.equal(basename(path), "synthetic-research-world.json"); worldPath = join(directory, basename(path)); stage = "FILE_REALPATH"; assert.equal(realpathSync.native(path).toLowerCase(), worldPath.toLowerCase());
 	const info = lstatSync(path); stage = "FILE_TYPE"; assert.ok(info.isFile() && !info.isSymbolicLink()); stage = "FILE_LINKS"; assert.equal(info.nlink, 1); stage = "FILE_SIZE"; assert.ok(info.size <= 4096);
 	stage = "JSON"; world = JSON.parse(readFileSync(path, "utf8")); stage = "VERSION"; assert.equal(world.version, 1); stage = "IDENTITY"; assert.equal(world.runId, runId);
 	for (const field of ["commits", "tick", "launches", "prepares", "resultReads"]) { stage = "COUNTER_" + field.toUpperCase(); assert.ok(Number.isSafeInteger(world[field]) && world[field] >= 0 && world[field] <= 10000); }

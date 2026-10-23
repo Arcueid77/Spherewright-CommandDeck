@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { realpathSync } from "node:fs";
 
 export function syntheticMcpEnvironment(source = process.env) {
-	const temporary = realpathSync(tmpdir());
+	// Match async realpath: the native Windows resolver expands DOS aliases.
+	const temporary = realpathSync.native(tmpdir());
 	// Bind the child's environment to the creating test process's physical temp
 	// root. Windows can otherwise select another value from mixed-case aliases.
 	const environment = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(?:TEMP|TMP|TMPDIR)$/i.test(key)));

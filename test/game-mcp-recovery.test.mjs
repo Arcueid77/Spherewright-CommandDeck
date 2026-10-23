@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeMonitor } from "../apps/desktop/bridge-monitor.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
@@ -115,4 +115,15 @@ test("synthetic-world admission reports only a fixed scope error, emits no MCP r
 test("the synthetic MCP keeps its owner's canonical temp scope despite conflicting child temp aliases", async t => {
 	const f = await fixture(t, "mcp-drop-after-accept", { driftTemp: true }), original = await f.submitted();
 	f.host.reconcile(original.intentId); assert.equal((await f.host.settled()).phase, "completed"); const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 2);
+});
+
+test("Windows DOS directory aliases resolve to the same physical temp scope", async t => {
+	if (process.platform !== "win32" || !process.env.ProgramFiles) return t.skip("Windows directory alias unavailable");
+	const alias = join(parse(process.env.ProgramFiles).root, "PROGRA~1"); let physical;
+	try { physical = await realpath(alias); if (physical.toLowerCase() !== (await realpath(process.env.ProgramFiles)).toLowerCase() || physical.toLowerCase() === alias.toLowerCase()) return t.skip("No matching DOS directory alias"); } catch { return t.skip("No matching DOS directory alias"); }
+	// This child only reads directory metadata; no fixture or file is created there.
+	const source = `import {syntheticMcpEnvironment} from ${JSON.stringify(new URL("../apps/desktop/synthetic-scope.mjs", import.meta.url).href)};import {realpath} from 'node:fs/promises';import {tmpdir} from 'node:os';const expected=await realpath(tmpdir());const env=syntheticMcpEnvironment();if(env.TEMP.toLowerCase()!==expected.toLowerCase())throw new Error('TEMP_SCOPE_ALIAS_MISMATCH');console.log('PHYSICAL_TEMP_SCOPE_MATCHED');`;
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:TEMP|TMP|TMPDIR|NODE_COMPILE_CACHE)$/i.test(key))); Object.assign(env, { TEMP: alias, TMP: alias, TMPDIR: alias });
+	const child = spawn(process.execPath, ["--input-type=module", "-e", source], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); let stdout = "", stderr = ""; child.stdout.on("data", bytes => { stdout += bytes; }); child.stderr.on("data", bytes => { stderr = (stderr + bytes).slice(-2048); });
+	const [code] = await once(child, "close"); assert.equal(code, 0, stderr.includes("TEMP_SCOPE_ALIAS_MISMATCH") ? "TEMP_SCOPE_ALIAS_MISMATCH" : "TEMP_SCOPE_ALIAS_PROBE_FAILED"); assert.equal(stdout.trim(), "PHYSICAL_TEMP_SCOPE_MATCHED");
 });
