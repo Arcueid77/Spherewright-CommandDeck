@@ -105,6 +105,8 @@ The automated check accepts only an explicitly compiled test identity, requires 
 
 Supervisor startup acquires its existing profile's single-instance lock before importing task/ledger modules. A second launch exits before creating or migrating a game ledger. The packaged app keeps the source application's identity rather than adding a different `productName` that would select another default profile; installer and window display names remain separate. `npm run test:profile-lock` checks the source entry with a real OS lock holder; add `-- --source artifacts/portable-desktop` to check a built bundle. All test profiles are isolated.
 
+If supervisor module loading fails, startup retains the profile lock and opens a static blocked window after Electron is ready. It shows only a fixed error code and recovery guidance, without a preload bridge, page scripts, Node access or raw exception details. It does not delete/reset the failed ledger or open a fallback profile. `npm run test:startup-failure -- --source artifacts/portable-desktop` exercises an unsupported schema, unknown schema and corrupt game ledger in separate synthetic profiles with the actual packaged executable; it checks the visible blocked page, unchanged ledger bytes/members and process exit. This covers early bootstrap failures; later runtime failures, disk exhaustion and the complete recovery matrix remain separate gates.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

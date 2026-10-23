@@ -4,6 +4,7 @@ import { mkdtemp, realpath, rm, writeFile, lstat } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { startSupervisor } from "../apps/desktop/supervisor-start.mjs";
+import { startupFailureCode, startupFailurePage } from "../apps/desktop/startup-failure.mjs";
 
 async function fixture(t) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-supervisor-start-")));
@@ -21,4 +22,21 @@ test("the primary instance keeps the existing profile path and loads resources o
 	const root = await fixture(t), events = [];
 	const app = { getPath: () => root, setPath: (_name, path) => events.push(path), requestSingleInstanceLock: () => { events.push("lock"); return true; }, exit: () => assert.fail("primary must not exit") };
 	assert.equal((await startSupervisor(app, { load: async () => events.push("load") })).primary, true); assert.deepEqual(events, [join(root, "supervisor"), "lock", "load"]);
+});
+
+test("failed bootstrap retains ownership and returns before ready, then shows only a sanitized blocked state", async t => {
+	const root = await fixture(t), events = []; let ready;
+	const app = { getPath: () => root, setPath: () => {}, requestSingleInstanceLock: () => true, exit: code => events.push("exit:" + code), whenReady: () => new Promise(resolve => { ready = resolve; }) };
+	const result = await startSupervisor(app, { notice: code => events.push(code), load: async () => { throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED"); }, blocked: async code => events.push("shown:" + code) });
+	assert.deepEqual(result, { primary: true, blocked: true, code: "GAME_LEDGER_SCHEMA_UNSUPPORTED" }); assert.deepEqual(events, ["GAME_LEDGER_SCHEMA_UNSUPPORTED"]);
+	ready(); await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(events, ["GAME_LEDGER_SCHEMA_UNSUPPORTED", "shown:GAME_LEDGER_SCHEMA_UNSUPPORTED"]);
+});
+
+test("startup diagnostics discard raw storage messages and HTML never includes caller text or executable scripts", () => {
+	const secret = "<script>private credential and path</script>";
+	for (const error of [Object.assign(new Error(secret), { code: "ERR_SQLITE_ERROR" }), Object.assign(new Error(secret), { code: "ENOSPC" })]) assert.equal(startupFailureCode(error), "STARTUP_STORAGE_UNAVAILABLE");
+	assert.equal(startupFailureCode(new Error(secret)), "STARTUP_FAILED");
+	for (const code of [secret, "STARTUP_STORAGE_UNAVAILABLE", "GAME_LEDGER_SCHEMA_UNSUPPORTED"]) {
+		const page = startupFailurePage(code); assert.ok(page.includes("启动受阻")); assert.ok(page.includes("default-src 'none'")); assert.ok(!page.includes(secret)); assert.ok(!page.includes("<script"));
+	}
 });

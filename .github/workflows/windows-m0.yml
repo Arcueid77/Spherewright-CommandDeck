@@ -62,6 +62,7 @@ jobs:
       - run: npm run package:desktop -- --output artifacts/portable-desktop
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop --reopen-history
       - run: npm run test:profile-lock -- --source artifacts/portable-desktop
+      - run: npm run test:startup-failure -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
       - name: Build isolated installer candidate
@@ -78,6 +79,7 @@ jobs:
             .local/native-smoke.json
             .local/process-cohort-observer.json
             .local/profile-lock-smoke.json
+            .local/startup-failure-smoke.json
             .local/ui-watchdog-native.json
             .local/native-hang-probe.json
             .local/native-input-hang-probe.json
