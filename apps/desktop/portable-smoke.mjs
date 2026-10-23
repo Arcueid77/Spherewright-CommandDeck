@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { readPortableHistory, assertPortableHistory } from "./portable-history.mjs";
+import { readPortableRecovery, runPortableRecoverySmoke } from "./portable-recovery.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -19,6 +20,8 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	const recovery = await readPortableRecovery(context);
+	if (recovery) { await runPortableRecoverySmoke(driver, recovery, manifest, runtimePid, settledUi); return; }
 	const history = await readPortableHistory(context);
 	let historyProof = null;
 	if (history) historyProof = await assertPortableHistory(api, history);

@@ -115,6 +115,8 @@ function runGamePlanner(command) {
 	});
 }
 async function probe(config) {
+	const gameState = game.snapshot();
+	if (game.operation || gameState.developmentFrozen || gameState.unresolved.length) throw new Error("GAME_EXECUTION_OWNS_RUNTIME");
 	if (
 		!config ||
 		!["offline", "live"].includes(config.mode) ||

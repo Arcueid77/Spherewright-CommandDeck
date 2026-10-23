@@ -20,6 +20,7 @@
 		"test:process-cohort": "node scripts/cohort-observer-smoke.mjs",
 		"test:profile-lock": "node scripts/profile-lock-smoke.mjs",
 		"test:startup-failure": "node scripts/startup-failure-smoke.mjs",
+		"test:legacy-recovery": "node scripts/legacy-recovery-smoke.mjs",
 		"installer:toolchain": "node scripts/prepare-installer-toolchain.mjs",
 		"package:installer": "node scripts/package-installer.mjs",
 		"test:installer": "node scripts/installer-smoke.mjs",

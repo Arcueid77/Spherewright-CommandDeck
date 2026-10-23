@@ -369,6 +369,10 @@ M5新增显式候选对升级入口：只接受不同源码、同一隔离AppId�
 
 迁移保护 `053dd054bfd7ed220e4b29ecb591ba18b3dac3a3` 已从干净源码生成完整便携组，16,132文件/740,532,472字节。包外run `1e8dc248-9d43-4305-a708-35b783bf5ecb` 四个实际启动拒绝全部通过，新增畸形v1原库SHA `7a2665cac99725b5e4c4b72c7b59567d71d29a899df2d6adf02b40cde295661a` 保持、无新表/旁文件和零本次残留；正常run `8a9cdbd1-3468-4c4b-b5c3-c4fda8e75ea6` 同profile两次启动、完整原合成历史及既有运行链通过。原正常资料仅以只读方式核其Workbench v1/Game v2表集匹配、各DB原字节未变；未以此冒充已打开新版完整正常用户profile。准确 [CI39884577047](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39884577047) 仍在运行。实际v1整应用迁移、未决动作恢复、后期Workbench/Runtime初始化失败、磁盘满及其他M5门继续未完成。
 
+M5新增实际整应用v1迁移/未决启动入口：使用历史实现生成的合成原库，在实际打包EXE启动前保留v1，首次启动须迁移为v2，第二次保持同一物理profile/run identity。两次均核原task/intent/gate每个字段及原key/action/接受回执未变、pending保留、Workbench冻结、无MCP选择；打开真实renderer的游戏面板核等待核销及原动作显示、执行控件禁用，并在UI重载后复核。Supervisor的M0探针另在创建session/清空结果前拒绝游戏持有运行时，避免下游拒绝前先分配探针。新增2项定向检查、完整245项Node、类型及实际Electron合成科研回归通过；重新组包实跑及准确CI仍待。本片不查询或完成原动作，不恢复旧审批/token，不关闭真实故障/接手与完整M5门。
+
+前片迁移保护053的准确 [CI39884577047](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39884577047) 已全部通过，含243项Node、正常便携重开、四类实际包启动拒绝和既有安装/修复/卸载。其证据不转移至新增整应用v1未决场景或后续源码。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：
