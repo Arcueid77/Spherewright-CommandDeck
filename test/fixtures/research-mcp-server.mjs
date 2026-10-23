@@ -1,14 +1,35 @@
 import { createInterface } from "node:readline";
+import assert from "node:assert/strict";
+import { lstatSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
+const persistent = ["mcp-drop-after-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-lost-ack"].includes(mode);
+let world, worldPath;
+if (persistent) {
+	const path = process.argv[3], runId = process.argv[4]; assert.match(runId ?? "", /^[0-9a-f-]{36}$/);
+	const directory = realpathSync(dirname(path)), scoped = relative(realpathSync(tmpdir()), directory);
+	assert.ok(!scoped.startsWith("..") && /^commanddeck-(?:mcp-recovery|desktop-smoke)-/.test(scoped.split(sep)[0]));
+	assert.equal(basename(path), "synthetic-research-world.json"); worldPath = join(directory, basename(path)); assert.equal(realpathSync(path).toLowerCase(), worldPath.toLowerCase());
+	const info = lstatSync(path); assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= 4096);
+	world = JSON.parse(readFileSync(path, "utf8")); assert.equal(world.version, 1); assert.equal(world.runId, runId);
+	for (const field of ["commits", "tick", "launches", "prepares", "resultReads"]) assert.ok(Number.isSafeInteger(world[field]) && world[field] >= 0 && world[field] <= 10000);
+	assert.equal(typeof world.lossInjected, "boolean"); assert.ok(world.commits <= 1 && world.launches < 8);
+	if (world.commits) { assert.equal(world.techId, 100); assert.match(world.key, /^[0-9a-f-]{36}$/); assert.equal(world.tick, 1201); }
+	else { assert.equal(world.techId, null); assert.equal(world.key, null); }
+	world.launches++; writeFileSync(worldPath, JSON.stringify(world));
+}
 const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 const field = (type) => ({ type });
 const tool = (name, fields, readOnly = true, destructive = false, optional = []) => ({ name, annotations: { readOnlyHint: readOnly, destructiveHint: destructive }, inputSchema: { type: "object", properties: Object.fromEntries(Object.entries(fields).map(([key, type]) => [key, field(type)])), required: Object.keys(fields).filter((key) => !optional.includes(key)) } });
 const scope = { sessionId: "synthetic-session", planetId: 1 }, local = { sessionId: "string", planetId: "integer" };
 const tools = [tool("spherewright_get_status", {}), tool("spherewright_get_session_state", {}), tool("spherewright_get_progression_state", local), tool("spherewright_get_player_state", local), tool("spherewright_prepare_select_research", { ...local, techId: "integer", expectedSelectionStateHash: "string", stateHashVersion: "integer", prioritizeQueued: "boolean" }, false, false, ["stateHashVersion", "prioritizeQueued"]), tool("spherewright_commit_select_research", { ...local, planToken: "string", idempotencyKey: "string" }, false, true), tool("spherewright_get_action_result", { actionId: "string" })];
-if (mode === "bad-schema") tools[4].inputSchema.required.push("unrecognized");
+if (mode === "bad-schema" || mode === "mcp-drop-after-accept-schema" && world.launches > 1) tools[4].inputSchema.required.push("unrecognized");
 if (mode === "bad-commit-hint") tools[5].annotations.destructiveHint = false;
 let commits = 0, preparedTech, key, tick = 1200, resultReads = 0, progressions = 0, failedContext = false;
+if (world) { commits = world.commits; preparedTech = world.techId ?? undefined; key = world.key ?? undefined; tick = world.tick; resultReads = world.resultReads; }
+const persist = () => { if (world) { Object.assign(world, { commits, techId: commits ? preparedTech : null, key: key ?? null, tick, resultReads }); writeFileSync(worldPath, JSON.stringify(world)); } };
 const hash = () => "sha256:" + (commits ? "b" : "a").repeat(64);
 const budget = () => [{ itemId: 1202, name: "磁线圈", count: 10, direction: "research-consumption" }];
 const input = createInterface({ input: process.stdin });
@@ -21,11 +42,12 @@ input.on("line", (line) => {
 	if (request.method !== "tools/call") return;
 	const { name, arguments: args } = request.params; let value;
 	if (["native-unknown-context-failure", "wrong-key-context-failure"].includes(mode) && name === "spherewright_get_status" && resultReads && !failedContext) { failedContext = true; return send(request.id, { isError: true, structuredContent: { success: false } }); }
-	if (name === "spherewright_get_status") return send(request.id, { structuredContent: { success: true, status: { bridgeConnected: true, bridgeInstanceId: mode === "world-switch" && progressions ? "different-bridge" : "synthetic-bridge", protocolVersion: 1, gameLoaded: true, writesConfigured: mode !== "writes-disabled", writeHealth: "healthy", syntheticCommitCount: commits } } });
+	if (name === "spherewright_get_status") return send(request.id, { structuredContent: { success: true, status: { bridgeConnected: true, bridgeInstanceId: mode === "world-switch" && progressions || mode === "mcp-drop-after-accept-world" && world.launches > 1 ? "different-bridge" : "synthetic-bridge", protocolVersion: 1, gameLoaded: true, writesConfigured: mode !== "writes-disabled", writeHealth: "healthy", syntheticCommitCount: commits } } });
 	if (name === "spherewright_get_session_state") value = { bridgeConnected: true, gameLoaded: true, ownedBySpherewright: mode !== "unowned", accessRestricted: false, ...scope, localPlanetId: 1, gameTick: tick, revision: 1, writesAllowed: true, writeHealth: "healthy", peacefulMode: "confirmed_peaceful", writeBlockers: [], saveName: "PRIVATE_SAVE_MUST_NOT_ESCAPE", restartResumeToken: "PRIVATE_RESUME_MUST_NOT_ESCAPE" };
 	if (name === "spherewright_get_player_state") value = { ...scope, capturedAtGameTick: tick, stateHash: hash(), stateHashVersion: 1, inventory: [{ name: "PRIVATE_PLAYER_MUST_NOT_ESCAPE" }] };
 	if (name === "spherewright_get_progression_state") { progressions++; value = { ...scope, capturedAtGameTick: tick, selectionStateHash: mode === "stale-selection" && progressions > 1 ? "sha256:" + "c".repeat(64) : hash(), selectionStateHashVersion: 1, techQueue: commits ? [99, preparedTech] : [99], technologies: [{ techId: 99, name: "Existing research", unlocked: false, isQueued: true, prerequisiteTechIds: [], itemRequirements: [] }, { techId: 100, name: "Synthetic research", unlocked: false, isQueued: Boolean(commits), prerequisiteTechIds: [], itemRequirements: [{ itemId: 1202, name: "磁线圈", requiredItemCount: mode === "budget-unsafe-requirement" ? Number.MAX_SAFE_INTEGER + 1 : mode === "budget-changed-at-confirm" && preparedTech ? 11 : 10, nativePrivate: "PRIVATE_REQUIREMENT_MUST_NOT_ESCAPE" }] }] }; }
 	if (name === "spherewright_prepare_select_research") {
+		if (world) { world.prepares++; persist(); }
 		preparedTech = args.techId; value = { prepared: true, actionKind: "select-research", planToken: "PRIVATE_SYNTHETIC_NATIVE_PLAN_TOKEN_0001", expectedStateHash: nativeResearchStateHash({ kind: "select-research", ...scope, techId: args.techId, selectionStateHash: args.expectedSelectionStateHash }), stateHashVersion: 1, researchQueueReadbackVersion: 1, expiresAtUtc: new Date(Date.now() + 30000).toISOString(), commitAllowedNow: true, commitBlockers: [], itemBudget: budget() };
 		if (mode === "readback-unsupported") delete value.researchQueueReadbackVersion;
 		if (mode === "budget-missing") value.itemBudget = [];
@@ -39,9 +61,9 @@ input.on("line", (line) => {
 	if (name === "spherewright_commit_select_research") {
 		// Match the native Guid requirement, including when a test bypasses the host argument validator.
 		if (typeof args.idempotencyKey !== "string" || args.idempotencyKey.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args.idempotencyKey)) return send(request.id, { isError: true, structuredContent: { success: false, error: { code: "INVALID_REQUEST", message: "A UUID idempotency key is required." } } });
-		commits++; tick = 1201; key = args.idempotencyKey; if (mode === "lost-ack") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
+		commits++; tick = 1201; key = args.idempotencyKey; persist(); if (mode === "lost-ack" || mode === "mcp-lost-ack") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
 	}
-	if (name === "spherewright_get_action_result") { resultReads++; const pending = mode === "pending" && resultReads < 2, unknown = mode === "native-unknown" || mode === "native-unknown-context-failure" && resultReads === 1; value = { ...scope, actionId: "synthetic-action", actionKind: "select-research", idempotencyKey: key, state: unknown ? "outcome_unknown" : pending ? "executing" : "completed", terminal: !pending, succeeded: !unknown && !pending, completedAtGameTick: 1201, recoveryRequired: unknown, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: mode === "wrong-queue" ? [99, 101] : [99, preparedTech], inventoryPreserved: true, researchProgressPreserved: true }, flightCheckpointReloadToken: "PRIVATE_FLIGHT_MUST_NOT_ESCAPE", syntheticCommitCount: commits }; }
+	if (name === "spherewright_get_action_result") { resultReads++; if (world && !world.lossInjected && mode.startsWith("mcp-drop-after-accept")) { world.lossInjected = true; persist(); process.exit(0); return; } persist(); const pending = mode === "pending" && resultReads < 2, unknown = mode === "native-unknown" || mode === "native-unknown-context-failure" && resultReads === 1; value = { ...scope, actionId: "synthetic-action", actionKind: "select-research", idempotencyKey: mode === "mcp-drop-after-accept-key" && world.launches > 1 ? "different-native-key" : key, state: unknown ? "outcome_unknown" : pending ? "executing" : "completed", terminal: !pending, succeeded: !unknown && !pending, completedAtGameTick: 1201, recoveryRequired: unknown, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: mode === "wrong-queue" ? [99, 101] : [99, preparedTech], inventoryPreserved: true, researchProgressPreserved: true }, flightCheckpointReloadToken: "PRIVATE_FLIGHT_MUST_NOT_ESCAPE", syntheticCommitCount: commits }; }
 	if (name === "spherewright_get_action_result" && mode === "wrong-result-then-valid" && resultReads === 1) value.actionId = "different-native-action";
 	if (name === "spherewright_get_action_result" && mode === "wrong-key-context-failure" && resultReads === 1) value.idempotencyKey = "different-native-key";
 	if (name === "spherewright_get_action_result" && mode === "missing-readback") delete value.researchQueueReadback;

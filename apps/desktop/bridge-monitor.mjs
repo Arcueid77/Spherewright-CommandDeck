@@ -13,6 +13,9 @@ export class BridgeMonitor {
 	mutate(action) {
 		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
 		if (this.researchLease) return Promise.reject(new Error("GAME_TASK_OWNS_BRIDGE"));
+		return this.#operate(action);
+	}
+	#operate(action) {
 		if (this.operation) return Promise.reject(new Error("BRIDGE_CONNECTION_BUSY"));
 		this.operation = Promise.resolve().then(action).catch((error) => { this.error = /^[A-Z_]+$/.test(error?.message) ? error.message : "BRIDGE_CONNECTION_FAILED"; throw new Error(this.error); }).finally(() => { this.operation = null; this.emit(); });
 		return this.operation;
@@ -46,6 +49,21 @@ export class BridgeMonitor {
 		if (!this.researchAuthority || authority !== this.researchAuthority || this.closing || this.operation || this.researchLease || !this.telemetry || this.telemetry.client.closed || !this.metadata?.researchAvailable) throw new Error("RESEARCH_BRIDGE_UNAVAILABLE");
 		const client = this.telemetry.client; client.researchPort(authority);
 		const lease = Object.freeze({ client, selection: this.selection }); this.researchLease = lease; return lease;
+	}
+	reconnectResearch(lease, binding) {
+		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
+		if (!lease || lease !== this.researchLease || this.selection !== lease.selection || !lease.client.closed) return Promise.reject(new Error("ORIGINAL_MCP_RECONNECT_UNAVAILABLE"));
+		if (binding?.cohortHash !== lease.selection.cohortHash || binding?.schemaHash !== this.metadata?.schemaHash) return Promise.reject(new Error("ORIGINAL_MCP_COHORT_REQUIRED"));
+		// Keep the original lease throughout close/discovery. Ordinary selection,
+		// reconnect and polling remain excluded; the old child's exit is confirmed first.
+		return this.#operate(async () => {
+			await this.#disconnect(); this.error = null; await this.#connect();
+			if (this.closing || this.metadata.schemaHash !== binding.schemaHash || !this.metadata.researchAvailable) {
+				await this.#disconnect(); throw new Error(this.closing ? "BRIDGE_MONITOR_CLOSING" : "ORIGINAL_MCP_COHORT_REQUIRED");
+			}
+			const replacement = Object.freeze({ client: this.telemetry.client, selection: this.selection, recoveryOnly: true });
+			this.researchLease = replacement; return replacement;
+		});
 	}
 	releaseResearch(lease) { if (this.researchLease !== lease) throw new Error("RESEARCH_LEASE_MISMATCH"); this.researchLease = null; this.poll(); }
 	watch(itemIds) { if (!this.telemetry || this.operation || this.closing) throw new Error("BRIDGE_OBSERVER_UNAVAILABLE"); this.telemetry.watch(itemIds); this.poll(); return this.snapshot(); }

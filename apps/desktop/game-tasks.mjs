@@ -9,7 +9,7 @@ const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 
 // One host coordinator; model tools only observe and propose. Neither can approve or commit.
 export class GameTasks {
-	#authority; #approvalAuthority = {}; #confirmations = new Map();
+	#authority; #approvalAuthority = {}; #confirmations = new Map(); #reconnectOriginal = false;
 	constructor({ directory, bridge, researchAuthority, approvalAuthority, freezeDevelopment, releaseDevelopment, planner, emit = () => {}, now = () => Date.now(), pollMilliseconds = 15000, syntheticOnly = false }) {
 		if (!approvalAuthority || typeof planner !== "function") throw new Error("TRUSTED_GAME_HOST_REQUIRED");
 		this.#authority = researchAuthority; this.hostApproval = approvalAuthority; this.bridge = bridge; this.freezeDevelopment = freezeDevelopment; this.releaseDevelopment = releaseDevelopment; this.planner = planner; this.emit = emit; this.now = now; this.pollMilliseconds = pollMilliseconds;
@@ -17,7 +17,7 @@ export class GameTasks {
 		this.runtimeAvailable = true;
 		this.ledger = new GameIntentLedger(join(directory, "game-tasks.sqlite"), { approvalAuthority: this.#approvalAuthority, now,
 			prepareResearch: (request) => { const task = this.ledger.tasks().find((task) => task.id === this.currentTaskId); if (!this.adapter || !task) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE"); return this.adapter.prepareResearch(request, task.scope); },
-			readResearchProof: (request) => { if (!this.adapter) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE"); return this.adapter.readResearchProof(request); },
+			readResearchProof: (request) => this.#readOriginal(request),
 		});
 		const pending = this.ledger.unresolved();
 		if (pending.length) { this.currentTaskId = pending[0].taskId; this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"; }
@@ -67,6 +67,22 @@ export class GameTasks {
 	async #release() {
 		if (this.bridgeLease) { this.bridge.releaseResearch(this.bridgeLease); this.bridgeLease = null; this.adapter = null; }
 		if (this.developmentHeld && this.runtimeAvailable) { await this.releaseDevelopment(); this.developmentHeld = false; }
+	}
+	async #readOriginal(request) {
+		// The ledger checks durable audit isolation before invoking this callback.
+		const intent = this.ledger.intent(request.intentId), details = this.ledger.tasks().find(task => task.id === intent.taskId)?.details;
+		if (!details?.cohortHash || !details.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
+		if (!this.bridgeLease) {
+			if (!this.#reconnectOriginal) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE");
+			this.#reconnectOriginal = false; await this.#reserve();
+		} else if (this.bridgeLease.client.closed) {
+			if (!this.#reconnectOriginal) throw new Error("ORIGINAL_MCP_DISCONNECTED");
+			this.#reconnectOriginal = false;
+			this.bridgeLease = await this.bridge.reconnectResearch(this.bridgeLease, details); this.adapter = null;
+		}
+		if (details.cohortHash !== this.bridgeLease.selection.cohortHash || details.schemaHash !== this.bridgeLease.client.metadata.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
+		this.adapter = new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now, recoveryOnly: true });
+		return this.adapter.readResearchProof(request);
 	}
 	catalog() {
 		this.#requireRuntime();
@@ -170,10 +186,9 @@ export class GameTasks {
 		if (!intent.actionId) throw new Error("UNKNOWN_COMMIT_HAS_NO_ACTION_ID");
 		this.currentTaskId = intent.taskId;
 		return this.#launch("reconciling", async () => {
-			await this.#reserve();
-			const details = this.ledger.tasks().find((task) => task.id === intent.taskId).details;
-			if (details.cohortHash !== this.adapter.binding.cohortHash || details.schemaHash !== this.adapter.binding.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
-			await this.#pollOriginal(intentId);
+			if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
+			this.#reconnectOriginal = true;
+			try { await this.#pollOriginal(intentId); } finally { this.#reconnectOriginal = false; }
 		});
 	}
 	stop() {

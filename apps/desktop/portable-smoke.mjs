@@ -7,6 +7,7 @@ import { readPortableHistory, assertPortableHistory } from "./portable-history.m
 import { readPortableRecovery, runPortableRecoverySmoke } from "./portable-recovery.mjs";
 import { runGameSmoke } from "./game-smoke.mjs";
 import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.mjs";
+import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -22,8 +23,8 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
-	if (driver.runtimeScenario) {
-		assert.equal(manifest.portableRuntimeFaults, 1);
+	if (driver.runtimeScenario || driver.mcpLossScenario) {
+		assert.equal(manifest[driver.mcpLossScenario ? "portableMcpFaults" : "portableRuntimeFaults"], 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		const work = await api("workbench", { action: "state" }), game = await api("game", { action: "snapshot" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.executionBlocked, false);
@@ -32,9 +33,9 @@ export async function runPortableSmoke(driver) {
 		await settledUi();
 		const scenarioDriver = { ...driver, runId: context.runId, proofDirectory: context.root };
 		if (driver.runtimeScenario === "idle") await runRuntimeLossSmoke(scenarioDriver); else await runGameSmoke(scenarioDriver);
-		const proof = JSON.parse(await readFile(join(context.root, runtimeLossProofName(driver.runtimeScenario)), "utf8")); assert.equal(proof.runId, context.runId); assert.equal(proof.runtimeExitObserved, true);
+		const proof = JSON.parse(await readFile(join(context.root, driver.mcpLossScenario ? mcpLossProofName(driver.mcpLossScenario) : runtimeLossProofName(driver.runtimeScenario)), "utf8")); assert.equal(proof.runId, context.runId); assert.equal(proof[driver.mcpLossScenario ? "originalMcpExitObserved" : "runtimeExitObserved"], true);
 		assert.deepEqual((await testCommand("portable-renderer-state")).errors, []);
-		await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, runtimeScenario: driver.runtimeScenario, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: true, externalProviderAndDevelopmentRejected: true, syntheticFactoryOnly: true, fullRecoveryMatrixVerified: false }), { flag: "wx" });
+		await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, runtimeScenario: driver.runtimeScenario, mcpLossScenario: driver.mcpLossScenario, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: true, externalProviderAndDevelopmentRejected: true, syntheticFactoryOnly: true, fullRecoveryMatrixVerified: false }), { flag: "wx" });
 		return;
 	}
 	const recovery = await readPortableRecovery(context);

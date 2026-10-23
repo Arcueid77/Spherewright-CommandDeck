@@ -16,8 +16,10 @@ function same(scope, context) {
 // Correlation is established here, directly around one fixed MCP request/response pair.
 // No caller-supplied native plan or proof is accepted by the ledger.
 export class ResearchAdapter {
-	constructor({ client, authority, selection, now = () => Date.now() }) {
+	#recoveryOnly;
+	constructor({ client, authority, selection, now = () => Date.now(), recoveryOnly = false }) {
 		this.client = client; this.port = client.researchPort(authority); this.now = now;
+		this.#recoveryOnly = recoveryOnly === true;
 		this.binding = Object.freeze({ cohortHash: selection.cohortHash, schemaHash: client.metadata.schemaHash });
 	}
 	async playbook() {
@@ -51,6 +53,7 @@ export class ResearchAdapter {
 		return { context: { ...after, selectionStateHash: raw.selectionStateHash }, progression: { sessionId: raw.sessionId, planetId: raw.planetId, capturedAtGameTick: raw.capturedAtGameTick, selectionStateHash: raw.selectionStateHash, observedAt: receivedAt, techQueue: [...raw.techQueue], technologies }, ...(researchBudget === undefined ? {} : { researchBudget }) };
 	}
 	async prepareResearch(request, scope) {
+		if (this.#recoveryOnly) throw new Error("READ_ONLY_RESEARCH_RECOVERY");
 		const expected = { sessionId: scope.sessionId, planetId: scope.planetId, techId: scope.techId, expectedSelectionStateHash: scope.selectionStateHash, stateHashVersion: 1, prioritizeQueued: false };
 		if (request.actionKind !== "select-research" || !equal(request.arguments, expected)) throw new Error("RESEARCH_PREPARE_SCOPE_MISMATCH");
 		const fresh = await this.observe(scope, { player: true, researchTechId: scope.techId });
@@ -59,7 +62,7 @@ export class ResearchAdapter {
 		if (plan.researchQueueReadbackVersion !== 1) throw new Error("RESEARCH_READBACK_NOT_SUPPORTED");
 		return { request, plan, researchBudget: matchResearchBudget(plan.itemBudget, fresh.researchBudget) };
 	}
-	async commit(dto) { return result(await this.port.commit(dto)); } // Called once, only after durable beginIntent.
+	async commit(dto) { if (this.#recoveryOnly) throw new Error("READ_ONLY_RESEARCH_RECOVERY"); return result(await this.port.commit(dto)); } // Called once, only after durable beginIntent.
 	async readResearchProof(request) {
 		const originalContext = await this.context(request, false);
 		const raw = result(await this.port.result({ actionId: request.actionId }));

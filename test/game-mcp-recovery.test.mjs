@@ -1,0 +1,97 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, writeFile, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname, basename } from "node:path";
+import { fileURLToPath } from "node:url";
+import { BridgeMonitor } from "../apps/desktop/bridge-monitor.mjs";
+import { GameTasks } from "../apps/desktop/game-tasks.mjs";
+import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
+import { ResearchAdapter } from "../apps/desktop/research-adapter.mjs";
+
+async function fixture(t, mode = "mcp-drop-after-accept") {
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-"))), runId = randomUUID(), worldPath = join(directory, "synthetic-research-world.json");
+	await writeFile(worldPath, JSON.stringify({ version: 1, runId, commits: 0, techId: null, key: null, tick: 1200, lossInjected: false, launches: 0, prepares: 0, resultReads: 0 }), { flag: "wx" });
+	const marker = join(directory, "Spherewright.Mcp.exe"); await writeFile(marker, "OWNED_SYNTHETIC_MCP_RECOVERY", { flag: "wx" });
+	const authority = {}, approval = {}, clients = [], hosts = []; let frozen = false, modelRequests = 0, cohortChanged = false;
+	const bridge = new BridgeMonitor({ researchAuthority: authority,
+		fingerprint: async path => { assert.equal(path, marker); return { path, cohortHash: cohortChanged ? "changed-cohort" : "original-cohort", fileCount: 1 }; },
+		launch: (_selection, options) => { const client = new ReadOnlyMcpClient(spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode, worldPath, runId], { stdio: "pipe", windowsHide: true }), { researchAuthority: options.researchAuthority, timeoutMs: 1000 }); clients.push(client); return client; },
+	});
+	const open = () => { const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, planner: async () => { modelRequests++; return { proposedTechId: 100 }; }, freezeDevelopment: async () => { frozen = true; }, releaseDevelopment: async () => { frozen = false; }, pollMilliseconds: 0 }); hosts.push(host); return host; };
+	t.after(async () => {
+		for (const host of hosts) if (!host.ledger.closed) { await host.drain(); host.close(); }
+		await bridge.close(); for (const client of clients) { await client.close(); assert.equal(client.exitConfirmed, true); }
+		const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-mcp-recovery-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+	});
+	await bridge.select(marker); const host = open();
+	const start = target => (target ?? host).start({ mode: "assist", techId: 100, providerId: "synthetic-provider", modelId: "fixture", prompt: "One normal enqueue only" });
+	async function submitted() { start(); const before = await host.settled(), challenge = host.confirmation(before.currentTaskId, 1); host.confirm(approval, challenge.nonce, 1); const value = await host.settled(); await clients[0].exited; assert.equal(clients[0].exitConfirmed, true); assert.equal(value.phase, "blocked"); assert.equal(value.developmentFrozen, true); const world = JSON.parse(await readFile(worldPath, "utf8")); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); return value.unresolved[0]; }
+	return { host, open, start, submitted, bridge, authority, clients, world: async () => JSON.parse(await readFile(worldPath, "utf8")), frozen: () => frozen, modelRequests: () => modelRequests, changeCohort: () => { cohortChanged = true; } };
+}
+
+test("accepted MCP exit can explicitly reconnect and reconcile only the original action without replay", async t => {
+	const f = await fixture(t), original = await f.submitted(); assert.equal(original.state, "accepted"); assert.equal(original.actionId, "synthetic-action");
+	assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/); await assert.rejects(f.bridge.connect(), /GAME_TASK_OWNS_BRIDGE/);
+	f.host.reconcile(original.intentId); const done = await f.host.settled();
+	assert.equal(done.phase, "completed", JSON.stringify({ error: done.error, clients: f.clients.length, world: await f.world() }));
+	assert.equal(done.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.equal(done.tasks[0].intent.actionId, original.actionId); assert.deepEqual(done.tasks[0].intent.acceptance, original.acceptance);
+	assert.equal(done.unresolved.length, 0); assert.equal(f.frozen(), false); assert.equal(f.clients.length, 2); assert.equal(f.modelRequests(), 1);
+	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 2); assert.equal(world.launches, 2);
+});
+
+test("a lost acknowledgement remains blocked without allocating a replacement MCP or inventing an action ID, including restart", async t => {
+	const f = await fixture(t, "mcp-lost-ack"), original = await f.submitted(); assert.equal(original.state, "unknown"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null);
+	assert.throws(() => f.host.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize();
+	assert.deepEqual(reopened.snapshot().unresolved, [original]); assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/);
+	assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1); assert.equal(f.frozen(), true); const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1);
+});
+
+test("recovery refuses changed MCP source, changed schema or changed world while retaining the accepted identity", async t => {
+	for (const kind of ["cohort", "schema", "world"]) {
+		const f = await fixture(t, kind === "cohort" ? "mcp-drop-after-accept" : "mcp-drop-after-accept-" + kind), original = await f.submitted();
+		if (kind === "cohort") f.changeCohort(); f.host.reconcile(original.intentId); const value = await f.host.settled();
+		assert.equal(value.phase, "blocked"); assert.equal(value.error, kind === "cohort" ? "MCP_COHORT_CHANGED_RESELECT_REQUIRED" : kind === "schema" ? "ORIGINAL_MCP_COHORT_REQUIRED" : "GAME_CONTEXT_CHANGED");
+		assert.deepEqual(value.unresolved, [original]); assert.equal(f.frozen(), true); assert.equal(f.clients.length, kind === "cohort" ? 1 : 2);
+		const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 1);
+	}
+});
+
+test("a mismatched original receipt after reconnect enters durable isolation and a second reconciliation makes no requests", async t => {
+	const f = await fixture(t, "mcp-drop-after-accept-key"), original = await f.submitted(); f.host.reconcile(original.intentId); const isolated = await f.host.settled();
+	assert.equal(isolated.error, "INDEPENDENT_GAME_AUDIT_REQUIRED"); assert.equal(isolated.unresolved[0].actionId, original.actionId); assert.equal(isolated.unresolved[0].idempotencyKey, original.idempotencyKey); assert.equal(f.clients.length, 2);
+	const requests = f.clients[1].stats.requests, before = await f.world(); f.host.reconcile(original.intentId); const repeated = await f.host.settled();
+	assert.equal(repeated.error, "INDEPENDENT_GAME_AUDIT_REQUIRED"); assert.equal(f.clients[1].stats.requests, requests); assert.deepEqual(await f.world(), before); assert.equal(f.frozen(), true);
+});
+
+test("a recovery adapter refuses prepare and commit before allocating either request", async t => {
+	const f = await fixture(t), lease = f.bridge.acquireResearch(f.authority), adapter = new ResearchAdapter({ ...lease, authority: f.authority, recoveryOnly: true }), before = f.clients[0].stats.requests;
+	await assert.rejects(adapter.prepareResearch({}, {}), /READ_ONLY_RESEARCH_RECOVERY/); await assert.rejects(adapter.commit({}), /READ_ONLY_RESEARCH_RECOVERY/);
+	assert.equal(f.clients[0].stats.requests, before); f.bridge.releaseResearch(lease);
+});
+
+test("MCP recovery rejects a live or forged lease and never starts a replacement when original close fails", async t => {
+	const f = await fixture(t), lease = f.bridge.acquireResearch(f.authority), binding = { cohortHash: lease.selection.cohortHash, schemaHash: f.clients[0].metadata.schemaHash };
+	await assert.rejects(f.bridge.reconnectResearch({ ...lease }, binding), /ORIGINAL_MCP_RECONNECT_UNAVAILABLE/);
+	await assert.rejects(f.bridge.reconnectResearch(lease, binding), /ORIGINAL_MCP_RECONNECT_UNAVAILABLE/); assert.equal(f.clients.length, 1); f.bridge.releaseResearch(lease);
+	const original = await f.submitted(), mockedClose = t.mock.method(f.clients[0], "close", async () => { throw new Error("MCP_EXIT_NOT_CONFIRMED"); });
+	try { f.host.reconcile(original.intentId); const value = await f.host.settled(); assert.equal(value.error, "MCP_EXIT_NOT_CONFIRMED"); assert.deepEqual(value.unresolved, [original]); assert.equal(f.clients.length, 1); assert.equal(f.frozen(), true); }
+	finally { mockedClose.mock.restore(); }
+});
+
+test("ordinary selection and another task stay excluded for the complete original-client recovery", async t => {
+	const f = await fixture(t), original = await f.submitted(), oldLease = f.bridge.researchLease;
+	let entered, finish, timer; const entering = new Promise(resolve => { entered = resolve; }), barrier = new Promise(resolve => { finish = resolve; }), fingerprint = f.bridge.fingerprint;
+	t.mock.method(f.bridge, "fingerprint", async (...args) => { entered(); await barrier; return fingerprint(...args); });
+	f.host.reconcile(original.intentId);
+	try {
+		await Promise.race([entering, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("RECOVERY_DID_NOT_ENTER")), 3000); })]); clearTimeout(timer);
+		assert.equal(f.bridge.researchLease, oldLease); assert.equal(f.frozen(), true);
+		for (const action of [() => f.bridge.connect(), () => f.bridge.disconnect(), () => f.bridge.select("unrelated.exe")]) await assert.rejects(action(), /GAME_TASK_OWNS_BRIDGE/);
+		assert.throws(() => f.host.reconcile(original.intentId), /GAME_TASK_BUSY/); assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
+	} finally { clearTimeout(timer); finish(); }
+	assert.equal((await f.host.settled()).phase, "completed"); assert.equal(f.clients.length, 2); assert.equal((await f.world()).commits, 1);
+});

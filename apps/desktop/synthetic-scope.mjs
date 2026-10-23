@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { Server } from "node:http";
-import { mkdir, lstat, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
+import { join, dirname, basename } from "node:path";
+import { tmpdir } from "node:os";
 
 // Test-only binding to this process's listening HTTP server. Never accept a
 // provider from a renderer, pre-existing vault, external config or MCP data.
@@ -32,6 +33,8 @@ export async function preparePortableFixtureDirectory(context) {
 	assert.match(context.runId, /^[a-f0-9-]{36}$/);
 	let directory = await realpath(context.root);
 	assert.equal(directory.toLowerCase(), context.root.toLowerCase());
+	assert.equal(dirname(directory).toLowerCase(), (await realpath(tmpdir())).toLowerCase());
+	assert.match(basename(directory), /^commanddeck-(?:desktop-smoke|mcp-recovery)-/);
 	for (const part of ["runtime-fixtures", "m3-smoke", context.runId]) {
 		directory = join(directory, part);
 		try { await mkdir(directory); } catch (error) { if (error.code !== "EEXIST") throw error; if (part === context.runId) throw new Error("PORTABLE_FIXTURE_ALREADY_EXISTS"); }
@@ -39,4 +42,11 @@ export async function preparePortableFixtureDirectory(context) {
 		if (!info.isDirectory() || info.isSymbolicLink() || (await realpath(directory)).toLowerCase() !== directory.toLowerCase()) throw new Error("PORTABLE_FIXTURE_DIRECTORY_REDIRECTED");
 	}
 	return directory;
+}
+
+export async function createSyntheticResearchWorld(directory, runId) {
+	assert.match(runId, /^[a-f0-9-]{36}$/);
+	const path = join(directory, "synthetic-research-world.json");
+	await writeFile(path, JSON.stringify({ version: 1, runId, commits: 0, techId: null, key: null, tick: 1200, lossInjected: false, launches: 0, prepares: 0, resultReads: 0 }), { flag: "wx" });
+	return path;
 }

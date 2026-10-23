@@ -5,7 +5,7 @@ import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, link, rm } from
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { portableRuntimeScenario, assertPortableRuntimeAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
+import { portableRuntimeScenario, portableMcpScenario, assertPortableRuntimeAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
 import { syntheticProviderScope, preparePortableFixtureDirectory } from "../apps/desktop/synthetic-scope.mjs";
 
 async function fixture(t) {
@@ -32,6 +32,15 @@ test("the packaged fixture policy never gives the renderer provider, MCP-selecti
 	assertPortableRuntimeAction("game", { action: "start" }, { scenario: "confirmation" });
 	assertPortableRuntimeAction("profiles-manage", { action: "save" }, { scenario: "planning", internal: true });
 	assert.throws(() => assertPortableRuntimeAction("game", { action: "start" }, { scenario: "idle", internal: true }));
+});
+
+test("packaged MCP loss requires exactly one explicit isolated scenario and cannot mix runtime faults or source flags", async t => {
+	const f = await fixture(t), env = { COMMANDDECK_PORTABLE_ROOT: f.root, COMMANDDECK_PORTABLE_RUN_ID: f.runId }, app = { isPackaged: true, setPath() {} };
+	for (const scenario of ["accepted", "lost-ack"]) { const args = ["--portable-smoke", "--portable-mcp-loss=" + scenario]; assert.equal(portableMcpScenario(args), scenario); await preparePortableMode(app, args, env); }
+	for (const args of [["--portable-mcp-loss=accepted"], ["--portable-smoke", "--portable-mcp-loss=other"], ["--portable-smoke", "--portable-mcp-loss=accepted", "--portable-mcp-loss=lost-ack"], ["--portable-smoke", "--portable-mcp-loss=accepted", "--portable-runtime-loss=idle"]]) assert.throws(() => portableMcpScenario(args));
+	assert.throws(() => portableRuntimeScenario(["--portable-smoke", "--portable-runtime-loss=idle", "--portable-mcp-loss=accepted"]));
+	await assert.rejects(preparePortableMode(app, ["--portable-smoke", "--portable-mcp-loss=accepted", "--smoke-game"], env));
+	await preparePortableMode(app, ["--portable-smoke", "--portable-mcp-loss=accepted", "--managed-ui", "--smoke-game-ui"], env);
 });
 
 test("a synthetic provider must be the current owned listener, profile and key before any credential is delivered", async t => {

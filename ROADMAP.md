@@ -421,6 +421,10 @@ M5运行中退出新增源码反例：旧产品逻辑配受控测试钩子，run
 
 25e新包的正常恢复回归随后通过：正常闭合历史run `4119de8f-20c1-4edb-bd4e-e39809d5d4c4` 同profile两次实际启动、八类启动故障run `eb5ab0be-809a-490e-95d5-735d2fa850f2`、历史v1未决任务run `f6e3f701-a0c8-4255-b5dc-d014273578bc` 迁移/冻结重开及各自UI重载均保留原事实，包/来源完整hash与退出零残留分别核验；原action未在迁移测试中核销。真实三开发任务/两命令/固定引用、科研原key/action/接受及终态、完整Pi会话再次只读核对不变，本轮真实游戏/模型调用0。[准确CI39898801582](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39898801582) 仍在运行，不将本机通过等同于云端整条CI通过。
 
+上一轮功能25e的准确 [CI39898801582](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39898801582) 已全绿，包含四个实际打包运行时退出场景；仅记录结论的fdf候选CI仍单独核对。下一恢复缺口已有真实stdio反例：run `e184b1b0-0bc9-41db-be3a-589e464b7812` 的固定合成MCP在受理后第一次原动作查询时退出，持久合成世界为1prepare/1commit/1launch，原action/key已保留，但显式核销继续使用死连接，报`MCP_READ_NOT_SUPPORTED`，未能恢复查询。该反例来自真实本地子进程和GameTasks/BridgeMonitor，不是Electron打包版或DSP；未重放提交。
+
+恢复首片保持原research lease和开发冻结，仅在显式核销时允许一次原选定MCP重连；先确认旧进程退出，再核相同文件组和接口，替换适配器禁止prepare/commit，原bridge/session/planet/action/key及完整正常队列读回继续严格核验。持久审计隔离在任何重连/读取前由原账本拒绝；缺actionId仍保持unknown且不启动替代进程，不从测试世界文件补造编号。新增7项真实stdio/纯拒绝检查与1项打包模式准入，完整270项Node、类型/renderer构建、普通科研/工作台和四个源码运行时退出回归通过。两条新源码真实Electron/Pi/假MCP路径也已通过：已受理断线run `5b9cd326-73ee-4bf8-bf15-d697bc07f4e1` 经UI重载后点击原核销入口，只增加1个MCP进程，原动作完成且总prepare/commit仍各1；丢ACK run `6613cb84-8cbf-4eb6-88fe-4d691a87008a` 保持未知、0替代MCP，重载不重放模型或提交。各自3次合成模型请求、独立原生观察0本次残留，真实游戏/模型调用0。新增实际包双场景入口与匿名CI摘要已接线，干净提交组包、包外运行和准确CI仍待，不关闭完整MCP故障、真实游戏接手/恢复或M5总门。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

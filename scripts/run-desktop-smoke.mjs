@@ -14,7 +14,10 @@ const renamedElectron = args.includes("--renamed-electron");
 if (renamedElectron) args.splice(args.indexOf("--renamed-electron"), 1);
 const runId = randomUUID();
 const runtimeLoss = args.includes("--smoke-runtime-loss");
-const file = runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
+const mcpFlags = args.filter(arg => arg.startsWith("--smoke-mcp-loss")), mcpLoss = mcpFlags.length > 0;
+if (mcpLoss && (mcpFlags.length !== 1 || renamedElectron || !args.includes("--smoke-game") || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(mcpFlags[0]) || args.some(arg => !["--smoke-game", mcpFlags[0]].includes(arg)))) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
+const mcpScenario = mcpLoss ? mcpFlags[0].slice("--smoke-mcp-loss=".length) : null, controlledFault = runtimeLoss || mcpLoss;
+const file = mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
 	: args.includes("--smoke-adapter")
 	? "desktop-smoke-adapter.json"
@@ -25,8 +28,13 @@ const file = runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smok
 		: args.includes("--smoke-live")
 			? "desktop-smoke-live.json"
 			: "desktop-smoke.json";
-let executable = join(root, "node_modules/electron/dist/electron.exe"), temporary, child;
+let executable = join(root, "node_modules/electron/dist/electron.exe"), temporary, mcpTemporary, child, passed = false;
 try {
+if (mcpLoss) {
+	mcpTemporary = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-")));
+	const proofRoot = join(root, ".local/mcp-loss", runId); await mkdir(proofRoot, { recursive: true });
+	await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, scenario: mcpScenario, directory: mcpTemporary }), { flag: "wx" });
+}
 if (renamedElectron) {
 	temporary = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-renamed-ui-")));
 	const distribution = join(temporary, "electron");
@@ -42,20 +50,21 @@ child = spawn(executable, [root, "--smoke", ...args], {
 	cwd: root,
 	stdio: "inherit",
 	windowsHide: false,
-	env: { ...process.env, COMMANDDECK_SMOKE_RUN_ID: runId },
+	env: { ...process.env, COMMANDDECK_SMOKE_RUN_ID: runId, ...(mcpLoss ? { COMMANDDECK_MCP_FIXTURE_ROOT: mcpTemporary, COMMANDDECK_PI_CONFIG_DIR: join(mcpTemporary, "no-user-provider-configuration") } : {}) },
 });
 const timer = setTimeout(() => child.kill(), 120000);
 let code, signal;
 try { [code, signal] = await once(child, "exit"); }
 finally { clearTimeout(timer); }
 assert.equal(code, 0, signal ?? "Desktop smoke failed");
-const result = JSON.parse(await readFile(join(root, ".local", runtimeLoss ? file.replace(".json", ".application.private.json") : file), "utf8"));
+const result = JSON.parse(await readFile(join(root, ".local", controlledFault ? file.replace(".json", ".application.private.json") : file), "utf8"));
 assert.equal(
 	result.runId,
 	runId,
 	"This process exited without writing its own complete proof",
 );
-if (runtimeLoss) { assert.equal(result.runtimeExitObserved, true); if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, args.includes("--smoke-runtime-accepted") ? 1 : 0); assert.equal(result.ownServerExitConfirmed, true); } else assert.equal(result.noProbeAllocated, true); }
+if (mcpLoss) { assert.equal(result.originalMcpExitObserved, true); assert.equal(result.mcpLossScenario, mcpScenario); assert.equal(result.syntheticGameCommits, 1); assert.equal(result.replacementMcpCount, mcpScenario === "accepted" ? 1 : 0); assert.equal(result.noModelOrCommitReplay, true); assert.equal(result.ownServerExitConfirmed, true); }
+else if (runtimeLoss) { assert.equal(result.runtimeExitObserved, true); if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, args.includes("--smoke-runtime-accepted") ? 1 : 0); assert.equal(result.ownServerExitConfirmed, true); } else assert.equal(result.noProbeAllocated, true); }
 else if (args.includes("--smoke-observation")) { assert.equal(result.readOnlyEnforced,true); assert.equal(result.toolRequests,12); assert.equal(result.ownServerExitConfirmed,true); }
 else if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, 1); assert.equal(result.ownServerExitConfirmed, true); }
 else if (args.includes("--smoke-bridge")) assert.equal(result.ownServerExitConfirmed, true);
@@ -65,18 +74,27 @@ else if (args.includes("--smoke-adapter"))
 else if (args.includes("--smoke-host-exit"))
 	assert.equal(result.hostExit.hostNotRelaunched, true);
 else assert.equal(result.supervision.inFlightProbeCompletedAfterUiExit, true);
-if (runtimeLoss) {
-	const proofRoot = join(root, ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
+if (controlledFault) {
+	const proofRoot = join(root, mcpLoss ? ".local/mcp-loss" : ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
 	await writeFile(join(proofRoot, "application-proof.private.json"), JSON.stringify(result), { flag: "wx" });
-	const observation = await observePackagedProcesses({ executable: join(root, "artifacts/native/CommandDeck.NativeHost.exe"), roots: [dirname(executable)], env: process.env, timeoutMs: 20000 });
+	if (mcpLoss) {
+		const base = join(mcpTemporary, "runtime-fixtures/m3-smoke", runId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));
+		assert.equal(world.runId, runId); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, mcpScenario === "accepted" ? 2 : 1);
+		await writeFile(join(proofRoot, "mcp-loss.private.json"), await readFile(join(base, "mcp-loss.private.json")), { flag: "wx" });
+	}
+	const observation = await observePackagedProcesses({ executable: join(root, "artifacts/native/CommandDeck.NativeHost.exe"), roots: [dirname(executable), ...(mcpTemporary ? [mcpTemporary] : [])], env: process.env, timeoutMs: 20000 });
 	await writeFile(join(proofRoot, "process-observation.private.json"), JSON.stringify(observation), { flag: "wx" }); assert.equal(observation.count, 0);
 	await writeFile(join(root, ".local", file), JSON.stringify({ ...result, noOwnedElectronProcessesRemain: true, processObserver: "native-v1", usesSourceCheckout: true, fullPackagedFaultMatrixVerified: false }));
 }
+passed = true;
 if (renamedElectron) await writeFile(join(root, ".local/desktop-smoke-renamed-ui.json"), JSON.stringify({ ...result, renamedElectron: true, usesSourceCheckout: true, fullElectronBundleVerified: false }, null, 2));
 console.log(
 	JSON.stringify({ desktopSmoke: "passed", proof: file, noGameCalls: true, ...(renamedElectron ? { renamedElectron: true, fullElectronBundleVerified: false } : {}) }),
 );
 } finally {
+	if (mcpTemporary && passed) {
+		const canonical = await realpath(mcpTemporary); assert.equal(canonical, mcpTemporary); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-mcp-recovery-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+	}
 	if (temporary) {
 		if (child?.pid && child.exitCode === null && child.signalCode === null) throw new Error("RENAMED_UI_PROCESS_EXIT_UNCONFIRMED");
 		const canonical = await realpath(temporary);

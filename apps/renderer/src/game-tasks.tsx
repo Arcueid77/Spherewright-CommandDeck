@@ -10,6 +10,16 @@ const Context = createContext<Context>(null!);
 const phases: Record<string, string> = { idle: "等待任务", reading_catalog: "读取科研列表", catalog_ready: "科研列表已读取", observing: "读取现场", planning: "Agent 正在分析", preparing: "原生预检中", awaiting_approval: "等待你确认", confirming: "核对确认与现场", accepted: "游戏已受理", reconciling: "核对原动作", completed: "队列变化已核对", advised: "只读建议已完成", blocked: "等待核销", failed: "本次未完成", cancelled: "后续执行已停止" };
 const errors: Record<string, string> = { GAME_MODEL_OUTPUT_LIMIT: "模型输出达到本次上限，分析未完成。本次没有提交游戏动作。", GAME_MODEL_DID_NOT_FINISH: "模型未正常完成分析。本次没有提交游戏动作，请核对记录。", RESEARCH_READBACK_NOT_SUPPORTED: "当前服务尚未提供可验证的科研回执，请更新同批 Spherewright 组件。", RESEARCH_BUDGET_INVALID: "科研材料需求格式不受支持，本次没有提交。", RESEARCH_BUDGET_MISMATCH: "科研材料需求已变化，请重新核对并预检。", OWNED_RESEARCH_WORLD_REQUIRED: "请先连接已载入的 Spherewright 自有世界。", HEALTHY_RESEARCH_WRITES_REQUIRED: "当前世界没有开放正常写入，请先处理游戏侧阻断。", RESEARCH_BRIDGE_UNAVAILABLE: "当前连接没有提供兼容的有限研究接口。", RESEARCH_TARGET_NOT_ELIGIBLE: "指定科技不存在、已经解锁或已在队列中，请核对目标。", RESEARCH_SELECTION_CHANGED: "科研队列已变化，本次预检停止，请重新核对目标。", COMMIT_RECEIPT_UNAVAILABLE: "提交回执丢失。保留原任务，禁止再次提交。", UNKNOWN_COMMIT_HAS_NO_ACTION_ID: "没有取得原动作编号，需独立核销，不能重试。", INDEPENDENT_GAME_AUDIT_REQUIRED: "游戏报告了需要独立核销的结果，后续写入已冻结。", UNRESOLVED_GAME_INTENT_BLOCKS_WRITES: "先核销已有游戏任务，才能继续。", GAME_RUNTIME_RESPONSE_TIMEOUT: "Agent 未在时限内结束，运行状态需先核对。", GAME_EXECUTION_OWNS_RUNTIME: "游戏任务正在占用运行环境。" };
 
+Object.assign(errors, {
+	ORIGINAL_MCP_DISCONNECTED: "游戏服务连接已中断。核销时会重新连接原服务，只核对已有动作。",
+	MCP_EXITED: "游戏服务连接已中断。保留原任务，先核销已有动作。",
+	ORIGINAL_MCP_RECONNECT_UNAVAILABLE: "原连接状态尚未确认，暂不能重新连接。后续写入保持冻结。",
+	ORIGINAL_MCP_COHORT_REQUIRED: "服务版本或接口与原任务不符，不能核销已有动作。",
+	MCP_COHORT_CHANGED_RESELECT_REQUIRED: "原服务文件已变化，后续写入保持冻结。",
+	MCP_EXIT_NOT_CONFIRMED: "尚未确认原服务退出，暂不启动第二个连接。",
+	GAME_CONTEXT_CHANGED: "当前世界或会话与原动作不符，后续写入保持冻结。",
+});
+
 export function GameTasksProvider({ children }: { children: ReactNode }) {
 	const [state, setState] = useState<GameState>({ busy: false, runtimeAvailable: false, phase: "idle", currentTaskId: null, error: null, developmentFrozen: false, unresolved: [], tasks: [], events: [] }), [profiles, setProfiles] = useState<Profile[]>([]), [healthy, setHealthy] = useState(false), [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
 	const generation = useRef(0), pending = useRef(false), mutating = useRef(false), stopped = useRef(false);
@@ -55,7 +65,7 @@ export function GameTasksPanel() {
 			<div className="actions"><button className="accent" disabled={!c.healthy || c.busy || state.busy || state.phase !== "awaiting_approval" || expired} onClick={() => void c.confirm(task.id)}>核对并确认入队</button>{state.phase === "awaiting_approval" && <button disabled={!c.healthy || c.busy || state.busy} onClick={() => void c.act("reprepare")}>{expired ? "预检已过期 · 重新预检" : "重新预检"}</button>}<button disabled={!c.healthy || c.busy || !locked} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button></div>
 			{task.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前：{task.intent.terminal.beforeQueue.map((id) => `#${id}`).join(" → ") || "空"}<br />之后：{task.intent.terminal.afterQueue.map((id) => `#${id}`).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">这证明正常入队与读回，科技研究完成需继续观察。</p></div>}
 		</>}
-		{state.unresolved.map((intent) => <div className="game-task-receipt" key={intent.intentId}><b>未决动作：{intent.actionId || "尚无编号"}</b><p>后续写入保持冻结，只查询原动作。</p><button disabled={!c.healthy || c.busy || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
+		{state.unresolved.map((intent) => <div className="game-task-receipt" key={intent.intentId}><b>未决动作：{intent.actionId || "尚无编号"}</b><p>{intent.actionId ? "后续写入保持冻结。核销会核对原版本及世界，只查询原动作。" : "提交可能已生效；没有原动作编号时不能再次提交。"}</p><button disabled={!c.healthy || c.busy || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
 		{state.events.length > 0 && <section className="game-task-transcript" aria-label="Agent 与执行记录"><h3>Agent 与执行记录</h3>{state.events.map((event) => {
 			const Entry = event.kind === "assistant" ? "span" : "div";
 			return <Entry key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</Entry>;

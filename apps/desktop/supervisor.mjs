@@ -22,7 +22,7 @@ import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
 import { OwnedFixtureHost } from "./owned-fixture.mjs";
-import { assertPortableAction, assertPortableRuntimeAction, portableRuntimeScenario } from "./portable-mode.mjs";
+import { assertPortableAction, assertPortableRuntimeAction, portableRuntimeScenario, portableMcpScenario } from "./portable-mode.mjs";
 import { syntheticProviderScope } from "./synthetic-scope.mjs";
 import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
 import { startupFailureCode } from "./startup-failure.mjs";
@@ -31,9 +31,14 @@ import { runRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
 const portableScenario = portableSmoke ? portableRuntimeScenario(process.argv) : null;
+const portableMcpLoss = portableSmoke ? portableMcpScenario(process.argv) : null;
 const smoke = process.argv.includes("--smoke") || portableSmoke;
 const runtimeScenario = portableScenario ?? (smoke && process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
+const sourceMcpFlags = process.argv.filter(arg => arg.startsWith("--smoke-mcp-loss"));
+if (sourceMcpFlags.length && (!smoke || !process.argv.includes("--smoke-game") || sourceMcpFlags.length !== 1 || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(sourceMcpFlags[0]) || runtimeScenario)) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
+const mcpLossScenario = portableMcpLoss ?? sourceMcpFlags[0]?.slice("--smoke-mcp-loss=".length) ?? null;
 const portableContext = portableSmoke ? { root: process.env.COMMANDDECK_PORTABLE_ROOT, runId: process.env.COMMANDDECK_PORTABLE_RUN_ID } : null;
+const gameFixtureContext = mcpLossScenario ? portableContext ?? { root: process.env.COMMANDDECK_MCP_FIXTURE_ROOT, runId: process.env.COMMANDDECK_SMOKE_RUN_ID } : portableContext;
 const fixtureAuthority = {};
 const observationPolicy = observationArguments(process.argv);
 const watchdogMs = 1000;
@@ -48,10 +53,10 @@ function externalProfiles() { try { return publicProfiles().filter((profile) => 
 const native = portableSmoke ? new OwnedFixtureHost() : new WindowHost();
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
-const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle"));
+const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle") || Boolean(portableMcpLoss));
 const fixtureProvider = gameSmoke ? syntheticProviderScope() : null;
-const fixtureDirectory = portableScenario && gameSmoke ? join(portableContext.root, "runtime-fixtures/m3-smoke", portableContext.runId) : undefined;
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
+const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
@@ -194,7 +199,7 @@ async function probe(config) {
 }
 async function api(action, args, source) {
 	if (portableSmoke) {
-		if (portableScenario) assertPortableRuntimeAction(action, args, { scenario: portableScenario, internal: source === fixtureAuthority });
+		if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });
 		else assertPortableAction(action, args);
 	}
 	assertObservationAction(observationPolicy, action, args);
@@ -357,7 +362,7 @@ function clearUiTests(record) {
 		}
 }
 function startUi() {
-	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(portableScenario ? ["--portable-runtime-loss=" + portableScenario] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
+	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(portableScenario ? ["--portable-runtime-loss=" + portableScenario] : []), ...(portableMcpLoss ? ["--portable-mcp-loss=" + portableMcpLoss] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
 	const child = spawnOwnedUi(process.execPath, args, {
 		cwd: root,
 		env: safeEnvironment(),
@@ -752,7 +757,7 @@ if (!app.hasSingleInstanceLock()) {
 			await attachFromCommandLine(process.argv);
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
-				await runPortableSmoke({ root, privateDirectory, context: portableContext, api: portableScenario ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
+				await runPortableSmoke({ root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
 				await shutdown(); return;
 			}
 			if (process.argv.includes("--demo-fixture")) {
@@ -772,6 +777,8 @@ if (!app.hasSingleInstanceLock()) {
 					events,
 					getUi: () => ui,
 					getRuntimePid: () => runtime.pid,
+					mcpLossScenario, context: mcpLossScenario ? gameFixtureContext : undefined,
+					getBridgeClient: () => bridge.telemetry?.client,
 					stopRuntimeForSmoke, runtimeScenario,
 					registerSyntheticProvider: (...args) => fixtureProvider.register(...args),
 					getBridgePid: () => bridge.telemetry?.client.child.pid,
