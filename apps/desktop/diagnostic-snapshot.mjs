@@ -54,7 +54,7 @@ export function captureWorkbenchDiagnostics(store, flags) {
 function gameDiagnostics(value) {
 	if (!value || value.unavailableCode) return { state: "unavailable", code: diagnosticCode(value?.unavailableCode) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" };
 	return {
-		state: "available", phase: choice(value.phase, phases), busy: boolean(value.busy), runtimeAvailable: boolean(value.runtimeAvailable), developmentFrozen: boolean(value.developmentFrozen), nativeInputExclusion: boolean(value.nativeInputExclusion), code: diagnosticCode(value.error),
+		state: "available", phase: choice(value.phase, phases), busy: boolean(value.busy), runtimeAvailable: boolean(value.runtimeAvailable), storageAvailable: boolean(value.storageAvailable), developmentFrozen: boolean(value.developmentFrozen), nativeInputExclusion: boolean(value.nativeInputExclusion), code: diagnosticCode(value.error),
 		pendingCount: Array.isArray(value.unresolved) ? value.unresolved.length : null, visibleTaskCount: Array.isArray(value.tasks) ? value.tasks.length : null, tasksTruncated: Array.isArray(value.tasks) ? value.tasks.length > diagnosticLimits.tasks : null,
 		tasks: list(value.tasks).slice(0, diagnosticLimits.tasks).map((task, index) => ({ label: "game-" + (index + 1), state: choice(task?.state, states), intent: task?.intent ? { state: choice(task.intent.state, states), hasActionId: typeof task.intent.actionId === "string" && task.intent.actionId.length > 0, hasAcceptance: task.intent.acceptance != null, hasTerminal: task.intent.terminal != null } : null })),
 		eventCount: Array.isArray(value.events) ? value.events.length : null, eventsTruncated: Array.isArray(value.events) ? value.events.length > diagnosticLimits.gameEvents : null,

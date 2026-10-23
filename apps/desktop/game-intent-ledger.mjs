@@ -59,6 +59,7 @@ export class GameIntentLedger {
 		try { this.db.exec("BEGIN IMMEDIATE"); const value = action(); this.db.exec("COMMIT"); return value; }
 		catch (error) { try { this.db.exec("ROLLBACK"); } catch {} if (String(error.code ?? "").startsWith("ERR_SQLITE")) { this.#faulted = true; throw new Error("GAME_LEDGER_STORAGE_UNAVAILABLE"); } throw error; }
 	}
+	get storageAvailable() { return !this.#faulted && !this.closed; }
 	#task(id) { const value = this.db.prepare("SELECT * FROM game_tasks WHERE id=?").get(id); if (!value) throw new Error("GAME_TASK_NOT_FOUND"); return { ...value, scope: JSON.parse(value.scope) }; }
 	#intent(id) { const value = this.db.prepare("SELECT * FROM game_intents WHERE id=?").get(id); if (!value) throw new Error("GAME_INTENT_NOT_FOUND"); return value; }
 	#context(scope, context, writing = false) {

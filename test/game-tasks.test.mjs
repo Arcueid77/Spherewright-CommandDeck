@@ -133,10 +133,53 @@ test("a wrong original-action receipt stays in durable independent-audit isolati
 	}
 });
 
-test("durable storage failure before send leaves no commit or accepted intent", async (t) => {
+test("durable storage failure before send closes execution until restart even when the disk becomes writable again", async (t) => {
 	const f = await fixture(t); f.start(); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1);
 	f.host.ledger.db.exec("PRAGMA query_only=ON"); f.host.confirm(f.approval, challenge.nonce, 1); const done = await f.host.settled(); f.host.ledger.db.exec("PRAGMA query_only=OFF");
-	assert.equal(done.unresolved.length, 0); assert.equal(done.tasks[0].intent, null); assert.equal(done.phase, "failed");
+	assert.equal(done.unresolved.length, 0); assert.equal(done.tasks[0].intent, null); assert.equal(done.phase, "blocked"); assert.equal(done.storageAvailable, false); assert.equal(done.error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(done.developmentFrozen, true); assert.equal(f.frozen(), true);
+	const calls = f.client.stats.toolCalls;
+	for (const operation of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare(), () => f.host.confirmation(preview.currentTaskId, 1), () => f.host.reconcile("no-intent")]) assert.throws(operation, /GAME_LEDGER_STORAGE_UNAVAILABLE/);
+	assert.doesNotThrow(() => f.host.stop()); assert.equal(f.host.snapshot().phase, "blocked"); assert.equal(f.host.snapshot().error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(f.client.stats.toolCalls, calls);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("an accepted MCP action whose receipt cannot be stored retains its original durable key and never resubmits after restart", async t => {
+	let modelRuns = 0; const f = await fixture(t, { planner: async () => { modelRuns++; return { proposedTechId: 100 }; } }); f.start(); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1);
+	const commit = f.host.adapter.commit.bind(f.host.adapter);
+	t.mock.method(f.host.adapter, "commit", async dto => { const receipt = await commit(dto); assert.equal(receipt.accepted, true); f.host.ledger.db.exec("PRAGMA query_only=ON"); return receipt; });
+	f.host.confirm(f.approval, challenge.nonce, 1); const blocked = await f.host.settled(); f.host.ledger.db.exec("PRAGMA query_only=OFF");
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.storageAvailable, false); assert.equal(blocked.developmentFrozen, true); assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE");
+	const original = blocked.unresolved[0]; assert.equal(original.state, "recorded"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null); assert.equal(original.terminal, null); assert.equal(blocked.tasks[0].id, preview.currentTaskId);
+	const calls = f.client.stats.toolCalls; assert.throws(() => f.host.reconcile(original.intentId), /GAME_LEDGER_STORAGE_UNAVAILABLE/); assert.equal(f.client.stats.toolCalls, calls);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const restored = reopened.snapshot();
+	assert.equal(restored.phase, "blocked"); assert.equal(restored.storageAvailable, true); assert.equal(restored.developmentFrozen, true); assert.deepEqual(restored.unresolved[0], original);
+	const resumedCalls = f.client.stats.toolCalls; assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/); assert.equal(f.client.stats.toolCalls, resumedCalls); assert.equal(modelRuns, 1);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("terminal-storage failure preserves the accepted action and allows only its original proof after a healthy restart", async t => {
+	let modelRuns = 0; const f = await fixture(t, { planner: async () => { modelRuns++; return { proposedTechId: 100 }; } }); f.start(); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1);
+	const reconcile = f.host.ledger.reconcile.bind(f.host.ledger);
+	t.mock.method(f.host.ledger, "reconcile", async id => { f.host.ledger.db.exec("PRAGMA query_only=ON"); return reconcile(id); });
+	f.host.confirm(f.approval, challenge.nonce, 1); const blocked = await f.host.settled(); f.host.ledger.db.exec("PRAGMA query_only=OFF");
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.storageAvailable, false); assert.equal(blocked.developmentFrozen, true); assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE");
+	const original = blocked.unresolved[0]; assert.equal(original.state, "accepted"); assert.ok(original.actionId); assert.equal(original.acceptance.actionId, original.actionId); assert.equal(original.terminal, null);
+	const calls = f.client.stats.toolCalls; assert.throws(() => f.host.reconcile(original.intentId), /GAME_LEDGER_STORAGE_UNAVAILABLE/); assert.equal(f.client.stats.toolCalls, calls);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); assert.deepEqual(reopened.snapshot().unresolved[0], original);
+	reopened.reconcile(original.intentId); const completed = await reopened.settled(); assert.equal(completed.phase, "completed"); assert.equal(completed.storageAvailable, true); assert.equal(completed.unresolved.length, 0); assert.equal(completed.developmentFrozen, false);
+	assert.equal(completed.tasks[0].id, preview.currentTaskId); assert.equal(completed.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.equal(completed.tasks[0].intent.actionId, original.actionId); assert.deepEqual(completed.tasks[0].intent.acceptance, original.acceptance); assert.equal(modelRuns, 1);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("storage failure in an asynchronous planner event aborts the turn without escaping the host callback or preparing", async t => {
+	let entered, release, signal; const planning = new Promise(resolve => { entered = resolve; }), waiting = new Promise(resolve => { release = resolve; });
+	const f = await fixture(t, { planner: async value => { signal = value.signal; entered(); await waiting; return { proposedTechId: 100 }; } });
+	f.start(); await planning; const id = f.host.snapshot().currentTaskId, calls = f.client.stats.toolCalls;
+	f.host.ledger.db.exec("PRAGMA query_only=ON");
+	assert.doesNotThrow(() => f.host.plannerEvent(id, "assistant", { text: "synthetic output" })); assert.equal(signal.aborted, true);
+	f.host.ledger.db.exec("PRAGMA query_only=OFF"); release(); const blocked = await f.host.settled();
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.storageAvailable, false); assert.equal(blocked.developmentFrozen, true); assert.equal(blocked.tasks[0].intent, null); assert.equal(f.client.stats.toolCalls, calls);
+	assert.throws(() => f.host.profileTask(id), /GAME_LEDGER_STORAGE_UNAVAILABLE/); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
 });
 
 test("runtime loss invalidates an already issued approval and freezes all new game preparation", async t => {

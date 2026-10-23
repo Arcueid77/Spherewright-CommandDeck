@@ -32,33 +32,42 @@ export class GameTasks {
 		if (!this.operation && !["accepted", "reconciling", "blocked"].includes(this.phase)) { this.phase = "runtime_unavailable"; this.error = "GAME_RUNTIME_UNAVAILABLE"; }
 		this.emit();
 	}
-	#requireRuntime() { if (!this.runtimeAvailable) throw new Error("GAME_RUNTIME_UNAVAILABLE"); }
+	#requireStorage() { if (!this.ledger.storageAvailable) throw new Error("GAME_LEDGER_STORAGE_UNAVAILABLE"); }
+	#requireRuntime() { if (!this.runtimeAvailable) throw new Error("GAME_RUNTIME_UNAVAILABLE"); this.#requireStorage(); }
+	#latchStorageFault() {
+		if (this.ledger.storageAvailable) return false;
+		this.#confirmations.clear(); this.catalogue = null; this.controller?.abort(); this.phase = "blocked"; this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE";
+		return true;
+	}
 	snapshot() {
 		const tasks = this.ledger.tasks();
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
-		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog };
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog };
 	}
 	#note(kind, value) { if (this.currentTaskId) this.ledger.note(this.currentTaskId, kind, value); this.emit(); }
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
 	#notStopped() { this.#requireRuntime(); if (this.closing || this.controller?.signal.aborted) throw new Error("GAME_TASK_STOPPED"); }
 	#launch(phase, action) {
+		this.#requireStorage();
 		if (this.operation) throw new Error("GAME_TASK_BUSY");
 		this.error = null; this.phase = phase;
 		const operation = {};
 		this.operation = operation;
 		operation.done = Promise.resolve().then(action).catch((error) => {
-			this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : !this.runtimeAvailable ? "runtime_unavailable" : this.controller?.signal.aborted ? "cancelled" : "failed";
-			try { this.#note("error", { code: this.error }); } catch { this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
+			if (!this.#latchStorageFault()) { this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : !this.runtimeAvailable ? "runtime_unavailable" : this.controller?.signal.aborted ? "cancelled" : "failed"; }
+			try { this.#note("error", { code: this.error }); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
 		}).finally(async () => {
-			try { if (!this.ledger.unresolved().length && !["awaiting_approval", "planning", "preparing"].includes(this.phase)) await this.#release(); }
+			try { if (!this.#latchStorageFault() && !this.ledger.unresolved().length && !["awaiting_approval", "planning", "preparing"].includes(this.phase)) await this.#release(); }
 			catch { this.phase = "blocked"; this.error = "DEVELOPMENT_GATE_RELEASE_UNCONFIRMED"; }
 			this.operation = null; this.emit();
 		});
 		this.emit(); return this.snapshot();
 	}
 	async #reserve() {
+		this.#requireStorage();
 		if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
 		if (this.closing) throw new Error("GAME_TASK_STOPPED");
+		this.#requireStorage();
 		if (!this.bridgeLease) {
 			this.bridgeLease = this.bridge.acquireResearch(this.#authority);
 			this.adapter = new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now });
@@ -128,11 +137,12 @@ export class GameTasks {
 		return value.progression;
 	}
 	profileTask(taskId) {
+		this.#requireStorage();
 		if (this.phase !== "planning" || taskId !== this.currentTaskId || !this.operation || this.closing || this.controller?.signal.aborted) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
 		const task = this.ledger.tasks().find((value) => value.id === taskId);
 		return { id: taskId, kind: "agent", state: "running", provider: task.details.provider, model: task.details.model };
 	}
-	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.phase === "planning" && this.operation && !this.closing && !this.controller?.signal.aborted) this.#note(kind, value); }
+	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.phase === "planning" && this.operation && !this.closing && !this.controller?.signal.aborted) { try { this.#note(kind, value); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); } } }
 	confirmation(taskId, uiEpoch) {
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || taskId !== this.currentTaskId || !Number.isSafeInteger(uiEpoch) || uiEpoch <= 0) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
@@ -181,6 +191,7 @@ export class GameTasks {
 		this.#stage("reconciling");
 	}
 	reconcile(intentId) {
+		this.#requireStorage();
 		const intent = this.ledger.unresolved().find((value) => value.intentId === intentId);
 		if (!intent || this.closing) throw new Error("ORIGINAL_GAME_INTENT_REQUIRED");
 		if (!intent.actionId) throw new Error("UNKNOWN_COMMIT_HAS_NO_ACTION_ID");
@@ -193,7 +204,8 @@ export class GameTasks {
 	}
 	stop() {
 		this.#confirmations.clear(); this.controller?.abort();
-		if (this.currentTaskId) this.ledger.stop(this.currentTaskId);
+		if (this.#latchStorageFault()) { this.emit(); return this.snapshot(); }
+		try { if (this.currentTaskId) this.ledger.stop(this.currentTaskId); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); return this.snapshot(); }
 		this.phase = this.ledger.unresolved().length ? "reconciling" : "cancelled";
 		if (!this.operation) return this.#launch(this.phase, async () => {});
 		this.emit(); return this.snapshot();
@@ -201,11 +213,11 @@ export class GameTasks {
 	async settled() { await this.operation?.done; return this.snapshot(); }
 	async drain() {
 		this.closing = true; this.#confirmations.clear(); this.controller?.abort();
-		if (this.currentTaskId && !this.ledger.unresolved().length) { try { this.ledger.stop(this.currentTaskId); } catch { this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; } }
+		if (this.ledger.storageAvailable && this.currentTaskId && !this.ledger.unresolved().length) { try { this.ledger.stop(this.currentTaskId); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; } }
 		await this.operation?.done;
 		// Durable unresolved intents remain blocked next launch. No new action is sent during shutdown.
 		if (this.bridgeLease) { this.bridge.releaseResearch(this.bridgeLease); this.bridgeLease = null; this.adapter = null; }
 	}
-	async resumeAfterCloseFailure() { this.closing = false; if (!this.ledger.unresolved().length) { this.phase = "cancelled"; await this.#release(); } else { this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"; } this.emit(); }
+	async resumeAfterCloseFailure() { this.closing = false; if (!this.#latchStorageFault()) { if (!this.ledger.unresolved().length) { this.phase = "cancelled"; await this.#release(); } else { this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"; } } this.emit(); }
 	close() { this.ledger.close(); }
 }

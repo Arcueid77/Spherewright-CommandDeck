@@ -8,8 +8,9 @@ import { DatabaseSync } from "node:sqlite";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { nativeResearchStateHash } from "../apps/desktop/research-preview.mjs";
 
-async function fixture(t) {
+async function fixture(t, { pageSize } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-ledger-")), file = join(directory, "game-ledger.sqlite"), authority = {}, stores = []; let now = 100000;
+	if (pageSize === 512) { const seed = new DatabaseSync(file); seed.exec("PRAGMA page_size=512; VACUUM"); seed.close(); }
 	let prepareReply, proofReply;
 	const open = () => { const ledger = new GameIntentLedger(file, { approvalAuthority: authority, prepareResearch: async (request) => prepareReply ? prepareReply(request) : { request, plan: plan(), researchBudget: budget() }, readResearchProof: async (request) => proofReply ? proofReply(request) : { request, terminal: completion({ scope }, ledger.intent(request.intentId)), freshProgression: progression({ scope, context }), context: resultContext({ scope, context }) }, now: () => now }); stores.push(ledger); return ledger; };
 	const scope = { bridgeInstanceId: "bridge-fixture", sessionId: "session-fixture", planetId: 1, techId: 100, capturedAtGameTick: 1200, selectionStateHash: "sha256:" + "a".repeat(64) };
@@ -117,6 +118,23 @@ test("a storage failure before commit intent prevents transport dispatch and lat
 	assert.throws(() => { f.ledger.beginIntent(task.id, review.previewHash, f.context()); sends++; }, /GAME_LEDGER_STORAGE_UNAVAILABLE/);
 	f.ledger.db.exec("PRAGMA query_only=OFF"); assert.equal(sends, 0); assert.equal(f.ledger.unresolved().length, 0);
 	assert.throws(() => f.ledger.beginIntent(task.id, review.previewHash, f.context()), /GAME_LEDGER_STORAGE_UNAVAILABLE/);
+});
+
+test("a bounded real SQLITE_FULL during acceptance rolls back the receipt and preserves the original pending intent across reopen", async t => {
+	const f = await fixture(t, { pageSize: 512 }), { task, review } = await f.approve(), intent = f.ledger.beginIntent(task.id, review.previewHash, f.context());
+	const original = f.ledger.intent(intent.intentId), receipt = acceptance(intent, { actionId: "a".repeat(128) }), db = f.ledger.db;
+	db.exec("VACUUM"); assert.equal(db.prepare("PRAGMA page_size").get().page_size, 512); assert.equal(db.prepare("PRAGMA freelist_count").get().freelist_count, 0);
+	const pages = db.prepare("PRAGMA page_count").get().page_count; assert.ok(pages > 0 && pages < 128); db.exec("PRAGMA max_page_count=" + pages);
+	// Calibrate the actual engine failure on this bounded fixture before checking
+	// the public ledger path. No filesystem is filled and no host quota is changed.
+	db.exec("BEGIN IMMEDIATE");
+	try { assert.throws(() => db.prepare("UPDATE game_intents SET action_id=?,acceptance=? WHERE id=?").run(receipt.actionId, JSON.stringify(receipt), intent.intentId), error => error.errcode === 13 && /full/i.test(error.message)); }
+	finally { try { db.exec("ROLLBACK"); } catch {} } // SQLITE_FULL may already have rolled the transaction back.
+	assert.deepEqual(f.ledger.intent(intent.intentId), original);
+	assert.throws(() => f.ledger.accept(intent.intentId, receipt), /GAME_LEDGER_STORAGE_UNAVAILABLE/); assert.equal(f.ledger.storageAvailable, false); assert.deepEqual(f.ledger.intent(intent.intentId), original);
+	db.exec("PRAGMA max_page_count=1073741823"); assert.throws(() => f.ledger.accept(intent.intentId, receipt), /GAME_LEDGER_STORAGE_UNAVAILABLE/);
+	f.ledger.close(); const reopened = f.open(); assert.equal(reopened.storageAvailable, true); assert.deepEqual(reopened.unresolved()[0], original);
+	await assert.rejects(reopened.reconcile(intent.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.equal(reopened.task(task.id).state, "intent_recorded");
 });
 test("lost ACK remains blocked after reopening and never receives a new commit key", async (t) => {
 	const f = await fixture(t), { task, review } = await f.approve(), first = f.ledger.beginIntent(task.id, review.previewHash, f.context());
