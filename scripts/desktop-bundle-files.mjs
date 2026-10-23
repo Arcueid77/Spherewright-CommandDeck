@@ -74,6 +74,22 @@ export async function verifyBundle(root) {
 		if (seen.has(key) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 512 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(file.sha256 ?? "")) throw new Error("BUNDLE_MANIFEST_INVALID"); seen.add(key);
 	}
 	for (const required of [bundleExecutable, "resources/app/package.json", "resources/app/apps/desktop/main.mjs", "resources/app/dist/renderer/index.html", "resources/app/artifacts/native/CommandDeck.NativeHost.exe", "resources/app/artifacts/native/hostfxr.dll", "resources/app/artifacts/native/System.Windows.Forms.dll", "resources/app/artifacts/commands/command-host-cohort.json", "resources/app/vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js"]) if (!seen.has(required.toLowerCase())) throw new Error("BUNDLE_REQUIRED_PAYLOAD_MISSING");
+	if (value.rendererNotices !== undefined) {
+		const notices = value.rendererNotices, file = value.files.find(file => file.path === "resources/app/dist/renderer/THIRD-PARTY-LICENSES.md");
+		if (!file || notices?.path !== file.path || notices.sha256 !== file.sha256 || !Array.isArray(notices.packages) || notices.packages.length !== 5 || new Set(notices.packages.map(pkg => pkg.name)).size !== 5 || notices.packages.some(pkg => !["dockview-core", "dockview-react", "react-dom", "react", "scheduler"].includes(pkg.name) || typeof pkg.version !== "string" || typeof pkg.license !== "string" || !/^[a-f0-9]{64}$/.test(pkg.sourceLicenseSha256 ?? ""))) throw new Error("BUNDLE_RENDERER_NOTICES_INVALID");
+	}
+	if (value.frameworkNotices !== undefined) {
+		if (!Array.isArray(value.nativeFrameworks) || value.nativeFrameworks.length !== 2) throw new Error("BUNDLE_FRAMEWORK_NOTICES_INVALID");
+		for (const folder of ["native", "commands"]) {
+			const records = value.frameworkNotices?.[folder], expected = ["LICENSE-Microsoft.NETCore.App.txt", "THIRD-PARTY-NOTICES-Microsoft.NETCore.App.txt", ...(folder === "native" ? ["LICENSE-Microsoft.WindowsDesktop.App.txt"] : [])];
+			if (!Array.isArray(records) || records.length !== expected.length || new Set(records.map(record => record.name)).size !== expected.length) throw new Error("BUNDLE_FRAMEWORK_NOTICES_INVALID");
+			for (const record of records) {
+				const file = value.files.find(file => file.path === "resources/app/artifacts/" + folder + "/" + record.name);
+				const sourceName = record.framework === "Microsoft.WindowsDesktop.App" ? "LICENSE" : record.name.startsWith("THIRD-") ? "THIRD-PARTY-NOTICES.TXT" : "LICENSE.TXT";
+				if (!expected.includes(record.name) || !file || file.sha256 !== record.sha256 || file.bytes !== record.bytes || !["Microsoft.NETCore.App", "Microsoft.WindowsDesktop.App"].includes(record.framework) || record.packageId !== record.framework + ".Runtime.win-x64" || !value.nativeFrameworks.some(framework => framework.name === record.framework && framework.version === record.version) || !record.name.endsWith("-" + record.framework + ".txt") || record.sourceName !== sourceName) throw new Error("BUNDLE_FRAMEWORK_NOTICES_INVALID");
+			}
+		}
+	}
 	const actual = await inventoryBundle(root);
 	if (!isDeepStrictEqual(actual.files, value.files) || actual.bytes !== value.bytes) throw new Error("BUNDLE_PAYLOAD_CHANGED");
 	return value;

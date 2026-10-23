@@ -99,6 +99,7 @@ jobs:
             .local/portable-desktop-application.json
             .local/installer-smoke.json
             artifacts/portable-desktop/commanddeck-bundle.json
+            artifacts/portable-desktop/resources/app/dist/renderer/THIRD-PARTY-LICENSES.md
             artifacts/installer/commanddeck-installer.json
             artifacts/installer-test/commanddeck-installer.json
           if-no-files-found: ignore

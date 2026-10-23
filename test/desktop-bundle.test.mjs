@@ -48,9 +48,41 @@ test("portable verification cannot reach a game, external model, developer comma
 	for (const [action, args] of [["probe", { mode: "offline" }], ["attach", "owned-fixture"], ["workbench", { action: "state" }]]) assert.doesNotThrow(() => assertPortableAction(action, args));
 });
 
+test("renderer notice metadata must bind an actual sealed member rather than only claim licenses were included", async t => {
+	const root = await fixture(t), required = [bundleExecutable, "resources/app/package.json", "resources/app/apps/desktop/main.mjs", "resources/app/dist/renderer/index.html", "resources/app/artifacts/native/CommandDeck.NativeHost.exe", "resources/app/artifacts/native/hostfxr.dll", "resources/app/artifacts/native/System.Windows.Forms.dll", "resources/app/artifacts/commands/command-host-cohort.json", "resources/app/vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js"];
+	for (const path of required) { await mkdir(dirname(join(root, path)), { recursive: true }); await writeFile(join(root, path), "fixture"); }
+	const noticePath = "resources/app/dist/renderer/THIRD-PARTY-LICENSES.md", notices = { path: noticePath, sha256: "c".repeat(64), packages: ["dockview-core", "dockview-react", "react-dom", "react", "scheduler"].map(name => ({ name, version: "1.2.3", license: "MIT", sourceLicenseSha256: "d".repeat(64) })) };
+	const value = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, sourceRevision: "a".repeat(40), piCommit: "b".repeat(40), selfContained: true, rendererNotices: notices, ...await inventoryBundle(root) };
+	const manifest = join(root, bundleManifestName); await writeFile(manifest, JSON.stringify(value)); await assert.rejects(verifyBundle(root), /RENDERER_NOTICES_INVALID/);
+	await writeFile(join(root, noticePath), "notice fixture"); Object.assign(value, await inventoryBundle(root)); notices.sha256 = value.files.find(file => file.path === noticePath).sha256;
+	await writeFile(manifest, JSON.stringify(value)); await verifyBundle(root);
+	notices.packages[0].name = "react"; await writeFile(manifest, JSON.stringify(value)); await assert.rejects(verifyBundle(root), /RENDERER_NOTICES_INVALID/);
+});
+
 test("portable mode uses only a fresh temporary profile and rejects source-app or extra launch flags", async t => {
 	const root = await fixture(t, "commanddeck-desktop-smoke-"), env = { COMMANDDECK_PORTABLE_ROOT: root, COMMANDDECK_PORTABLE_RUN_ID: "a".repeat(36) }, calls = [], app = { isPackaged: true, setPath: (...args) => calls.push(args) };
 	const value = await preparePortableMode(app, ["program", "--portable-smoke"], env); assert.equal(value.root, root); assert.equal(calls[0][1], join(root, "supervisor-profile")); assert.equal((await lstat(calls[0][1])).isSymbolicLink(), false);
 	await assert.rejects(preparePortableMode({ ...app, isPackaged: false }, ["program", "--portable-smoke"], env), /PACKAGED_PORTABLE_SMOKE_REQUIRED/);
 	await assert.rejects(preparePortableMode(app, ["program", "--portable-smoke", "--workspace"], env), /PACKAGED_PORTABLE_SMOKE_REQUIRED/);
+});
+
+test("framework notice metadata must identify real sealed files and the resolved framework versions", async t => {
+	const root = await fixture(t), required = [bundleExecutable, "resources/app/package.json", "resources/app/apps/desktop/main.mjs", "resources/app/dist/renderer/index.html", "resources/app/artifacts/native/CommandDeck.NativeHost.exe", "resources/app/artifacts/native/hostfxr.dll", "resources/app/artifacts/native/System.Windows.Forms.dll", "resources/app/artifacts/commands/command-host-cohort.json", "resources/app/vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js"];
+	for (const path of required) { await mkdir(dirname(join(root, path)), { recursive: true }); await writeFile(join(root, path), "fixture"); }
+	const frameworkNotices = { native: [], commands: [] }, nativeFrameworks = [{ name: "Microsoft.NETCore.App", version: "8.0.28" }, { name: "Microsoft.WindowsDesktop.App", version: "8.0.28" }];
+	for (const folder of ["native", "commands"]) {
+		for (const framework of folder === "native" ? nativeFrameworks : nativeFrameworks.slice(0, 1)) {
+			for (const sourceName of framework.name === "Microsoft.NETCore.App" ? ["LICENSE.TXT", "THIRD-PARTY-NOTICES.TXT"] : ["LICENSE"]) {
+				const name = (sourceName.startsWith("THIRD") ? "THIRD-PARTY-NOTICES" : "LICENSE") + "-" + framework.name + ".txt";
+				await writeFile(join(root, "resources/app/artifacts", folder, name), "notice fixture");
+				frameworkNotices[folder].push({ framework: framework.name, version: framework.version, packageId: framework.name + ".Runtime.win-x64", sourceName, name });
+			}
+		}
+	}
+	const inventory = await inventoryBundle(root);
+	for (const folder of ["native", "commands"]) for (const record of frameworkNotices[folder]) { const file = inventory.files.find(file => file.path === "resources/app/artifacts/" + folder + "/" + record.name); Object.assign(record, { bytes: file.bytes, sha256: file.sha256 }); }
+	const value = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, sourceRevision: "a".repeat(40), piCommit: "b".repeat(40), selfContained: true, frameworkNotices, nativeFrameworks, ...inventory }, path = join(root, bundleManifestName);
+	await writeFile(path, JSON.stringify(value)); await verifyBundle(root);
+	frameworkNotices.native[0].version = "8.0.27"; await writeFile(path, JSON.stringify(value)); await assert.rejects(verifyBundle(root), /FRAMEWORK_NOTICES_INVALID/);
+	frameworkNotices.native[0].version = "8.0.28"; frameworkNotices.commands.pop(); await writeFile(path, JSON.stringify(value)); await assert.rejects(verifyBundle(root), /FRAMEWORK_NOTICES_INVALID/);
 });

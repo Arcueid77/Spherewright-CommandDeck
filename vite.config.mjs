@@ -8,6 +8,7 @@ export default defineConfig({
 	build: {
 		outDir: "../../dist/renderer",
 		emptyOutDir: true,
+		license: { fileName: "THIRD-PARTY-LICENSES.md" },
 		rolldownOptions: {
 			output: {
 				codeSplitting: {

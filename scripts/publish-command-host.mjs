@@ -1,9 +1,10 @@
 import {spawn} from 'node:child_process';
-import {mkdir,realpath,lstat,access} from 'node:fs/promises';
+import {mkdir,realpath,lstat,access,readFile} from 'node:fs/promises';
 import {join,resolve,relative,isAbsolute,delimiter,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readGit} from '../apps/desktop/workspace.mjs';
 import {sealCommandHost} from '../apps/desktop/command-cohort.mjs';
+import {copyFrameworkNotices} from './framework-notices.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url)),args=process.argv.slice(2);
 if(process.platform!=='win32'||args.length!==2||args[0]!=='--output')throw new Error('EXPLICIT_WINDOWS_PUBLISH_OUTPUT_REQUIRED');
 const artifactRoot=resolve(root,'artifacts'),output=resolve(root,args[1]),name=relative(artifactRoot,output);
@@ -22,7 +23,8 @@ if(!dotnet)throw new Error('DOTNET_SDK_REQUIRED_FOR_PUBLISH');
 async function run(commandArgs,capture=false){return new Promise((resolve,reject)=>{const child=spawn(dotnet,commandArgs,{cwd:root,windowsHide:true,shell:false,stdio:capture?['ignore','pipe','pipe']:'inherit'});let text='';if(capture){child.stdout.on('data',bytes=>{text+=bytes;if(text.length>16384)child.kill();});child.stderr.on('data',()=>{});}child.once('error',()=>reject(new Error('NATIVE_PUBLISH_START_FAILED')));child.once('close',code=>code===0?resolve(text):reject(new Error('NATIVE_PUBLISH_FAILED')));});}
 const sdkVersion=(await run(['--version'],true)).trim().split(/\r?\n/).at(-1);
 await run(['publish','native/CommandDeck.CommandHost/CommandDeck.CommandHost.csproj','-c','Release','-f','net8.0-windows','-r','win-x64','--self-contained','true','-p:DebugType=None','-p:DebugSymbols=false','--nologo','-o',output]);
+const frameworkNotices=await copyFrameworkNotices({assets:JSON.parse(await readFile(join(root,'native/CommandDeck.CommandHost/obj/project.assets.json'),'utf8')),runtimeConfig:JSON.parse(await readFile(join(output,'CommandDeck.CommandHost.runtimeconfig.json'),'utf8')),output});
 if((await readGit(root,['rev-parse','HEAD'])).trim()!==revision||(await readGit(root,['status','--porcelain'])).trim())throw new Error('PUBLISH_SOURCE_CHANGED');
 const manifest=await sealCommandHost(output,revision,{sdkVersion});
 if(!manifest.selfContained)throw new Error('SELF_CONTAINED_PUBLISH_REQUIRED');
-console.log(JSON.stringify({published:true,selfContained:manifest.selfContained,runtimeIdentifier:manifest.runtimeIdentifier,sourceRevision:revision,sdkVersion,fileCount:manifest.files.length}));
+console.log(JSON.stringify({published:true,selfContained:manifest.selfContained,runtimeIdentifier:manifest.runtimeIdentifier,sourceRevision:revision,sdkVersion,fileCount:manifest.files.length,frameworkNotices}));

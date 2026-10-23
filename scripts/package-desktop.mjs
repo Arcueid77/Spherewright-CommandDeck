@@ -7,6 +7,8 @@ import { readGit } from "../apps/desktop/workspace.mjs";
 import { sealCommandHost } from "../apps/desktop/command-cohort.mjs";
 import { materializePiRuntime } from "./pi-runtime-tree.mjs";
 import { bundleExecutable, bundleManifestName, bundleHash, copyBundleTree, inventoryBundle, ridLockedCopy, verifyBundle } from "./desktop-bundle-files.mjs";
+import { verifyRendererNotices } from "./renderer-notices.mjs";
+import { copyFrameworkNotices } from "./framework-notices.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), pin = "71023aec1546d6d677a65669c5665c0927ce0dd0";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--output") throw new Error("EXPLICIT_WINDOWS_BUNDLE_OUTPUT_REQUIRED");
@@ -39,6 +41,7 @@ async function run(executable, commandArgs, capture = false) {
 const sdkVersion = (await run(dotnet, ["--version"], true)).split(/\r?\n/).at(-1);
 await run(process.execPath, [process.env.npm_execpath, "run", "pi:verify"]);
 await run(process.execPath, [process.env.npm_execpath, "run", "build:renderer"]);
+const rendererNotices = await verifyRendererNotices(root, join(root, "dist/renderer/THIRD-PARTY-LICENSES.md"), JSON.parse(lock));
 await sourceCheck(); await mkdir(output);
 const stage = join(root, ".local/bundle-build", randomUUID()), app = join(output, "resources/app"); await mkdir(stage, { recursive: true });
 const nativeFiles = (await readGit(root, ["ls-files", "-z", "--", "native/"])).split("\0").filter(Boolean), inputs = [];
@@ -62,8 +65,10 @@ await writeFile(join(app, "package.json"), JSON.stringify({ name: packageFile.na
 await copyBundleTree(join(root, "apps/desktop"), join(app, "apps/desktop"));
 await copyBundleTree(join(root, "dist/renderer"), join(app, "dist/renderer"));
 await copyBundleTree(join(root, "LICENSE"), join(app, "LICENSE"));
+const frameworkNotices = {};
 for (const [project, folder] of [["NativeHost", "native"], ["CommandHost", "commands"]]) {
 	await run(dotnet, ["publish", join(stage, "native", "CommandDeck." + project, "CommandDeck." + project + ".csproj"), "-c", "Release", "-f", "net8.0-windows", "-r", "win-x64", "--self-contained", "true", "-p:RestoreLockedMode=true", "-p:DirectoryBuildPropsPath=" + join(stage, "Directory.Build.props"), "-p:DirectoryBuildTargetsPath=" + join(stage, "Directory.Build.targets"), "-p:DebugType=None", "-p:DebugSymbols=false", "-p:InformationalVersion=" + packageFile.version + "+" + revision, "-p:IncludeSourceRevisionInInformationalVersion=false", "--nologo", "-o", join(app, "artifacts", folder)]);
+	frameworkNotices[folder] = await copyFrameworkNotices({ assets: JSON.parse(await readFile(join(stage, "native", "CommandDeck." + project, "obj/project.assets.json"), "utf8")), runtimeConfig: JSON.parse(await readFile(join(app, "artifacts", folder, "CommandDeck." + project + ".runtimeconfig.json"), "utf8")), output: join(app, "artifacts", folder) });
 }
 const assets = JSON.parse(await readFile(join(stage, "native/CommandDeck.NativeHost/obj/project.assets.json"), "utf8"));
 const newtonsoft = assets.libraries?.["Newtonsoft.Json/13.0.4"];
@@ -82,6 +87,6 @@ await mkdir(join(app, "vendor")); const pi = await materializePiRuntime(join(roo
 await sourceCheck();
 if (bundleHash(await readFile(join(root, "package-lock.json"))) !== bundleHash(lock) || bundleHash(await readFile(join(root, "vendor/pi/package-lock.json"))) !== bundleHash(piLock)) throw new Error("BUNDLE_DEPENDENCY_LOCK_CHANGED");
 const inventory = await inventoryBundle(output);
-const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, piPackages: pi.packages, ...inventory };
+const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, frameworkNotices, rendererNotices, piPackages: pi.packages, ...inventory };
 await writeFile(join(output, bundleManifestName), JSON.stringify(manifest, null, 2), { flag: "wx" }); await verifyBundle(output);
 console.log(JSON.stringify({ desktopBundle: "created", sourceRevision: revision, piCommit: pin, files: inventory.files.length, bytes: inventory.bytes, selfContained: true, installerBuilt: false, cleanWindowsVmVerified: false, gameCalls: 0 }));

@@ -83,6 +83,10 @@ npm run test:portable-desktop -- --source artifacts/portable-desktop
 
 The output directory must be new. The builder freezes native sources into a separate build copy, derives only empty Windows RID lock metadata there, publishes both helpers with locked package dependencies, embeds Electron and the physical Pi runtime tree, and records every shipped file hash and source pin. It excludes Lab, user data and proprietary game DLLs. The test verifies the bundle, copies it outside the checkout, uses a new temporary profile, hides developer tools/shared .NET roots and starts the packaged executable. Its built-in fixture-only mode rejects real models, MCP connections, game tasks and developer commands. Raw runtime traces remain local; only the anonymous summary and bundle manifest are uploaded by CI. This candidate and check do not constitute an installer, clean-Windows VM acceptance, game-input acceptance or release.
 
+Renderer builds emit `THIRD-PARTY-LICENSES.md` for the bundled React, React DOM, Scheduler and Dockview packages. Packaging requires each exact locked version and its complete source license text, includes the notices in the file inventory, and records the source license hashes; a license identifier alone is insufficient.
+
+Self-contained .NET publishing also copies the license and third-party notice files provided by the exact resolved runtime packs. It checks runtime configuration, SDK download pins and NuGet package identity before copying; command-host notices are included before sealing, so its cache retains them too.
+
 An explicit verified bundle can also be wrapped in a per-user development installer:
 
 ```powershell
