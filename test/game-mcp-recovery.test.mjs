@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,10 +16,14 @@ async function fixture(t, mode = "mcp-drop-after-accept") {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-"))), runId = randomUUID(), worldPath = join(directory, "synthetic-research-world.json");
 	await writeFile(worldPath, JSON.stringify({ version: 1, runId, commits: 0, techId: null, key: null, tick: 1200, lossInjected: false, launches: 0, prepares: 0, resultReads: 0 }), { flag: "wx" });
 	const marker = join(directory, "Spherewright.Mcp.exe"); await writeFile(marker, "OWNED_SYNTHETIC_MCP_RECOVERY", { flag: "wx" });
-	const authority = {}, approval = {}, clients = [], hosts = []; let frozen = false, modelRequests = 0, cohortChanged = false;
+	const authority = {}, approval = {}, clients = [], hosts = [], diagnostics = []; let frozen = false, modelRequests = 0, cohortChanged = false;
 	const bridge = new BridgeMonitor({ researchAuthority: authority,
 		fingerprint: async path => { assert.equal(path, marker); return { path, cohortHash: cohortChanged ? "changed-cohort" : "original-cohort", fileCount: 1 }; },
-		launch: (_selection, options) => { const client = new ReadOnlyMcpClient(spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode, worldPath, runId], { stdio: "pipe", windowsHide: true }), { researchAuthority: options.researchAuthority, timeoutMs: 1000 }); clients.push(client); return client; },
+		launch: (_selection, options) => {
+			const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode, worldPath, runId], { stdio: "pipe", windowsHide: true });
+			let stderr = ""; child.stderr.on("data", bytes => { stderr = (stderr + bytes).slice(-2048); const code = stderr.match(/SYNTHETIC_WORLD_INIT_[A-Z0-9_]+/)?.[0]; if (code) diagnostics.push(code); });
+			const client = new ReadOnlyMcpClient(child, { researchAuthority: options.researchAuthority, timeoutMs: 1000 }); clients.push(client); return client;
+		},
 	});
 	const open = () => { const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, planner: async () => { modelRequests++; return { proposedTechId: 100 }; }, freezeDevelopment: async () => { frozen = true; }, releaseDevelopment: async () => { frozen = false; }, pollMilliseconds: 0 }); hosts.push(host); return host; };
 	t.after(async () => {
@@ -26,7 +31,7 @@ async function fixture(t, mode = "mcp-drop-after-accept") {
 		await bridge.close(); for (const client of clients) { await client.close(); assert.equal(client.exitConfirmed, true); }
 		const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-mcp-recovery-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 	});
-	await bridge.select(marker); const host = open();
+	try { await bridge.select(marker); } catch (error) { throw new Error(diagnostics.at(-1) ?? error.message); } const host = open();
 	const start = target => (target ?? host).start({ mode: "assist", techId: 100, providerId: "synthetic-provider", modelId: "fixture", prompt: "One normal enqueue only" });
 	async function submitted() { start(); const before = await host.settled(), challenge = host.confirmation(before.currentTaskId, 1); host.confirm(approval, challenge.nonce, 1); const value = await host.settled(); await clients[0].exited; assert.equal(clients[0].exitConfirmed, true); assert.equal(value.phase, "blocked"); assert.equal(value.developmentFrozen, true); const world = JSON.parse(await readFile(worldPath, "utf8")); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); return value.unresolved[0]; }
 	return { host, open, start, submitted, bridge, authority, clients, world: async () => JSON.parse(await readFile(worldPath, "utf8")), frozen: () => frozen, modelRequests: () => modelRequests, changeCohort: () => { cohortChanged = true; } };
@@ -94,4 +99,13 @@ test("ordinary selection and another task stay excluded for the complete origina
 		assert.throws(() => f.host.reconcile(original.intentId), /GAME_TASK_BUSY/); assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
 	} finally { clearTimeout(timer); finish(); }
 	assert.equal((await f.host.settled()).phase, "completed"); assert.equal(f.clients.length, 2); assert.equal((await f.world()).commits, 1);
+});
+
+test("synthetic-world admission reports only a fixed scope error, emits no MCP response and leaves the file untouched", async t => {
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-world-refusal-"))), path = join(directory, "synthetic-research-world.json"), before = '{"privateCanary":"preserve original bytes"}';
+	await writeFile(path, before, { flag: "wx" });
+	const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), "mcp-drop-after-accept", path, randomUUID()], { stdio: "pipe", windowsHide: true });
+	t.after(async () => { assert.notEqual(child.exitCode, null); const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-world-refusal-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+	let stdout = "", stderr = ""; child.stdout.on("data", bytes => { stdout += bytes; }); child.stderr.on("data", bytes => { stderr += bytes; }); child.stdin.on("error", () => {}); child.stdin.end('{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}\n');
+	const [code] = await once(child, "close"); assert.equal(code, 2); assert.equal(stdout, ""); assert.equal(stderr.trim(), "SYNTHETIC_WORLD_INIT_TEMP_PREFIX"); assert.equal(await readFile(path, "utf8"), before);
 });

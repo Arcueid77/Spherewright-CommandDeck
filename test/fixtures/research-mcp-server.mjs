@@ -8,17 +8,22 @@ const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playb
 const persistent = ["mcp-drop-after-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-lost-ack"].includes(mode);
 let world, worldPath;
 if (persistent) {
+	let stage = "ARGUMENTS";
+	try {
 	const path = process.argv[3], runId = process.argv[4]; assert.match(runId ?? "", /^[0-9a-f-]{36}$/);
+	stage = "DIRECTORY_REALPATH";
 	const directory = realpathSync(dirname(path)), scoped = relative(realpathSync(tmpdir()), directory);
-	assert.ok(!scoped.startsWith("..") && /^commanddeck-(?:mcp-recovery|desktop-smoke)-/.test(scoped.split(sep)[0]));
-	assert.equal(basename(path), "synthetic-research-world.json"); worldPath = join(directory, basename(path)); assert.equal(realpathSync(path).toLowerCase(), worldPath.toLowerCase());
-	const info = lstatSync(path); assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= 4096);
-	world = JSON.parse(readFileSync(path, "utf8")); assert.equal(world.version, 1); assert.equal(world.runId, runId);
-	for (const field of ["commits", "tick", "launches", "prepares", "resultReads"]) assert.ok(Number.isSafeInteger(world[field]) && world[field] >= 0 && world[field] <= 10000);
-	assert.equal(typeof world.lossInjected, "boolean"); assert.ok(world.commits <= 1 && world.launches < 8);
+	stage = "TEMP_ESCAPE"; assert.ok(!scoped.startsWith("..")); stage = "TEMP_PREFIX"; assert.match(scoped.split(sep)[0], /^commanddeck-(?:mcp-recovery|desktop-smoke)-/);
+	stage = "FILE_NAME"; assert.equal(basename(path), "synthetic-research-world.json"); worldPath = join(directory, basename(path)); stage = "FILE_REALPATH"; assert.equal(realpathSync(path).toLowerCase(), worldPath.toLowerCase());
+	const info = lstatSync(path); stage = "FILE_TYPE"; assert.ok(info.isFile() && !info.isSymbolicLink()); stage = "FILE_LINKS"; assert.equal(info.nlink, 1); stage = "FILE_SIZE"; assert.ok(info.size <= 4096);
+	stage = "JSON"; world = JSON.parse(readFileSync(path, "utf8")); stage = "VERSION"; assert.equal(world.version, 1); stage = "IDENTITY"; assert.equal(world.runId, runId);
+	for (const field of ["commits", "tick", "launches", "prepares", "resultReads"]) { stage = "COUNTER_" + field.toUpperCase(); assert.ok(Number.isSafeInteger(world[field]) && world[field] >= 0 && world[field] <= 10000); }
+	stage = "BOUNDS"; assert.equal(typeof world.lossInjected, "boolean"); assert.ok(world.commits <= 1 && world.launches < 8);
+	stage = "COMMIT_IDENTITY";
 	if (world.commits) { assert.equal(world.techId, 100); assert.match(world.key, /^[0-9a-f-]{36}$/); assert.equal(world.tick, 1201); }
 	else { assert.equal(world.techId, null); assert.equal(world.key, null); }
-	world.launches++; writeFileSync(worldPath, JSON.stringify(world));
+	stage = "SAVE"; world.launches++; writeFileSync(worldPath, JSON.stringify(world));
+	} catch { process.stderr.write("SYNTHETIC_WORLD_INIT_" + stage + "\n", () => process.exit(2)); await new Promise(() => {}); }
 }
 const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 const field = (type) => ({ type });
