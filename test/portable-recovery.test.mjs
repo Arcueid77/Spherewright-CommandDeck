@@ -5,7 +5,7 @@ import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { seedLegacyRecovery, readLegacyBaseRows } from "../scripts/legacy-recovery-fixture.mjs";
-import { readPortableRecovery, assertPortableRecovery, assertPendingRecoveryControls, portableRecoveryFile } from "../apps/desktop/portable-recovery.mjs";
+import { readPortableRecovery, assertPortableRecovery, assertPendingRecoveryControls, runPortableRecoverySmoke, portableRecoveryFile } from "../apps/desktop/portable-recovery.mjs";
 import { Workbench } from "../apps/desktop/workbench.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 
@@ -47,4 +47,41 @@ test("a blocked pending task disables new execution while retaining the read-onl
 	assertPendingRecoveryControls({ buttons });
 	for (let index = 0; index < 2; index++) { const changed = structuredClone(buttons); changed[index].disabled = false; assert.throws(() => assertPendingRecoveryControls({ buttons: changed }), /NEW_EXECUTION_CONTROL_ENABLED/); }
 	assert.throws(() => assertPendingRecoveryControls({ buttons: buttons.slice(0, 2) }), /ORIGINAL_ACTION_QUERY_MISSING/);
+});
+
+function recoveryDriver(f, enabledNewExecution = false) {
+	let reloads = 0;
+	const api = async (action, args) => {
+		if (action === "game" && args?.action === "snapshot") return { busy: false, phase: "blocked", error: "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES", developmentFrozen: true, syntheticOnly: true, currentTaskId: f.expected.task.id, tasks: [f.expected.task], unresolved: [f.expected.intent], events: [] };
+		if (action === "workbench" && args?.action === "state") return { executionBlocked: true, gameWriteAccess: "development_frozen", activeTask: null, roots: [], tasks: [] };
+		if (action === "bridge" && args?.action === "snapshot") return { selected: null, metadata: null, observation: null, requestPerformance: null };
+		if (action === "snapshot") return { lastProbeResult: null };
+		throw new Error(action === "probe" ? "GAME_EXECUTION_OWNS_RUNTIME" : "PORTABLE_SMOKE_ACTION_REJECTED");
+	};
+	return { api, context: { root: f.directory }, getRuntimePid: () => 37, getProbeSequence: () => 0, getReloads: () => reloads,
+		testCommand: async (name, args) => {
+			if (name === "reload") { reloads++; return true; }
+			if (name === "portable-renderer-state") return { errors: [] };
+			assert.equal(name, "evaluate"); if (args.source.endsWith(".click()")) return true;
+			assert.ok(args.source.includes(".game-tasks-panel"));
+			return { stage: "等待核销 · 开发写入与构建已冻结", syntheticNotice: true, receipts: [f.expected.intent.actionId], buttons: [{ text: "开始分析", disabled: !enabledNewExecution }, { text: "核对并确认入队", disabled: true }, { text: "核销原动作", disabled: false }] };
+		} };
+}
+
+test("the recovery smoke writes its completion receipt only after both UI phases and preserves phase diagnostics", async t => {
+	const f = await fixture(t), driver = recoveryDriver(f), manifest = { sourceRevision: "synthetic-source", piCommit: "synthetic-pi" };
+	await runPortableRecoverySmoke(driver, f.expected, manifest, 37, async () => {});
+	assert.equal(driver.getReloads(), 1);
+	const proof = JSON.parse(await readFile(join(f.directory, "application-proof.json"), "utf8"));
+	assert.equal(proof.legacyPendingRecovery.originalPendingSha256, f.expected.sha256); assert.equal(proof.pendingDisplayedWithNewExecutionDisabled, true); assert.equal(proof.noProbeAllocated, true);
+	for (const phase of ["before-reload", "after-reload"]) { const diagnostic = JSON.parse(await readFile(join(f.directory, `legacy-recovery-ui-${process.pid}-${phase}.private.json`), "utf8")); assert.equal(diagnostic.phase, phase); assert.equal(diagnostic.completed, true); }
+});
+
+test("a new-execution regression retains the failing UI phase without writing a completion receipt", async t => {
+	const f = await fixture(t), driver = recoveryDriver(f, true);
+	await assert.rejects(runPortableRecoverySmoke(driver, f.expected, {}, 37, async () => {}), /NEW_EXECUTION_CONTROL_ENABLED/);
+	assert.equal(driver.getReloads(), 0);
+	const diagnostic = JSON.parse(await readFile(join(f.directory, `legacy-recovery-ui-${process.pid}-before-reload.private.json`), "utf8"));
+	assert.equal(diagnostic.completed, false); assert.equal(diagnostic.ui.buttons[0].disabled, false);
+	await assert.rejects(readFile(join(f.directory, "application-proof.json")), { code: "ENOENT" });
 });

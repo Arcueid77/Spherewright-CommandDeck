@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, lstat } from "node:fs/promises";
+import { readFile, writeFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -42,25 +42,32 @@ export function assertPendingRecoveryControls(value) {
 
 export async function runPortableRecoverySmoke(driver, expected, manifest, runtimePid, settledUi) {
 	const { api, testCommand, getRuntimePid, getProbeSequence, context } = driver;
-	async function pendingUi() {
-		await testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent').click()" });
-		const until = performance.now() + 10000;
-		while (true) {
-			const value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {stage:panel?.querySelector('.game-task-stage')?.textContent??'',syntheticNotice:panel?.textContent.includes('NO DSP')??false,receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),buttons:[...(panel?.querySelectorAll('button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
-			if (value.stage.includes("等待核销") && value.stage.includes("冻结") && value.receipts.some(text => text.includes(expected.intent.actionId))) {
-				assertPendingRecoveryControls(value);
-				assert.equal(value.syntheticNotice, true, "LEGACY_FIXTURE_NOTICE_NOT_DISPLAYED");
-				break;
+	async function pendingUi(phase) {
+		let value = null, completed = false;
+		try {
+			await testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent').click()" });
+			const until = performance.now() + 10000;
+			while (true) {
+				value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {readyState:document.readyState,panelPresent:Boolean(panel),stage:panel?.querySelector('.game-task-stage')?.textContent??'',syntheticNotice:panel?.textContent.includes('NO DSP')??false,receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),buttons:[...(panel?.querySelectorAll('button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
+				if (value.stage.includes("等待核销") && value.stage.includes("冻结") && value.receipts.some(text => text.includes(expected.intent.actionId))) {
+					assertPendingRecoveryControls(value);
+					assert.equal(value.syntheticNotice, true, "LEGACY_FIXTURE_NOTICE_NOT_DISPLAYED");
+					break;
+				}
+				assert.ok(performance.now() < until, "LEGACY_PENDING_UI_NOT_READY_" + phase.toUpperCase().replaceAll("-", "_")); await new Promise(resolve => setTimeout(resolve, 50));
 			}
-			assert.ok(performance.now() < until, "LEGACY_PENDING_UI_NOT_READY"); await new Promise(resolve => setTimeout(resolve, 50));
+			assert.deepEqual((await testCommand("portable-renderer-state")).errors, []);
+			completed = true;
+		} finally {
+			const renderer = await testCommand("portable-renderer-state").catch(() => ({ unavailable: true }));
+			await writeFile(join(context.root, `legacy-recovery-ui-${process.pid}-${phase}.private.json`), JSON.stringify({ phase, completed, ui: value, renderer }), { flag: "wx" });
 		}
-		assert.deepEqual((await testCommand("portable-renderer-state")).errors, []);
 	}
 	assert.equal(getProbeSequence(), 0); const original = await assertPortableRecovery(api, expected);
-	await pendingUi();
+	await pendingUi("before-reload");
 	await settledUi(); await assert.rejects(api("probe", { mode: "offline" }), /GAME_EXECUTION_OWNS_RUNTIME/);
 	assert.equal(getProbeSequence(), 0); assert.equal((await api("snapshot")).lastProbeResult, null);
 	for (const [action, args] of [["bridge-select", "C:\\not-a-server.exe"], ["game", { action: "start" }], ["game", { action: "reconcile", args: { intentId: expected.intent.intentId } }], ["workbench", { action: "check" }]]) await assert.rejects(api(action, args), /PORTABLE_SMOKE_ACTION_REJECTED/);
-	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid); await assertPortableRecovery(api, expected); assert.equal(getProbeSequence(), 0); await pendingUi();
+	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid); await assertPortableRecovery(api, expected); assert.equal(getProbeSequence(), 0); await pendingUi("after-reload");
 	await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, legacyPendingRecovery: original, originalApprovalNotReused: true, pendingDisplayedWithNewExecutionDisabled: true, originalActionQueryEntryRetained: true, uiReloadRetainsRuntimeAndPending: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticTools: 0, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
 }
