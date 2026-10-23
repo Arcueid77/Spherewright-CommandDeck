@@ -359,6 +359,10 @@ M5启动故障首片：Supervisor载入失败后保留原profile锁，等Electro
 
 M5新增显式候选对升级入口：只接受不同源码、同一隔离AppId的两份已核验安装器，先确认测试登记不存在；依次正常安装基线→升级→兼容回退→再采用新候选→卸载。复用实际安装EXE运行入口，续开上下文绑定原测试安装、已标记的物理profile、run identity、原历史hash、上一来源和准确目标；先证所有相关程序已退出，再归档前次回执并运行，不重建空profile或重发任务。每次安装前后核整份profile字节，运行中核原任务/草稿/接受与终态，登记须选择准确版本，旧payload保全，最终正常卸载须覆盖两版。控制器绑定干净源码提交，步骤间源变化即停止。新增只读登记入口区分明确不存在与读取失败；Windows PowerShell使用仅该子进程的执行参数，不修改机器策略。另提供手动触发、两个精确提交各自重建的CI入口，私有profile/登记/trace不上传。新增3项定向校验、完整239项Node及实际Windows PowerShell只读入口已通过；真实候选对实跑及准确CI仍待，不把实现入口记为升级/回退通过。
 
+显式候选对本机实跑已通过：控制器 `c52fa0934d9220385a28d048a9f29272e1cdf05d` 保持干净未变，基线5d33/候选c885沿同一物理profile完成安装、升级、回退、再升级及最终卸载，run `62076d61-e09c-4b31-a004-d74d0f2112d0`。五次实际安装EXE启动的原合成任务/检查/草稿/科研key/action/接受与终态全量相同，历史hash始终 `4cdc23d379fe22aba9ec39331dc56d7cfafba7509e9ca8531b3abdab751a648f`；每次安装前后profile全部字节不变，旧/新payload逐文件保全，登记准确指向所选版本，正常卸载移除两版登记文件、保留profile及未登记文件，成功后才清理本次自有临时根。此为指定候选对及兼容schema通过，非任意未来格式回退或资料迁移。准确独立 [CI39883057684](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39883057684) 正在从旧5d33和新c52两个源码提交重建，普通回归 [CI39883009788](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39883009788) 亦在运行；0真实模型/游戏调用。
+
+迁移预检的合成反例另发现两个实际缺口（run `ceb9615d-b8f9-4677-9198-0d933e410450`）：Workbench对version0但已有未知表的库添加了自身表并改为version1；GameIntentLedger对缺terminal列的version1库先提交显示表及version2，才抛错。两者均改变了原合成DB字节，不能计为拒绝前保全。下一先把旧结构验证移至WAL/DDL写入前，再以旧格式正例核原动作保留。正例取自历史 `f37dae5ad59df6968e7335c12bbc8f56a2dd5aae` 的实际v1实现（blob `23fa44e215e69f47b3ed695b50858daf11f36d9f`）在隔离目录生成，只有合成scope/接受回执，0游戏/模型调用；不用当前schema删表冒充唯一历史来源。该缺口尚待代码与回归，不改变已通过的健康候选对结论或整体M5未完成状态。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：
