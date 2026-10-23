@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { readFile, writeFile, realpath, lstat } from "node:fs/promises";
+import { readFile, writeFile, realpath, lstat, rename } from "node:fs/promises";
 import { basename, dirname, join, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -21,4 +21,10 @@ setInterval(async () => {
 }, 50);
 setTimeout(() => app.exit(7), 60000);
 if (!app.requestSingleInstanceLock()) app.exit(9);
-else app.whenReady().then(() => writeFile(join(root, "holder-ready.json"), JSON.stringify({ pid: process.pid, runId: config.runId, held: app.hasSingleInstanceLock() }), { flag: "wx" })).catch(() => app.exit(8));
+else app.whenReady().then(async () => {
+	const pending = join(root, "holder-ready.pending"), ready = join(root, "holder-ready.json");
+	await writeFile(pending, JSON.stringify({ pid: process.pid, runId: config.runId, held: app.hasSingleInstanceLock() }), { flag: "wx" });
+	if ((await realpath(pending)).toLowerCase() !== pending.toLowerCase() || dirname(ready).toLowerCase() !== root.toLowerCase()) throw new Error("PROFILE_LOCK_READY_PATH_INVALID");
+	try { await lstat(ready); throw new Error("PROFILE_LOCK_READY_ALREADY_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+	await rename(pending, ready);
+}).catch(() => app.exit(8));
