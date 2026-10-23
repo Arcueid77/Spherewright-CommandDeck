@@ -68,6 +68,7 @@ jobs:
       - run: npm run test:profile-lock -- --source artifacts/portable-desktop
       - run: npm run test:startup-failure -- --source artifacts/portable-desktop
       - run: npm run test:legacy-recovery -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-runtime-loss -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
       - name: Build isolated installer candidate
@@ -86,6 +87,7 @@ jobs:
             .local/profile-lock-smoke.json
             .local/startup-failure-smoke.json
             .local/legacy-recovery-smoke.json
+            .local/packaged-runtime-loss-smoke.json
             .local/desktop-smoke-runtime-loss.json
             .local/desktop-smoke-game-runtime-loss.json
             .local/desktop-smoke-game-runtime-accepted.json

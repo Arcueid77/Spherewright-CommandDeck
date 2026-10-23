@@ -3,23 +3,23 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export async function runRuntimeLossSmoke(driver) {
-	await mkdir(join(driver.root, ".local"), { recursive: true });
+	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local"); await mkdir(proofDirectory, { recursive: true });
 	const original = await driver.api("probe", { mode: "offline" }), sequence = driver.getProbeSequence();
 	assert.equal(sequence, 1);
 	const runtime = await driver.stopRuntimeForSmoke(); assert.equal(runtime.exitObserved, true);
 	await assert.rejects(driver.api("probe", { mode: "offline" }));
 	const retained = (await driver.api("snapshot")).lastProbeResult;
-	await writeFile(join(driver.root, ".local/runtime-loss-idle.private.json"), JSON.stringify({ runId: driver.runId, runtimeExitObserved: true, probeSequence: driver.getProbeSequence(), previousResultRetained: JSON.stringify(retained) === JSON.stringify(original) }));
+	await writeFile(join(proofDirectory, "runtime-loss-idle.private.json"), JSON.stringify({ runId: driver.runId, runtimeExitObserved: true, probeSequence: driver.getProbeSequence(), previousResultRetained: JSON.stringify(retained) === JSON.stringify(original) }));
 	assert.equal(driver.getProbeSequence(), sequence, "RUNTIME_EXIT_ALLOCATED_NEW_PROBE"); assert.deepEqual(retained, original, "RUNTIME_EXIT_CLEARED_PREVIOUS_RESULT");
 	await driver.testCommand("reload"); assert.deepEqual((await driver.api("snapshot")).lastProbeResult, original);
 	assert.equal(driver.getProbeSequence(), sequence);
 	const uiDeadline = performance.now() + 10000;
 	while (!await driver.testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.agent');return Boolean(panel?.textContent.includes('运行时已停止')&&[...panel.querySelectorAll('button')].length>=2&&[...panel.querySelectorAll('button')].every(button=>button.disabled))})()" })) { assert.ok(performance.now() < uiDeadline, "RUNTIME_LOSS_PROBE_CONTROLS_NOT_DISABLED"); await new Promise(resolve => setTimeout(resolve, 50)); }
-	await writeFile(join(driver.root, ".local/desktop-smoke-runtime-loss.application.private.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, runtimeExitObserved: true, previousResultRetained: true, noProbeAllocated: true, noRuntimeRestart: true, syntheticProbeRequests: 2, gameCalls: 0, realModelRequests: 0 }));
+	await writeFile(join(proofDirectory, "desktop-smoke-runtime-loss.application.private.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, runtimeExitObserved: true, previousResultRetained: true, noProbeAllocated: true, noRuntimeRestart: true, syntheticProbeRequests: 2, gameCalls: 0, realModelRequests: 0 }));
 }
 
 export async function runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests, base }) {
-	const accepted = process.argv.includes("--smoke-runtime-accepted"), planning = process.argv.includes("--smoke-runtime-planning"), taskId = (await state()).currentTaskId;
+	const accepted = driver.runtimeScenario ? driver.runtimeScenario === "accepted" : process.argv.includes("--smoke-runtime-accepted"), planning = driver.runtimeScenario ? driver.runtimeScenario === "planning" : process.argv.includes("--smoke-runtime-planning"), taskId = (await state()).currentTaskId;
 	let original = null;
 	if (accepted) {
 		await driver.testCommand("answer-game-confirmation", { response: 1 }); await evaluate(`window.deck.confirmResearch(${JSON.stringify(taskId)})`);
@@ -58,5 +58,10 @@ export async function runGameRuntimeLossSmoke(driver, { evaluate, state, until, 
 	await driver.api("game", { action: "stop" }); await until(async () => !(await state()).busy, "STOP_AFTER_RUNTIME_EXIT");
 	await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);
 	const file = accepted ? "desktop-smoke-game-runtime-accepted" : planning ? "desktop-smoke-game-runtime-planning" : "desktop-smoke-game-runtime-loss";
-	await writeFile(join(driver.root, ".local", file + ".application.private.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, runtimeExitObserved: true, confirmationInvalidated: !accepted && !planning, inFlightPlannerEnded: planning, originalAcceptedActionReconciled: accepted, noNewCommitAfterRuntimeExit: true, developmentRemainsFrozen: true, newExecutionDisabled: true, noRuntimeOrModelReplay: true, syntheticModelRequests: requests(), syntheticGameCommits: commits, ownServerExitConfirmed: true, gameCalls: 0, realModelRequests: 0 }));
+	await writeFile(join(driver.proofDirectory ?? join(driver.root, ".local"), file + ".application.private.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, runtimeExitObserved: true, confirmationInvalidated: !accepted && !planning, inFlightPlannerEnded: planning, originalAcceptedActionReconciled: accepted, noNewCommitAfterRuntimeExit: true, developmentRemainsFrozen: true, newExecutionDisabled: true, noRuntimeOrModelReplay: true, syntheticModelRequests: requests(), syntheticGameCommits: commits, ownServerExitConfirmed: true, gameCalls: 0, realModelRequests: 0 }));
+}
+
+export function runtimeLossProofName(scenario) {
+	if (!["idle", "confirmation", "accepted", "planning"].includes(scenario)) throw new Error("UNKNOWN_RUNTIME_LOSS_SCENARIO");
+	return (scenario === "idle" ? "desktop-smoke-runtime-loss" : scenario === "confirmation" ? "desktop-smoke-game-runtime-loss" : "desktop-smoke-game-runtime-" + scenario) + ".application.private.json";
 }

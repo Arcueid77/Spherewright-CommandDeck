@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { readPortableHistory, assertPortableHistory } from "./portable-history.mjs";
 import { readPortableRecovery, runPortableRecoverySmoke } from "./portable-recovery.mjs";
+import { runGameSmoke } from "./game-smoke.mjs";
+import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -20,6 +22,21 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	if (driver.runtimeScenario) {
+		assert.equal(manifest.portableRuntimeFaults, 1);
+		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
+		const work = await api("workbench", { action: "state" }), game = await api("game", { action: "snapshot" }), bridge = await api("bridge", { action: "snapshot" });
+		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.executionBlocked, false);
+		assert.deepEqual(game.tasks, []); assert.deepEqual(game.unresolved, []); assert.equal(game.developmentFrozen, false); assert.equal(game.syntheticOnly, true); assert.equal(bridge.selected, null);
+		const rejected = await testCommand("evaluate", { source: "(async()=>{let count=0;for(const call of [()=>window.deck.manageProfiles('save',{}),()=>window.deck.workbench('check',{}),()=>window.deck.probe({mode:'live'})])try{await call()}catch{count++}return count})()" }); assert.equal(rejected, 3);
+		await settledUi();
+		const scenarioDriver = { ...driver, runId: context.runId, proofDirectory: context.root };
+		if (driver.runtimeScenario === "idle") await runRuntimeLossSmoke(scenarioDriver); else await runGameSmoke(scenarioDriver);
+		const proof = JSON.parse(await readFile(join(context.root, runtimeLossProofName(driver.runtimeScenario)), "utf8")); assert.equal(proof.runId, context.runId); assert.equal(proof.runtimeExitObserved, true);
+		assert.deepEqual((await testCommand("portable-renderer-state")).errors, []);
+		await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, runtimeScenario: driver.runtimeScenario, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: true, externalProviderAndDevelopmentRejected: true, syntheticFactoryOnly: true, fullRecoveryMatrixVerified: false }), { flag: "wx" });
+		return;
+	}
 	const recovery = await readPortableRecovery(context);
 	if (recovery) { await runPortableRecoverySmoke(driver, recovery, manifest, runtimePid, settledUi); return; }
 	const history = await readPortableHistory(context);

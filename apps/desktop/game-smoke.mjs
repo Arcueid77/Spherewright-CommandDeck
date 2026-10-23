@@ -6,11 +6,12 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { ReadOnlyMcpClient } from "./mcp-client.mjs";
 import { runGameRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
+import { preparePortableFixtureDirectory } from "./synthetic-scope.mjs";
 
-export function gameFixtureOptions(root, runId, { mode = "normal" } = {}) {
+export function gameFixtureOptions(root, runId, { mode = "normal", directory = join(root, ".local/m3-smoke", runId) } = {}) {
 	if (!/^[0-9a-f-]{36}$/.test(runId ?? "")) throw new Error("EXPLICIT_GAME_SMOKE_REQUIRED");
 	assert.ok(["normal", "pending"].includes(mode));
-	const marker = join(root, ".local/m3-smoke", runId, "Spherewright.Mcp.exe");
+	const marker = join(directory, "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M3_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
 		launch(_selection, { researchAuthority }) { return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode], { windowsHide: true, stdio: "pipe", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }), { researchAuthority }); },
@@ -19,13 +20,15 @@ export function gameFixtureOptions(root, runId, { mode = "normal" } = {}) {
 
 export async function runGameSmoke(driver) {
 	const physical = process.argv.includes("--smoke-game-physical");
-	const base = join(driver.root, ".local/m3-smoke", driver.runId), marker = join(base, "Spherewright.Mcp.exe"); await mkdir(base, { recursive: true }); await writeFile(marker, "OWNED_M3_SYNTHETIC_FIXTURE");
+	const scenario = driver.runtimeScenario ?? (process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
+	const base = driver.context ? await preparePortableFixtureDirectory(driver.context) : join(driver.root, ".local/m3-smoke", driver.runId), marker = join(base, "Spherewright.Mcp.exe");
+	await mkdir(base, { recursive: true }); await writeFile(marker, "OWNED_M3_SYNTHETIC_FIXTURE", { flag: "wx" });
 	const key = "synthetic-game-smoke-" + randomUUID(), profileId = "deckvault-" + randomUUID(); let requests = 0;
 	const server = createServer(async (request, response) => {
 		assert.equal(request.headers.authorization, "Bearer " + key); let body = ""; for await (const part of request) body += part;
 		const data = JSON.parse(body); requests++;
 		const available = data.tools.map((value) => value.function.name).sort(); assert.deepEqual(available, ["observe_research", "propose_research"]);
-		if (process.argv.includes("--smoke-runtime-planning")) { response.writeHead(200, { "content-type": "text/event-stream" }); response.write(": synthetic in-flight response held until the owned runtime exits\n\n"); return; }
+		if (scenario === "planning") { response.writeHead(200, { "content-type": "text/event-stream" }); response.write(": synthetic in-flight response held until the owned runtime exits\n\n"); return; }
 		const replies = data.messages.filter((value) => value.role === "tool"), observed = replies.some((value) => value.tool_call_id === "game-observe"), proposed = replies.some((value) => value.tool_call_id === "game-proposal");
 		const name = !observed ? "observe_research" : !proposed ? "propose_research" : null;
 		const delta = name ? { tool_calls: [{ index: 0, id: name === "observe_research" ? "game-observe" : "game-proposal", type: "function", function: { name, arguments: JSON.stringify(name === "observe_research" ? {} : { techId: 100, reason: "已观察指定科技与前置条件；只建议正常入队，等待用户确认。" }) } }] } : { content: "建议已提出，尚未执行。确认后由程序提交一次并核对队列。" };
@@ -35,7 +38,9 @@ export async function runGameSmoke(driver) {
 	});
 	await new Promise((done) => server.listen(0, "127.0.0.1", done));
 	try {
+		driver.registerSyntheticProvider?.(server, profileId, key);
 		const vault = await driver.api("profiles-manage", { action: "list" });
+		if (driver.context) assert.deepEqual(vault.profiles, [], "PORTABLE_RUNTIME_VAULT_MUST_BE_EMPTY");
 		await driver.api("profiles-manage", { action: "save", args: { id: profileId, label: "Synthetic game smoke", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", apiKey: key, contextWindow: 65536, maxTokens: 1024, expectedRevision: vault.revision } });
 		await driver.api("bridge-select", marker); await driver.api("bridge", { action: "refresh" });
 		const evaluate = (source) => driver.testCommand("evaluate", { source }), state = () => driver.api("game", { action: "snapshot" });
@@ -55,7 +60,7 @@ export async function runGameSmoke(driver) {
 		await until(async () => await evaluate("[...document.querySelector('[aria-label=目标科技]').options].some(option=>option.value==='100')"), "CATALOG_DISPLAY");
 		await evaluate(`(()=>{const node=document.querySelector('[aria-label="游戏 Agent 模型"]');node.value=${JSON.stringify(JSON.stringify([profileId, "fixture"]))};node.dispatchEvent(new Event('change',{bubbles:true}));const input=document.querySelector('[aria-label="目标科技"]');input.value='100';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
 		await evaluate("document.querySelector('.game-tasks-panel form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))");
-		if (process.argv.includes("--smoke-runtime-planning")) {
+		if (scenario === "planning") {
 			await until(async () => (await state()).phase === "planning" && requests === 1, "MODEL_REQUEST_IN_FLIGHT");
 			await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return;
 		}
@@ -65,7 +70,7 @@ export async function runGameSmoke(driver) {
 		const denied = await evaluate("(async()=>{let count=0;for(const action of ['approve','commit','game-confirmed','game-confirmation'])try{await window.deck.game(action,{userConfirmed:true})}catch{count++}try{await window.deck.workbench('game-end')}catch{count++}try{await window.deck.workbench('agent',{})}catch{count++}return count})()"); assert.equal(denied, 6);
 		await assert.rejects(driver.api("bridge", { action: "disconnect" }), /GAME_TASK_OWNS_BRIDGE/);
 		await until(async () => (await evaluate("document.body.innerText")).includes("等待你确认"), "APPROVAL_DISPLAY");
-		if (process.argv.includes("--smoke-runtime-loss")) { await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
+		if (scenario) { await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
 		if (!physical) await driver.testCommand("answer-game-confirmation", { response: 0 });
 		const cancelled = physical ? await realDialog(current.currentTaskId, "cancel_required") : await evaluate(`window.deck.confirmResearch(${JSON.stringify(current.currentTaskId)})`); assert.equal(cancelled.cancelled, true); assert.equal(await driver.getSyntheticCommitCount(), 0);
 		await driver.testCommand("reload");

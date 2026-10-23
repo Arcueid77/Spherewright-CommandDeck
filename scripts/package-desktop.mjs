@@ -63,6 +63,8 @@ try { await lstat(join(output, "electron_wer.dll")); await rename(join(output, "
 await mkdir(app, { recursive: true });
 await writeFile(join(app, "package.json"), JSON.stringify(desktopPackageMetadata(packageFile), null, 2), { flag: "wx" });
 await copyBundleTree(join(root, "apps/desktop"), join(app, "apps/desktop"));
+await mkdir(join(app, "test/fixtures"), { recursive: true });
+await copyBundleTree(join(root, "test/fixtures/research-mcp-server.mjs"), join(app, "test/fixtures/research-mcp-server.mjs"));
 await copyBundleTree(join(root, "dist/renderer"), join(app, "dist/renderer"));
 await copyBundleTree(join(root, "LICENSE"), join(app, "LICENSE"));
 const frameworkNotices = {};
@@ -87,6 +89,6 @@ await mkdir(join(app, "vendor")); const pi = await materializePiRuntime(join(roo
 await sourceCheck();
 if (bundleHash(await readFile(join(root, "package-lock.json"))) !== bundleHash(lock) || bundleHash(await readFile(join(root, "vendor/pi/package-lock.json"))) !== bundleHash(piLock)) throw new Error("BUNDLE_DEPENDENCY_LOCK_CHANGED");
 const inventory = await inventoryBundle(output);
-const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, frameworkNotices, rendererNotices, piPackages: pi.packages, ...inventory };
+const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, portableRuntimeFaults: 1, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, frameworkNotices, rendererNotices, piPackages: pi.packages, ...inventory };
 await writeFile(join(output, bundleManifestName), JSON.stringify(manifest, null, 2), { flag: "wx" }); await verifyBundle(output);
 console.log(JSON.stringify({ desktopBundle: "created", sourceRevision: revision, piCommit: pin, files: inventory.files.length, bytes: inventory.bytes, selfContained: true, installerBuilt: false, cleanWindowsVmVerified: false, gameCalls: 0 }));
