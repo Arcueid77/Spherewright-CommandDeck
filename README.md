@@ -107,6 +107,14 @@ Supervisor startup acquires its existing profile's single-instance lock before i
 
 If supervisor module loading fails, startup retains the profile lock and opens a static blocked window after Electron is ready. It shows only a fixed error code and recovery guidance, without a preload bridge, page scripts, Node access or raw exception details. It does not delete/reset the failed ledger or open a fallback profile. `npm run test:startup-failure -- --source artifacts/portable-desktop` exercises an unsupported schema, unknown schema and corrupt game ledger in separate synthetic profiles with the actual packaged executable; it checks the visible blocked page, unchanged ledger bytes/members and process exit. This covers early bootstrap failures; later runtime failures, disk exhaustion and the complete recovery matrix remain separate gates.
 
+Two explicit installer candidates can be checked for a compatible upgrade/rollback:
+
+```powershell
+npm run test:installer-upgrade -- --baseline artifacts/installer-test-old --candidate artifacts/installer-test-new
+```
+
+Both must have been built with the same isolated test identity and different source revisions. The check refuses an existing registration or unknown registry state. It installs the baseline, seeds closed synthetic history through the existing installed-app check, then upgrades, rolls back and returns to the candidate using the same physical isolated profile and original history digest. Each version selection is checked against registry metadata and complete payload hashes. Installer operations must preserve every profile byte; normal app starts separately verify the original tasks/draft/key/action/receipts. Final normal uninstall must remove both registered releases while preserving the profile and an unregistered file. On failure the context, registration and evidence remain for targeted recovery. This proves only the tested version pair and compatible existing schemas. A manually dispatched `windows-upgrade.yml` workflow builds both exact commits and runs the same check; it uploads anonymous summaries/manifests, never private profile/registry/trace files. Existing single-version installation tests remain separate.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

@@ -1,0 +1,77 @@
+name: Windows explicit installer upgrade pair
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_revision:
+        description: Exact baseline commit to build and test against this candidate
+        required: true
+        default: 5d33ee14b73eb95ddeb4cef199eb7c9bc5784f59
+        type: string
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Validate explicit baseline
+        shell: pwsh
+        env:
+          UPGRADE_BASELINE_REVISION: ${{ inputs.baseline_revision }}
+        run: |
+          if ($env:UPGRADE_BASELINE_REVISION -cnotmatch '^[a-f0-9]{40}$') { throw 'Exact baseline SHA required' }
+          "DECK_INSTALLER_TEST_ID=$([guid]::NewGuid().ToString())" >> $env:GITHUB_ENV
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline_revision }}
+          path: baseline
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build the two pinned candidates
+        shell: pwsh
+        run: |
+          foreach ($upgradeCheckout in @('baseline', 'candidate')) {
+            Push-Location $upgradeCheckout
+            try {
+              npm ci --ignore-scripts
+              if ($LASTEXITCODE -ne 0) { throw 'Desktop dependency install failed' }
+              node node_modules/electron/install.js
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Electron install failed' }
+              npm run pi:install
+              if ($LASTEXITCODE -ne 0) { throw 'Pi dependency install failed' }
+              npm run pi:hydrate
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Pi metadata failed' }
+              npm run pi:build
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Pi build failed' }
+              npm run package:desktop -- --output artifacts/portable-desktop
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned desktop build failed' }
+              npm run installer:toolchain
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned installer compiler failed' }
+              npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer-test --test-id $env:DECK_INSTALLER_TEST_ID
+              if ($LASTEXITCODE -ne 0) { throw 'Isolated installer build failed' }
+            } finally { Pop-Location }
+          }
+      - name: Install, upgrade, roll back and reopen the same isolated profile
+        working-directory: candidate
+        run: npm run test:installer-upgrade -- --baseline ../baseline/artifacts/installer-test --candidate artifacts/installer-test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: explicit-installer-upgrade-results
+          path: |
+            candidate/.local/installer-upgrade-smoke.json
+            baseline/artifacts/portable-desktop/commanddeck-bundle.json
+            candidate/artifacts/portable-desktop/commanddeck-bundle.json
+            baseline/artifacts/installer-test/commanddeck-installer.json
+            candidate/artifacts/installer-test/commanddeck-installer.json
+          if-no-files-found: ignore
