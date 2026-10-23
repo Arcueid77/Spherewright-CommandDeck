@@ -7,6 +7,7 @@ import { join, dirname, basename, relative, isAbsolute, sep } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
+import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
@@ -46,18 +47,19 @@ if (renamedElectron) {
 	assert.equal(dirname(original).toLowerCase(), (await realpath(distribution)).toLowerCase());
 	await rename(original, executable);
 }
+const environment = { ...process.env, COMMANDDECK_SMOKE_RUN_ID: runId, ...(mcpLoss ? { COMMANDDECK_MCP_FIXTURE_ROOT: mcpTemporary, COMMANDDECK_PI_CONFIG_DIR: join(mcpTemporary, "no-user-provider-configuration") } : {}) };
 child = spawn(executable, [root, "--smoke", ...args], {
 	cwd: root,
 	stdio: "inherit",
 	windowsHide: false,
-	env: { ...process.env, COMMANDDECK_SMOKE_RUN_ID: runId, ...(mcpLoss ? { COMMANDDECK_MCP_FIXTURE_ROOT: mcpTemporary, COMMANDDECK_PI_CONFIG_DIR: join(mcpTemporary, "no-user-provider-configuration") } : {}) },
+	env: mcpLoss ? syntheticMcpEnvironment(environment) : environment,
 });
 const timer = setTimeout(() => child.kill(), 120000);
 let code, signal;
 try { [code, signal] = await once(child, "exit"); }
 finally { clearTimeout(timer); }
 assert.equal(code, 0, signal ?? "Desktop smoke failed");
-const result = JSON.parse(await readFile(join(root, ".local", controlledFault ? file.replace(".json", ".application.private.json") : file), "utf8"));
+const result = JSON.parse(await readFile(join(root, ".local", ...(mcpLoss ? ["mcp-loss", runId] : []), controlledFault ? file.replace(".json", ".application.private.json") : file), "utf8"));
 assert.equal(
 	result.runId,
 	runId,

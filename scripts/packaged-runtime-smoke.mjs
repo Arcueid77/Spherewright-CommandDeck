@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { verifyBundle, copyBundleTree, bundleExecutable } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { portableRuntimeScenarios, portableMcpScenarios } from "../apps/desktop/portable-mode.mjs";
+import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
@@ -28,7 +29,8 @@ try {
 		await writeFile(join(caseProof, "context.private.json"), JSON.stringify({ runId, caseId, scenario, directory, copy, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 		const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 		Object.assign(env, { PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: caseId });
-		const child = spawn(join(copy, bundleExecutable), ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
+		const caseEnvironment = mcpLoss ? syntheticMcpEnvironment(env) : env;
+		const child = spawn(join(copy, bundleExecutable), ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario], { cwd: directory, env: caseEnvironment, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 		let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
 		const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000);
 		let code, signal; try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
@@ -36,7 +38,7 @@ try {
 		let remaining; const until = performance.now() + 25000;
 		do {
 			const budget = Math.floor(until - performance.now()); if (budget <= 0) break;
-			const observation = await observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory, copyRoot], env, timeoutMs: Math.min(20000, budget) });
+			const observation = await observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory, copyRoot], env: caseEnvironment, timeoutMs: Math.min(20000, budget) });
 			await writeFile(join(caseProof, "process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count;
 			if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
 		} while (performance.now() < until);

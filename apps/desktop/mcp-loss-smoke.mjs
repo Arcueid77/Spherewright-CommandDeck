@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export function mcpLossProofName(scenario) {
@@ -41,5 +41,6 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 	}
 	const after = await world(); assert.equal(after.commits, 1); assert.equal(after.prepares, 1); assert.equal(after.launches, accepted ? 2 : 1); assert.equal(after.resultReads, accepted ? 2 : 0); assert.equal(requests(), 3); assert.equal(driver.getRuntimePid(), runtimePid);
 	await writeFile(join(base, "mcp-loss.private.json"), JSON.stringify({ runId: driver.runId, scenario: driver.mcpLossScenario, original, before, after, state: await state() }), { flag: "wx" });
-	await writeFile(join(driver.proofDirectory ?? join(driver.root, ".local"), mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted, unknownCommitRemainsBlocked: !accepted, originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: accepted ? 1 : 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false }), { flag: "wx" });
+	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local/mcp-loss", driver.runId); await mkdir(proofDirectory, { recursive: true });
+	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted, unknownCommitRemainsBlocked: !accepted, originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: accepted ? 1 : 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false }), { flag: "wx" });
 }

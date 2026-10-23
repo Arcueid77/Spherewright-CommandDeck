@@ -121,6 +121,8 @@ If an accepted research action retains its original action ID but its MCP proces
 
 `npm run test:game-mcp-accepted` and `npm run test:game-mcp-lost-ack` exercise the actual source Electron UI, pinned Pi and separately exiting stdio MCP. The fixed synthetic world's counters live in a newly owned physical temporary directory, so a new MCP process cannot reset the commit count. Both checks include UI reload and an independent process-exit observation; the accepted case uses the existing UI reconciliation button, while the missing-ACK case keeps it disabled. `npm run test:packaged-mcp-loss -- --source artifacts/portable-desktop` uses the same two scenarios with a bundle declaring `portableMcpFaults: 1`, an outside-checkout copy and fresh isolated profiles. The external controller also reads the final synthetic counters. These checks make no real game or model call and do not cover every transport fault or real DSP recovery.
 
+The MCP fault harness pins each child's TEMP/TMP/TMPDIR to its creating process's canonical physical temporary root and removes conflicting case aliases. Scope, file-link, identity and count validation still happens in the fixture. Private source proofs use a unique run directory; the latest anonymous summary is a separate file, so repeating a check retains earlier evidence.
+
 Two explicit installer candidates can be checked for a compatible upgrade/rollback:
 
 ```powershell

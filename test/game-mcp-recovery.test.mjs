@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,16 +11,18 @@ import { BridgeMonitor } from "../apps/desktop/bridge-monitor.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { ResearchAdapter } from "../apps/desktop/research-adapter.mjs";
+import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 
-async function fixture(t, mode = "mcp-drop-after-accept") {
+async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } = {}) {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-"))), runId = randomUUID(), worldPath = join(directory, "synthetic-research-world.json");
 	await writeFile(worldPath, JSON.stringify({ version: 1, runId, commits: 0, techId: null, key: null, tick: 1200, lossInjected: false, launches: 0, prepares: 0, resultReads: 0 }), { flag: "wx" });
+	const otherTemp = join(directory, "different-child-temp"); if (driftTemp) await mkdir(otherTemp);
 	const marker = join(directory, "Spherewright.Mcp.exe"); await writeFile(marker, "OWNED_SYNTHETIC_MCP_RECOVERY", { flag: "wx" });
 	const authority = {}, approval = {}, clients = [], hosts = [], diagnostics = []; let frozen = false, modelRequests = 0, cohortChanged = false;
 	const bridge = new BridgeMonitor({ researchAuthority: authority,
 		fingerprint: async path => { assert.equal(path, marker); return { path, cohortHash: cohortChanged ? "changed-cohort" : "original-cohort", fileCount: 1 }; },
 		launch: (_selection, options) => {
-			const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode, worldPath, runId], { stdio: "pipe", windowsHide: true });
+			const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode, worldPath, runId], { stdio: "pipe", windowsHide: true, env: syntheticMcpEnvironment({ ...process.env, ...(driftTemp ? { TEMP: otherTemp, Temp: otherTemp, TMP: otherTemp, Tmp: otherTemp, TMPDIR: otherTemp } : {}) }) });
 			let stderr = ""; child.stderr.on("data", bytes => { stderr = (stderr + bytes).slice(-2048); const code = stderr.match(/SYNTHETIC_WORLD_INIT_[A-Z0-9_]+/)?.[0]; if (code) diagnostics.push(code); });
 			const client = new ReadOnlyMcpClient(child, { researchAuthority: options.researchAuthority, timeoutMs: 1000 }); clients.push(client); return client;
 		},
@@ -104,8 +106,13 @@ test("ordinary selection and another task stay excluded for the complete origina
 test("synthetic-world admission reports only a fixed scope error, emits no MCP response and leaves the file untouched", async t => {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-world-refusal-"))), path = join(directory, "synthetic-research-world.json"), before = '{"privateCanary":"preserve original bytes"}';
 	await writeFile(path, before, { flag: "wx" });
-	const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), "mcp-drop-after-accept", path, randomUUID()], { stdio: "pipe", windowsHide: true });
+	const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), "mcp-drop-after-accept", path, randomUUID()], { stdio: "pipe", windowsHide: true, env: syntheticMcpEnvironment() });
 	t.after(async () => { assert.notEqual(child.exitCode, null); const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-world-refusal-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 	let stdout = "", stderr = ""; child.stdout.on("data", bytes => { stdout += bytes; }); child.stderr.on("data", bytes => { stderr += bytes; }); child.stdin.on("error", () => {}); child.stdin.end('{"jsonrpc":"2.0","id":"init","method":"initialize","params":{}}\n');
 	const [code] = await once(child, "close"); assert.equal(code, 2); assert.equal(stdout, ""); assert.equal(stderr.trim(), "SYNTHETIC_WORLD_INIT_TEMP_PREFIX"); assert.equal(await readFile(path, "utf8"), before);
+});
+
+test("the synthetic MCP keeps its owner's canonical temp scope despite conflicting child temp aliases", async t => {
+	const f = await fixture(t, "mcp-drop-after-accept", { driftTemp: true }), original = await f.submitted();
+	f.host.reconcile(original.intentId); assert.equal((await f.host.settled()).phase, "completed"); const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 2);
 });
