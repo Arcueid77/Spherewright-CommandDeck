@@ -3,6 +3,7 @@ import { resolve, join } from "node:path";
 import { runPiProbe } from "./pi-probe.mjs";
 import { Workbench } from "./workbench.mjs";
 import { randomUUID } from "node:crypto";
+import { startupFailureCode } from "./startup-failure.mjs";
 
 let controller, workbench, gameController, gameTaskId;
 const credentialPending = new Map();
@@ -93,7 +94,7 @@ if (process.parentPort) {
 					else result = await workbench.request(data.action, data.args);
 				}
 				process.parentPort.postMessage({ type: "result", id: data.id, result });
-			} catch (error) { process.parentPort.postMessage({ type: "error", id: data.id, code: /^[A-Z0-9_]+$/.test(error.message) ? error.message : "WORKBENCH_OPERATION_FAILED" }); }
+			} catch (error) { process.parentPort.postMessage({ type: "error", id: data.id, code: data.action === "initialize" ? startupFailureCode(error) : /^[A-Z0-9_]+$/.test(error.message) ? error.message : "WORKBENCH_OPERATION_FAILED" }); }
 			return;
 		}
 		if (data.type === "abort") {

@@ -1,4 +1,4 @@
-const known = new Set(["GAME_LEDGER_SCHEMA_UNSUPPORTED", "GAME_LEDGER_SCHEMA_UNKNOWN", "WORKBENCH_SCHEMA_TOO_NEW"]);
+const known = new Set(["GAME_LEDGER_SCHEMA_UNSUPPORTED", "GAME_LEDGER_SCHEMA_UNKNOWN", "WORKBENCH_SCHEMA_TOO_NEW", "WORKBENCH_SCHEMA_UNKNOWN", "STARTUP_STORAGE_UNAVAILABLE", "STARTUP_FAILED"]);
 
 export function startupFailureCode(error) {
 	if (known.has(error?.message)) return error.message;

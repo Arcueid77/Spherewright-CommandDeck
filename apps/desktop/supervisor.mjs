@@ -23,6 +23,8 @@ import { observationArguments, assertObservationAction } from "./observation-pol
 import { runObservationSmoke } from "./observation-smoke.mjs";
 import { OwnedFixtureHost } from "./owned-fixture.mjs";
 import { assertPortableAction } from "./portable-mode.mjs";
+import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
+import { startupFailureCode } from "./startup-failure.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -65,6 +67,7 @@ let runtime,
 	probeSequence = 0,
 	testSequence = 0,
 	restarts = 0;
+let runtimeExit, blockedWindow, initializingRuntime = true;
 let recovering = false,
 	stopping = false,
 	allowQuit = false;
@@ -554,7 +557,7 @@ function testCommand(name, extra = {}) {
 		send(record, { type: "test", id, name, ...extra });
 	});
 }
-async function shutdown(exitCode = 0) {
+async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (stopping) return;
 	stopping = true;
 	clearInterval(bridgeTimer);
@@ -566,6 +569,7 @@ async function shutdown(exitCode = 0) {
 		await native.request("detach");
 		await native.request("close");
 	} catch (error) {
+		if (preserveApplication) throw error;
 		if (exitCode === 0) {
 			stopping = false;
 			bridge.resumeAfterCloseFailure(); bridgeTimer = setInterval(() => bridge.poll(), 1000);
@@ -592,9 +596,10 @@ async function shutdown(exitCode = 0) {
 	game.close();
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
-	runtime?.kill();
+	if (preserveApplication && runtime) await runtimeExit.stop();
+	else runtime?.kill();
 	allowQuit = true;
-	app.exit(exitCode);
+	if (!preserveApplication) app.exit(exitCode);
 }
 if (!app.hasSingleInstanceLock()) {
 	allowQuit = true;
@@ -604,11 +609,17 @@ if (!app.hasSingleInstanceLock()) {
 	} else app.quit();
 } else {
 	app.on("second-instance", (_event, args) => {
+		if (stopping) {
+			if (args.includes("--quit") && allowQuit) app.quit();
+			else if (blockedWindow && !blockedWindow.isDestroyed()) { blockedWindow.show(); blockedWindow.focus(); }
+			return;
+		}
 		if (args.includes("--quit")) {
 			void shutdown().catch(() => {});
 			return;
 		}
 		if (args.includes("--attach-adapter")) {
+			if (!workbenchReady || !ui?.registered) return;
 			void attachFromCommandLine(args).catch(() => emit({ type: "notice", text: "本次窗口连接未通过，原状态保留，未自动重试。" }));
 			return;
 		}
@@ -650,6 +661,7 @@ if (!app.hasSingleInstanceLock()) {
 					serviceName: "CommandDeck Pi runtime",
 				},
 			);
+			runtimeExit = trackOwnedRuntimeExit(runtime);
 			runtime.stdout.on("data", () => {});
 			runtime.stderr.on("data", () => {});
 			runtime.on("message", (message) => {
@@ -705,6 +717,7 @@ if (!app.hasSingleInstanceLock()) {
 			await workbenchCall("initialize", { directory: join(privateDirectory, smoke ? "m1-smoke-" + (process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID()) : "workbench"), helperSource: join(root, "artifacts/commands"), roots: workspaceRoots });
 			workbenchReady = true;
 			await game.initialize();
+			initializingRuntime = false;
 			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
 			native.on("connection-lost", () => emit({ type: "native-state", text: "窗口连接已断开，正在核对原端点；未核销前禁止新嵌入。" }));
@@ -754,6 +767,14 @@ if (!app.hasSingleInstanceLock()) {
 				"DESKTOP_SUPERVISOR_FAILED",
 				/^[A-Z0-9_]+$/.test(error.message) ? error.message : "OPERATION_FAILED",
 			);
+			if (initializingRuntime && !stopping) {
+				try {
+					await shutdown(1, { preserveApplication: true });
+					const { showStartupBlocked } = await import("./startup-blocked.mjs");
+					blockedWindow = await showStartupBlocked(app, startupFailureCode(error), { runtimeStoppedBeforeNotice: !runtime || runtimeExit.exited });
+				} catch { allowQuit = true; app.exit(1); }
+				return;
+			}
 			await shutdown(1).catch(() => {
 				allowQuit = true;
 				app.exit(1);

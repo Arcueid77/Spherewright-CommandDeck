@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { startupFailurePage } from "./startup-failure.mjs";
 
 // Called after ready, without loading a renderer preload, provider or runtime.
-export async function showStartupBlocked(app, code) {
+export async function showStartupBlocked(app, code, { runtimeStoppedBeforeNotice = false } = {}) {
 	const { BrowserWindow } = await import("electron");
 	const window = new BrowserWindow({ width: 620, height: 360, resizable: false, show: false, autoHideMenuBar: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: false } });
 	window.setMenu(null); window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -21,8 +21,9 @@ export async function showStartupBlocked(app, code) {
 		const expected = JSON.parse(await readFile(path, "utf8"));
 		assert.equal(expected.version, 1); assert.equal(expected.runId, runId); assert.equal(expected.code, code);
 		const page = await window.webContents.executeJavaScript('({text:document.body.textContent,noNode:typeof require==="undefined"&&typeof process==="undefined",noBridge:typeof window.deck==="undefined",scripts:document.scripts.length})');
-		assert.ok(window.isVisible()); assert.ok(page.text.includes("启动受阻") && page.text.includes(code)); assert.equal(page.noNode, true); assert.equal(page.noBridge, true); assert.equal(page.scripts, 0);
-		await writeFile(join(root, "startup-blocked-proof.json"), JSON.stringify({ runId, code, visibleBlockedWindow: true, rendererNodeDisabled: true, noPreloadBridge: true, noPageScripts: true, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
+		assert.ok(window.isVisible()); assert.ok(page.text.includes("启动受阻") && page.text.includes(code)); assert.equal(page.noNode, true); assert.equal(page.noBridge, true); assert.equal(page.scripts, 0); assert.equal(app.hasSingleInstanceLock(), true);
+		await writeFile(join(root, "startup-blocked-proof.json"), JSON.stringify({ runId, code, visibleBlockedWindow: true, rendererNodeDisabled: true, noPreloadBridge: true, noPageScripts: true, profileLockHeld: true, runtimeStoppedBeforeNotice, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
 		app.exit(1);
 	}
+	return window;
 }

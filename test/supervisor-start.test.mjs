@@ -40,3 +40,10 @@ test("startup diagnostics discard raw storage messages and HTML never includes c
 		const page = startupFailurePage(code); assert.ok(page.includes("启动受阻")); assert.ok(page.includes("default-src 'none'")); assert.ok(!page.includes(secret)); assert.ok(!page.includes("<script"));
 	}
 });
+
+test("sanitized runtime-initialization errors retain their classification across the process boundary", () => {
+	for (const error of [new Error("WORKBENCH_SCHEMA_TOO_NEW"), new Error("WORKBENCH_SCHEMA_UNKNOWN"), Object.assign(new Error("private database path"), { code: "ERR_SQLITE_ERROR" }), Object.assign(new Error("private disk path"), { code: "ENOSPC" })]) {
+		const code = startupFailureCode(error); assert.equal(startupFailureCode(new Error(code)), code);
+		const page = startupFailurePage(code); assert.ok(page.includes(code)); assert.ok(!page.includes("private"));
+	}
+});
