@@ -8,7 +8,7 @@ export function assertPortableAction(action, args) {
 	if (action === "probe" && args?.mode === "offline") return;
 	if (["bridge", "game"].includes(action) && args?.action === "snapshot") return;
 	if (action === "profiles-manage" && args?.action === "list") return;
-	if (action === "workbench" && ["state", "ui-get", "ui-save"].includes(args?.action)) return;
+	if (action === "workbench" && ["state", "task", "ui-get", "ui-save"].includes(args?.action)) return;
 	throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
 }
 

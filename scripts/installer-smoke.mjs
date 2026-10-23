@@ -55,9 +55,9 @@ async function snapshot(directory) {
 	await walk(directory); return { files, sha256: bundleHash(Buffer.from(JSON.stringify(files))) };
 }
 async function launchInstalled(stage) {
-	const result = await run(stage, process.execPath, [join(root, "scripts/portable-desktop-smoke.mjs"), "--installed-source", payload]); assert.equal(result.code, 0, "Installed application failed: " + stage);
+	const result = await run(stage, process.execPath, [join(root, "scripts/portable-desktop-smoke.mjs"), "--installed-source", payload, "--reopen-history"]); assert.equal(result.code, 0, "Installed application failed: " + stage);
 	const line = result.output.trim().split(/\r?\n/).findLast(line => line.startsWith('{"portableDesktopSmoke":'));
-	assert.ok(line); const summary = JSON.parse(line); assert.equal(summary.installedExecutable, true); assert.equal(summary.sourceRevision, manifest.sourceRevision);
+	assert.ok(line); const summary = JSON.parse(line); assert.equal(summary.installedExecutable, true); assert.equal(summary.sourceRevision, manifest.sourceRevision); assert.equal(summary.closedHistoryReopened, true); assert.equal(summary.applicationRuns, 2);
 	const context = JSON.parse(await readFile(join(root, ".local/portable-desktop", summary.runId, "application-exit.private.json"), "utf8"));
 	assert.equal(context.installedSource, payload); assert.equal(context.code, 0); assert.equal(context.timedOut, false);
 	const profile = await realpath(context.profileDirectory); assert.equal(dirname(profile).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(profile).startsWith("commanddeck-desktop-smoke-"));
@@ -85,7 +85,7 @@ try {
 	}
 	const gone = await run("uninstalled-hkcu", registry, ["query", "HKCU\\" + key, "/reg:64"]); assert.equal(gone.code, 1);
 	assert.deepEqual(await readFile(retained), retainedBytes); await profilesUnchanged(); await verifyInstaller(source);
-	const proof = { installerSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, builderRevision: manifest.builderRevision, piCommit: manifest.piCommit, installerSha256: manifest.sha256, testIdentity: manifest.testIdentity, isolatedRegistration: true, perUserRegistryOnly: true, actualInstalledExecutable: true, installedApplicationRuns: 2, runningInstallAndUninstallRefused: true, noProcessForceTermination: true, sameCandidateRepairPassed: true, normalUninstallPassed: true, unknownInstallFilePreserved: true, actualIsolatedProfilesPreserved: true, profiles: profiles.map(profile => ({ files: profile.files.length, sha256: profile.sha256 })), sourceInstallerUnchanged: true, upgradeVerified: false, rollbackVerified: false, cleanWindowsVmVerified: false, gameCalls: 0, realModelRequests: 0 };
+	const proof = { installerSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, builderRevision: manifest.builderRevision, piCommit: manifest.piCommit, installerSha256: manifest.sha256, testIdentity: manifest.testIdentity, isolatedRegistration: true, perUserRegistryOnly: true, actualInstalledExecutable: true, installedApplicationRuns: 4, closedSyntheticHistoryReopened: true, runningInstallAndUninstallRefused: true, noProcessForceTermination: true, sameCandidateRepairPassed: true, normalUninstallPassed: true, unknownInstallFilePreserved: true, actualIsolatedProfilesPreserved: true, profiles: profiles.map(profile => ({ files: profile.files.length, sha256: profile.sha256 })), sourceInstallerUnchanged: true, upgradeVerified: false, rollbackVerified: false, cleanWindowsVmVerified: false, gameCalls: 0, realModelRequests: 0 };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/installer-smoke.json"), JSON.stringify(proof, null, 2));
 	passed = true; console.log(JSON.stringify(proof));
 } finally {

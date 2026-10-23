@@ -60,7 +60,7 @@ jobs:
       - run: npm run test:observation
       - run: npm run test:game
       - run: npm run package:desktop -- --output artifacts/portable-desktop
-      - run: npm run test:portable-desktop -- --source artifacts/portable-desktop
+      - run: npm run test:portable-desktop -- --source artifacts/portable-desktop --reopen-history
       - run: npm run test:profile-lock -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
