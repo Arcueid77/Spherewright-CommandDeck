@@ -138,3 +138,44 @@ test("durable storage failure before send leaves no commit or accepted intent", 
 	f.host.ledger.db.exec("PRAGMA query_only=ON"); f.host.confirm(f.approval, challenge.nonce, 1); const done = await f.host.settled(); f.host.ledger.db.exec("PRAGMA query_only=OFF");
 	assert.equal(done.unresolved.length, 0); assert.equal(done.tasks[0].intent, null); assert.equal(done.phase, "failed");
 });
+
+test("runtime loss invalidates an already issued approval and freezes all new game preparation", async t => {
+	const f = await fixture(t); f.start(); const before = await f.host.settled(), challenge = f.host.confirmation(before.currentTaskId, 1);
+	f.host.runtimeUnavailable(); const after = f.host.snapshot(); assert.equal(after.runtimeAvailable, false); assert.equal(after.developmentFrozen, true); assert.deepEqual(after.tasks, before.tasks);
+	for (const operation of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare(), () => f.host.confirmation(before.currentTaskId, 1), () => f.host.confirm(f.approval, challenge.nonce, 1)]) assert.throws(operation, /GAME_RUNTIME_UNAVAILABLE/);
+	assert.equal(after.unresolved.length, 0); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("runtime loss during the final fresh read refuses intent creation and never claims developer-gate release", async t => {
+	const f = await fixture(t); f.start(); const before = await f.host.settled(), challenge = f.host.confirmation(before.currentTaskId, 1);
+	let enter, release; const entered = new Promise(resolve => { enter = resolve; }), original = f.host.adapter.observe.bind(f.host.adapter);
+	t.mock.method(f.host.adapter, "observe", async (...args) => { const value = await original(...args); enter(); await new Promise(resolve => { release = resolve; }); return value; });
+	f.host.confirm(f.approval, challenge.nonce, 1); await entered; f.host.runtimeUnavailable(); release(); const after = await f.host.settled();
+	assert.equal(after.phase, "runtime_unavailable"); assert.equal(after.error, "GAME_RUNTIME_UNAVAILABLE"); assert.equal(after.unresolved.length, 0); assert.equal(after.tasks[0].intent, null);
+	assert.equal(f.frozen(), true); assert.equal(f.hasLease(), false); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("an accepted action can read its original terminal after runtime loss without releasing the development freeze", async t => {
+	const f = await fixture(t, { mode: "pending" }); f.start(); const prepared = await f.host.settled(), challenge = f.host.confirmation(prepared.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); const original = (await f.host.settled()).unresolved[0];
+	f.host.runtimeUnavailable(); f.host.reconcile(original.intentId); const after = await f.host.settled();
+	assert.equal(after.phase, "completed"); assert.equal(after.runtimeAvailable, false); assert.equal(after.unresolved.length, 0); assert.equal(after.developmentFrozen, true); assert.equal(f.frozen(), true); assert.equal(f.hasLease(), false);
+	assert.equal(after.tasks[0].intent.actionId, original.actionId); assert.equal(after.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+	assert.throws(() => f.start(), /GAME_RUNTIME_UNAVAILABLE/);
+});
+
+test("a planner result delivered after runtime loss cannot prepare or approve a game action", async t => {
+	let enter, release; const entered = new Promise(resolve => { enter = resolve; });
+	const f = await fixture(t, { planner: async () => { enter(); await new Promise(resolve => { release = resolve; }); return { proposedTechId: 100 }; } });
+	f.start(); await entered; f.host.runtimeUnavailable(); release(); const after = await f.host.settled();
+	assert.equal(after.phase, "runtime_unavailable"); assert.equal(after.tasks[0].intent, null); assert.equal(after.unresolved.length, 0); assert.equal(after.developmentFrozen, true);
+	assert.throws(() => f.host.confirmation(after.currentTaskId, 1), /GAME_RUNTIME_UNAVAILABLE/); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("runtime-exit authority invalidation cannot be interrupted by a simultaneous ledger read failure", async t => {
+	const f = await fixture(t); f.start(); const before = await f.host.settled(), challenge = f.host.confirmation(before.currentTaskId, 1);
+	t.mock.method(f.host.ledger, "unresolved", () => { throw new Error("SYNTHETIC_STORAGE_READ_FAILURE"); });
+	try { assert.doesNotThrow(() => f.host.runtimeUnavailable()); assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 1), /GAME_RUNTIME_UNAVAILABLE/); }
+	finally { t.mock.restoreAll(); }
+	assert.equal(f.host.snapshot().runtimeAvailable, false); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});

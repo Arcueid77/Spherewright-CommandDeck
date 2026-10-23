@@ -43,6 +43,7 @@ type RuntimeEvent = {
 type UiSnapshot = {
 	layoutMode: "m0" | "development";
 	busy: boolean;
+	runtimeAvailable: boolean;
 	probeText: string;
 	lastProbeResult: ProbeResult | null;
 	events: RuntimeEvent[];
@@ -87,12 +88,14 @@ function AgentPanel() {
 	const [profiles, setProfiles] = useState<Profile[]>([]);
 	const [model, setModel] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [runtimeAvailable, setRuntimeAvailable] = useState(false);
 	const [output, setOutput] = useState(
 		"等待验证。工具仅有 deck_echo，不连接游戏。",
 	);
 	useEffect(() => {
 		void window.deck.snapshot().then((snapshot) => {
 			setBusy(snapshot.busy);
+			setRuntimeAvailable(snapshot.runtimeAvailable);
 			if (snapshot.lastProbeResult)
 				setOutput(
 					snapshot.probeText +
@@ -114,6 +117,7 @@ function AgentPanel() {
 			if (preferred) setModel(JSON.stringify(preferred));
 		});
 		return window.deck.onEvent((event) => {
+			if (event.type === "runtime-stopped") setRuntimeAvailable(false);
 			if (event.type === "probe-state") {
 				setBusy(event.busy === true);
 				return;
@@ -154,6 +158,7 @@ function AgentPanel() {
 			<div className="eyebrow">PI SOURCE FORK · M0</div>
 			<h2>Agent 连接实验</h2>
 			<p>保留原生 Pi 会话，明确装配工具与资源。</p>
+			{!runtimeAvailable && <p className="notice">运行时已停止或尚未就绪。原结果保留，请重新打开工作台后继续。</p>}
 			<label>CC Switch / Pi provider</label>
 			<select
 				value={model}
@@ -161,7 +166,7 @@ function AgentPanel() {
 					setModel(e.target.value);
 					localStorage.setItem("deck-profile", e.target.value);
 				}}
-				disabled={busy}
+				disabled={busy || !runtimeAvailable}
 			>
 				<option value="">选择 provider / model</option>
 				{profiles.map((profile) => (
@@ -174,12 +179,12 @@ function AgentPanel() {
 				))}
 			</select>
 			<div className="actions">
-				<button disabled={busy} onClick={() => void probe("offline")}>
+				<button disabled={busy || !runtimeAvailable} onClick={() => void probe("offline")}>
 					离线工具验证
 				</button>
 				<button
 					className="accent"
-					disabled={busy || !model}
+					disabled={busy || !model || !runtimeAvailable}
 					onClick={() => void probe("live")}
 				>
 					真实模型验证

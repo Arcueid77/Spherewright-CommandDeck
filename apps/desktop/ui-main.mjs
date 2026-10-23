@@ -12,6 +12,7 @@ const smoke = process.argv.includes("--smoke-ui");
 const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
 const portableSmoke = smoke && process.argv.includes("--portable-smoke"), portableRendererErrors = [];
 let syntheticGameAnswer = null;
+let holdSyntheticGameAnswer = false, heldSyntheticGameAnswer = null;
 let window,
 	heartbeat,
 	sequence = 0,
@@ -65,6 +66,13 @@ async function testCommand(message) {
 			result = true;
 		} else if (message.name === "answer-game-confirmation" && gameSmoke && [0, 1].includes(message.response)) {
 			syntheticGameAnswer = message.response; result = true;
+		} else if (message.name === "hold-game-confirmation" && gameSmoke) {
+			if (confirmingGame || holdSyntheticGameAnswer || heldSyntheticGameAnswer || syntheticGameAnswer !== null) throw new Error("SYNTHETIC_CONFIRMATION_ALREADY_HELD");
+			holdSyntheticGameAnswer = true; result = true;
+		} else if (message.name === "held-game-confirmation-state" && gameSmoke) result = Boolean(heldSyntheticGameAnswer);
+		else if (message.name === "answer-held-game-confirmation" && gameSmoke && [0, 1].includes(message.response)) {
+			if (!heldSyntheticGameAnswer) throw new Error("NO_HELD_SYNTHETIC_CONFIRMATION");
+			const resolve = heldSyntheticGameAnswer; heldSyntheticGameAnswer = null; resolve({ response: message.response }); result = true;
 		} else if (["capture-workbench", "capture-bridge", "capture-game"].includes(message.name)) {
 			let captureTimer;
 			try {
@@ -200,7 +208,7 @@ if (typeof process.send !== "function") {
 				if (confirmingGame) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
 				confirmingGame = true;
 				try {
-					return await confirmResearchFromUi({ taskId: args?.taskId, request, showDialog: (options) => { if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
+					return await confirmResearchFromUi({ taskId: args?.taskId, request, showDialog: (options) => { if (gameSmoke && holdSyntheticGameAnswer) { holdSyntheticGameAnswer = false; return new Promise(resolve => { heldSyntheticGameAnswer = resolve; }); } if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
 				} finally { confirmingGame = false; }
 			});
 			handle("deck:focus-ui", async () => {

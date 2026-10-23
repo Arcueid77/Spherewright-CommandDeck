@@ -1,18 +1,20 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, mkdtemp, cp, rename, realpath, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, cp, rename, realpath, rm, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, dirname, basename, relative, isAbsolute, sep } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
+import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 const renamedElectron = args.includes("--renamed-electron");
 if (renamedElectron) args.splice(args.indexOf("--renamed-electron"), 1);
 const runId = randomUUID();
-const file = args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
+const runtimeLoss = args.includes("--smoke-runtime-loss");
+const file = runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
 	: args.includes("--smoke-adapter")
 	? "desktop-smoke-adapter.json"
@@ -47,13 +49,14 @@ let code, signal;
 try { [code, signal] = await once(child, "exit"); }
 finally { clearTimeout(timer); }
 assert.equal(code, 0, signal ?? "Desktop smoke failed");
-const result = JSON.parse(await readFile(join(root, ".local", file), "utf8"));
+const result = JSON.parse(await readFile(join(root, ".local", runtimeLoss ? file.replace(".json", ".application.private.json") : file), "utf8"));
 assert.equal(
 	result.runId,
 	runId,
 	"This process exited without writing its own complete proof",
 );
-if (args.includes("--smoke-observation")) { assert.equal(result.readOnlyEnforced,true); assert.equal(result.toolRequests,12); assert.equal(result.ownServerExitConfirmed,true); }
+if (runtimeLoss) { assert.equal(result.runtimeExitObserved, true); if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, args.includes("--smoke-runtime-accepted") ? 1 : 0); assert.equal(result.ownServerExitConfirmed, true); } else assert.equal(result.noProbeAllocated, true); }
+else if (args.includes("--smoke-observation")) { assert.equal(result.readOnlyEnforced,true); assert.equal(result.toolRequests,12); assert.equal(result.ownServerExitConfirmed,true); }
 else if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, 1); assert.equal(result.ownServerExitConfirmed, true); }
 else if (args.includes("--smoke-bridge")) assert.equal(result.ownServerExitConfirmed, true);
 else if (args.includes("--smoke-workbench")) assert.equal(result.checkStarts, 1);
@@ -62,6 +65,13 @@ else if (args.includes("--smoke-adapter"))
 else if (args.includes("--smoke-host-exit"))
 	assert.equal(result.hostExit.hostNotRelaunched, true);
 else assert.equal(result.supervision.inFlightProbeCompletedAfterUiExit, true);
+if (runtimeLoss) {
+	const proofRoot = join(root, ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
+	await writeFile(join(proofRoot, "application-proof.private.json"), JSON.stringify(result), { flag: "wx" });
+	const observation = await observePackagedProcesses({ executable: join(root, "artifacts/native/CommandDeck.NativeHost.exe"), roots: [dirname(executable)], env: process.env, timeoutMs: 20000 });
+	await writeFile(join(proofRoot, "process-observation.private.json"), JSON.stringify(observation), { flag: "wx" }); assert.equal(observation.count, 0);
+	await writeFile(join(root, ".local", file), JSON.stringify({ ...result, noOwnedElectronProcessesRemain: true, processObserver: "native-v1", usesSourceCheckout: true, fullPackagedFaultMatrixVerified: false }));
+}
 if (renamedElectron) await writeFile(join(root, ".local/desktop-smoke-renamed-ui.json"), JSON.stringify({ ...result, renamedElectron: true, usesSourceCheckout: true, fullElectronBundleVerified: false }, null, 2));
 console.log(
 	JSON.stringify({ desktopSmoke: "passed", proof: file, noGameCalls: true, ...(renamedElectron ? { renamedElectron: true, fullElectronBundleVerified: false } : {}) }),

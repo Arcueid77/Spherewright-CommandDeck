@@ -14,6 +14,7 @@ export class GameTasks {
 		if (!approvalAuthority || typeof planner !== "function") throw new Error("TRUSTED_GAME_HOST_REQUIRED");
 		this.#authority = researchAuthority; this.hostApproval = approvalAuthority; this.bridge = bridge; this.freezeDevelopment = freezeDevelopment; this.releaseDevelopment = releaseDevelopment; this.planner = planner; this.emit = emit; this.now = now; this.pollMilliseconds = pollMilliseconds;
 		this.syntheticOnly = syntheticOnly; this.phase = "idle"; this.currentTaskId = null; this.error = null; this.operation = null; this.closing = false; this.developmentHeld = false; this.bridgeLease = null; this.adapter = null; this.controller = null;
+		this.runtimeAvailable = true;
 		this.ledger = new GameIntentLedger(join(directory, "game-tasks.sqlite"), { approvalAuthority: this.#approvalAuthority, now,
 			prepareResearch: (request) => { const task = this.ledger.tasks().find((task) => task.id === this.currentTaskId); if (!this.adapter || !task) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE"); return this.adapter.prepareResearch(request, task.scope); },
 			readResearchProof: (request) => { if (!this.adapter) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE"); return this.adapter.readResearchProof(request); },
@@ -23,21 +24,30 @@ export class GameTasks {
 		else this.currentTaskId = this.ledger.tasks()[0]?.id ?? null;
 	}
 	async initialize() { if (this.ledger.unresolved().length) { await this.freezeDevelopment(); this.developmentHeld = true; } }
+	runtimeUnavailable() {
+		if (!this.runtimeAvailable) return;
+		this.runtimeAvailable = false; this.#confirmations.clear(); this.catalogue = null; this.controller?.abort();
+		// Invalidate authority without storage I/O. Existing unresolved/quarantine
+		// stages keep their original explanation; reconciliation still reads the ledger.
+		if (!this.operation && !["accepted", "reconciling", "blocked"].includes(this.phase)) { this.phase = "runtime_unavailable"; this.error = "GAME_RUNTIME_UNAVAILABLE"; }
+		this.emit();
+	}
+	#requireRuntime() { if (!this.runtimeAvailable) throw new Error("GAME_RUNTIME_UNAVAILABLE"); }
 	snapshot() {
 		const tasks = this.ledger.tasks();
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
-		return { busy: Boolean(this.operation), phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog };
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog };
 	}
 	#note(kind, value) { if (this.currentTaskId) this.ledger.note(this.currentTaskId, kind, value); this.emit(); }
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
-	#notStopped() { if (this.closing || this.controller?.signal.aborted) throw new Error("GAME_TASK_STOPPED"); }
+	#notStopped() { this.#requireRuntime(); if (this.closing || this.controller?.signal.aborted) throw new Error("GAME_TASK_STOPPED"); }
 	#launch(phase, action) {
 		if (this.operation) throw new Error("GAME_TASK_BUSY");
 		this.error = null; this.phase = phase;
 		const operation = {};
 		this.operation = operation;
 		operation.done = Promise.resolve().then(action).catch((error) => {
-			this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : this.controller?.signal.aborted ? "cancelled" : "failed";
+			this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : !this.runtimeAvailable ? "runtime_unavailable" : this.controller?.signal.aborted ? "cancelled" : "failed";
 			try { this.#note("error", { code: this.error }); } catch { this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
 		}).finally(async () => {
 			try { if (!this.ledger.unresolved().length && !["awaiting_approval", "planning", "preparing"].includes(this.phase)) await this.#release(); }
@@ -56,9 +66,10 @@ export class GameTasks {
 	}
 	async #release() {
 		if (this.bridgeLease) { this.bridge.releaseResearch(this.bridgeLease); this.bridgeLease = null; this.adapter = null; }
-		if (this.developmentHeld) { await this.releaseDevelopment(); this.developmentHeld = false; }
+		if (this.developmentHeld && this.runtimeAvailable) { await this.releaseDevelopment(); this.developmentHeld = false; }
 	}
 	catalog() {
+		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
 		this.currentTaskId = null; this.catalogue = null; this.controller = new AbortController();
 		return this.#launch("reading_catalog", async () => {
@@ -70,6 +81,7 @@ export class GameTasks {
 		});
 	}
 	start(args) {
+		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
 		if (!args || !["observe", "assist"].includes(args.mode) || !positive(args.techId) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || args.prompt.length > 2000) throw new Error("INVALID_GAME_TASK");
 		const catalog = args.catalogId ? this.catalogue : null;
@@ -106,6 +118,7 @@ export class GameTasks {
 	}
 	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.phase === "planning" && this.operation && !this.closing && !this.controller?.signal.aborted) this.#note(kind, value); }
 	confirmation(taskId, uiEpoch) {
+		this.#requireRuntime();
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || taskId !== this.currentTaskId || !Number.isSafeInteger(uiEpoch) || uiEpoch <= 0) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
 		const task = this.ledger.task(taskId);
 		if (task.state !== "awaiting_approval" || task.expiresAt <= this.now()) throw new Error("FRESH_RESEARCH_PREVIEW_REQUIRED");
@@ -115,12 +128,14 @@ export class GameTasks {
 		return { nonce, taskId, techId: task.scope.techId, techName: details.techName, planetId: task.scope.planetId, expiresAt: task.expiresAt, maximumAcceptedWrites: 1, normalEnqueue: true, syntheticOnly: this.syntheticOnly, researchBudget: this.ledger.confirmationPreview(taskId).researchBudget };
 	}
 	reprepare() {
+		this.#requireRuntime();
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || !this.currentTaskId) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
 		this.#confirmations.clear();
 		return this.#launch("preparing", async () => { this.#notStopped(); await this.ledger.prepare(this.currentTaskId); this.#notStopped(); this.#stage("awaiting_approval"); });
 	}
 	confirm(authority, nonce, uiEpoch) {
 		if (authority !== this.hostApproval) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED");
+		this.#requireRuntime();
 		const challenge = this.#confirmations.get(nonce); this.#confirmations.delete(nonce);
 		if (!challenge || this.closing || this.operation || challenge.uiEpoch !== uiEpoch || challenge.taskId !== this.currentTaskId || challenge.expiresAt <= this.now() || this.phase !== "awaiting_approval") throw new Error("FRESH_RESEARCH_APPROVAL_REQUIRED");
 		return this.#launch("confirming", async () => {
