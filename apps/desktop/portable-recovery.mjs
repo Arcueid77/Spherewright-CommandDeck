@@ -24,11 +24,20 @@ export async function readPortableRecovery(context) {
 
 export async function assertPortableRecovery(api, expected) {
 	const game = await api("game", { action: "snapshot" }), workbench = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
-	assert.equal(game.busy, false); assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.developmentFrozen, true); assert.equal(game.currentTaskId, expected.task.id);
+	assert.equal(game.busy, false); assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.developmentFrozen, true, "LEGACY_DEVELOPMENT_GATE_RELEASED"); assert.equal(game.currentTaskId, expected.task.id); assert.equal(game.syntheticOnly, true, "LEGACY_FIXTURE_LABEL_MISSING");
 	assert.deepEqual(game.tasks, [expected.task]); assert.deepEqual(game.unresolved, [expected.intent]); assert.deepEqual(game.events, []);
-	assert.equal(workbench.executionBlocked, true); assert.equal(workbench.gameWriteAccess, "development_frozen"); assert.equal(workbench.activeTask, null); assert.deepEqual(workbench.roots, []); assert.deepEqual(workbench.tasks, []);
+	assert.equal(workbench.executionBlocked, true, "LEGACY_WORKBENCH_GATE_RELEASED"); assert.equal(workbench.gameWriteAccess, "development_frozen"); assert.equal(workbench.activeTask, null); assert.deepEqual(workbench.roots, []); assert.deepEqual(workbench.tasks, []);
 	assert.equal(bridge.selected, null); assert.equal(bridge.metadata, null); assert.equal(bridge.observation, null); assert.equal(bridge.requestPerformance, null);
 	return { originalPendingSha256: expected.sha256, unresolvedIntents: 1, developmentFrozen: true, noMcpSelected: true };
+}
+
+export function assertPendingRecoveryControls(value) {
+	for (const label of ["开始分析", "核对并确认入队"]) {
+		const button = value.buttons.find(button => button.text === label); assert.ok(button, "LEGACY_NEW_EXECUTION_CONTROL_MISSING"); assert.equal(button.disabled, true, "LEGACY_NEW_EXECUTION_CONTROL_ENABLED");
+	}
+	// Polling the retained original action is a read-only recovery operation.
+	// Freezing new execution must keep this entry available to the operator.
+	assert.ok(value.buttons.some(button => button.text === "核销原动作"), "LEGACY_ORIGINAL_ACTION_QUERY_MISSING");
 }
 
 export async function runPortableRecoverySmoke(driver, expected, manifest, runtimePid, settledUi) {
@@ -37,9 +46,10 @@ export async function runPortableRecoverySmoke(driver, expected, manifest, runti
 		await testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent').click()" });
 		const until = performance.now() + 10000;
 		while (true) {
-			const value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {stage:panel?.querySelector('.game-task-stage')?.textContent??'',receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),buttons:[...(panel?.querySelectorAll('button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
+			const value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {stage:panel?.querySelector('.game-task-stage')?.textContent??'',syntheticNotice:panel?.textContent.includes('NO DSP')??false,receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),buttons:[...(panel?.querySelectorAll('button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
 			if (value.stage.includes("等待核销") && value.stage.includes("冻结") && value.receipts.some(text => text.includes(expected.intent.actionId))) {
-				for (const label of ["开始分析", "核对并确认入队", "核销原动作"]) { const button = value.buttons.find(button => button.text === label); assert.ok(button); assert.equal(button.disabled, true); }
+				assertPendingRecoveryControls(value);
+				assert.equal(value.syntheticNotice, true, "LEGACY_FIXTURE_NOTICE_NOT_DISPLAYED");
 				break;
 			}
 			assert.ok(performance.now() < until, "LEGACY_PENDING_UI_NOT_READY"); await new Promise(resolve => setTimeout(resolve, 50));
@@ -52,5 +62,5 @@ export async function runPortableRecoverySmoke(driver, expected, manifest, runti
 	assert.equal(getProbeSequence(), 0); assert.equal((await api("snapshot")).lastProbeResult, null);
 	for (const [action, args] of [["bridge-select", "C:\\not-a-server.exe"], ["game", { action: "start" }], ["game", { action: "reconcile", args: { intentId: expected.intent.intentId } }], ["workbench", { action: "check" }]]) await assert.rejects(api(action, args), /PORTABLE_SMOKE_ACTION_REJECTED/);
 	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid); await assertPortableRecovery(api, expected); assert.equal(getProbeSequence(), 0); await pendingUi();
-	await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, legacyPendingRecovery: original, originalApprovalNotReused: true, pendingDisplayedWithExecutionDisabled: true, uiReloadRetainsRuntimeAndPending: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticTools: 0, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
+	await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, legacyPendingRecovery: original, originalApprovalNotReused: true, pendingDisplayedWithNewExecutionDisabled: true, originalActionQueryEntryRetained: true, uiReloadRetainsRuntimeAndPending: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticTools: 0, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
 }
