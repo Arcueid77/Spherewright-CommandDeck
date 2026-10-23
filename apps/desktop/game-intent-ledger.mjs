@@ -26,6 +26,19 @@ export class GameIntentLedger {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version;
 			if (![0, 1, 2].includes(version)) throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED");
 			if (version === 0 && this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get().n) throw new Error("GAME_LEDGER_SCHEMA_UNKNOWN");
+			// Validate the old structure before journal-mode or migration writes.
+			// A rejected legacy file must not already have been promoted to v2.
+			if (version > 0) {
+				const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name).filter(name => !name.startsWith("sqlite_"));
+				const expected = version === 1 ? ["game_gate", "game_intents", "game_tasks"] : ["game_gate", "game_intents", "game_task_details", "game_task_events", "game_tasks"];
+				if (!equal(tables, expected)) throw new Error("GAME_LEDGER_SCHEMA_UNKNOWN");
+				for (const query of [
+					"SELECT id,scope,state,preview_hash,preview_boot,expires_at,approval_id,approval_at FROM game_tasks LIMIT 0",
+					"SELECT id,task_id,idempotency_key,state,action_id,acceptance,terminal FROM game_intents LIMIT 0",
+					"SELECT id,intent_id,reason FROM game_gate LIMIT 0",
+					...(version === 2 ? ["SELECT task_id,body FROM game_task_details LIMIT 0", "SELECT sequence,task_id,kind,body FROM game_task_events LIMIT 0"] : []),
+				]) this.db.prepare(query).all();
+			}
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;");
 			if (version === 0) this.db.exec(`BEGIN IMMEDIATE;
 				CREATE TABLE game_tasks(id TEXT PRIMARY KEY, scope TEXT NOT NULL, state TEXT NOT NULL, preview_hash TEXT, preview_boot TEXT, expires_at INTEGER, approval_id TEXT, approval_at INTEGER);

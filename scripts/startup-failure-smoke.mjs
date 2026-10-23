@@ -20,11 +20,17 @@ async function temporary() { const directory = await realpath(await mkdtemp(join
 const copyRoot = await temporary(), copy = join(copyRoot, "bundle");
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
-	for (const [kind, code] of [["future-schema", "GAME_LEDGER_SCHEMA_UNSUPPORTED"], ["unknown-schema", "GAME_LEDGER_SCHEMA_UNKNOWN"], ["corrupt-ledger", "STARTUP_STORAGE_UNAVAILABLE"]]) {
+	for (const [kind, code] of [["future-schema", "GAME_LEDGER_SCHEMA_UNSUPPORTED"], ["unknown-schema", "GAME_LEDGER_SCHEMA_UNKNOWN"], ["corrupt-ledger", "STARTUP_STORAGE_UNAVAILABLE"], ["malformed-v1", "STARTUP_STORAGE_UNAVAILABLE"]]) {
 		const directory = await temporary(), caseId = randomUUID(), profile = join(directory, "supervisor-profile/supervisor"), ledgerRoot = join(profile, "game-smoke-" + caseId), file = join(ledgerRoot, "game-tasks.sqlite");
 		await mkdir(ledgerRoot, { recursive: true });
 		if (kind === "corrupt-ledger") await writeFile(file, "Synthetic invalid SQLite header; never user data.", { flag: "wx" });
-		else { const database = new DatabaseSync(file); try { database.exec(kind === "future-schema" ? "PRAGMA user_version=999;" : "CREATE TABLE synthetic_unknown(value TEXT); INSERT INTO synthetic_unknown VALUES('preserve');"); } finally { database.close(); } }
+		else {
+			const database = new DatabaseSync(file);
+			try {
+				if (kind === "malformed-v1") database.exec("CREATE TABLE game_tasks(id TEXT PRIMARY KEY,scope TEXT,state TEXT,preview_hash TEXT,preview_boot TEXT,expires_at INTEGER,approval_id TEXT,approval_at INTEGER); CREATE TABLE game_intents(id TEXT PRIMARY KEY,task_id TEXT,idempotency_key TEXT,state TEXT,action_id TEXT,acceptance TEXT); CREATE TABLE game_gate(id INTEGER,intent_id TEXT,reason TEXT); PRAGMA user_version=1;");
+				else database.exec(kind === "future-schema" ? "PRAGMA user_version=999;" : "CREATE TABLE synthetic_unknown(value TEXT); INSERT INTO synthetic_unknown VALUES('preserve');");
+			} finally { database.close(); }
+		}
 		const before = await readFile(file), members = await readdir(ledgerRoot);
 		await writeFile(join(directory, "startup-failure-case.json"), JSON.stringify({ version: 1, runId: caseId, code }), { flag: "wx" });
 		await writeFile(join(proofRoot, kind + "-context.private.json"), JSON.stringify({ caseId, directory, copy, file }), { flag: "wx" });

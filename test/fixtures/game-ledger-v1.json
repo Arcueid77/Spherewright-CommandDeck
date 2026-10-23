@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "kind": "synthetic-game-ledger-v1",
+  "sourceRevision": "f37dae5ad59df6968e7335c12bbc8f56a2dd5aae",
+  "sourcePath": "apps/desktop/game-intent-ledger.mjs",
+  "sourceBlob": "23fa44e215e69f47b3ed695b50858daf11f36d9f",
+  "sourceSha256": "f38a04c925f3b65d26ce0c058f4ddf2ae022ba7cf192f1807ea87858d632507d",
+  "userVersion": 1,
+  "schema": [
+    {
+      "type": "table",
+      "name": "game_tasks",
+      "sql": "CREATE TABLE game_tasks(id TEXT PRIMARY KEY, scope TEXT NOT NULL, state TEXT NOT NULL, preview_hash TEXT, preview_boot TEXT, expires_at INTEGER, approval_id TEXT, approval_at INTEGER)"
+    },
+    {
+      "type": "table",
+      "name": "game_intents",
+      "sql": "CREATE TABLE game_intents(id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE REFERENCES game_tasks(id), idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK(state IN ('recorded','accepted','unknown','completed')), action_id TEXT, acceptance TEXT, terminal TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "one_pending_game_intent",
+      "sql": "CREATE UNIQUE INDEX one_pending_game_intent ON game_intents((1)) WHERE state IN ('recorded','accepted','unknown')"
+    },
+    {
+      "type": "table",
+      "name": "game_gate",
+      "sql": "CREATE TABLE game_gate(id INTEGER PRIMARY KEY CHECK(id=1), intent_id TEXT NOT NULL, reason TEXT NOT NULL)"
+    }
+  ],
+  "rows": {
+    "game_tasks": [
+      {
+        "id": "ad501256-a591-4008-8be7-2de673761afc",
+        "scope": "{\"kind\":\"select-research\",\"bridgeInstanceId\":\"legacy-synthetic-bridge\",\"sessionId\":\"legacy-synthetic-session\",\"planetId\":1,\"techId\":100,\"capturedAtGameTick\":1200,\"selectionStateHash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"maximumAcceptedWrites\":1}",
+        "state": "accepted",
+        "preview_hash": "d04704c646d9a554979904eecc69c0b1fab3801f920edcc04a2ea78b4e02411e",
+        "preview_boot": "1d08081d-3905-4570-8daa-611bc3ee6d6f",
+        "expires_at": 130000,
+        "approval_id": "ed6e1abb-50ab-463c-a67b-3362ac174ea2",
+        "approval_at": 100000
+      }
+    ],
+    "game_intents": [
+      {
+        "id": "bce3c3b5-a90f-4b57-b2b3-3b9fe4da114f",
+        "task_id": "ad501256-a591-4008-8be7-2de673761afc",
+        "idempotency_key": "commanddeck-b51709fb-2358-4d7a-be4a-0aa8905f6f7a",
+        "state": "accepted",
+        "action_id": "legacy-synthetic-action",
+        "acceptance": "{\"accepted\":true,\"actionId\":\"legacy-synthetic-action\",\"actionKind\":\"select-research\",\"idempotencyKey\":\"commanddeck-b51709fb-2358-4d7a-be4a-0aa8905f6f7a\"}",
+        "terminal": null
+      }
+    ],
+    "game_gate": []
+  },
+  "syntheticPrepareCalls": 1,
+  "proofCalls": 0,
+  "gameCalls": 0,
+  "realModelRequests": 0
+}

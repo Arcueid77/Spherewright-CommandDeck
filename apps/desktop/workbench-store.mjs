@@ -17,6 +17,20 @@ export class WorkbenchStore {
 		try {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version;
 			if (version > SCHEMA) throw new Error("WORKBENCH_SCHEMA_TOO_NEW");
+			if (![0, SCHEMA].includes(version)) throw new Error("WORKBENCH_SCHEMA_UNKNOWN");
+			const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name);
+			if (version === 0 && tables.length) throw new Error("WORKBENCH_SCHEMA_UNKNOWN");
+			if (version === SCHEMA) {
+				if (JSON.stringify(tables.filter(name => !name.startsWith("sqlite_"))) !== JSON.stringify(["changes", "events", "invocations", "roots", "tasks", "ui_state"])) throw new Error("WORKBENCH_SCHEMA_UNKNOWN");
+				for (const query of [
+					"SELECT id,path_key,path,label,can_write,can_execute,metadata,enabled,created_at,updated_at FROM roots LIMIT 0",
+					"SELECT id,root_id,kind,state,prompt,response,provider,model,session_file,parent_id,scope,created_at,started_at,finished_at,result,error FROM tasks LIMIT 0",
+					"SELECT id,task_id,name,arguments,state,created_at,finished_at,result,error FROM invocations LIMIT 0",
+					"SELECT id,task_id,root_id,path,before_text,before_hash,after_text,after_hash,state,created_at,finished_at FROM changes LIMIT 0",
+					"SELECT sequence,task_id,kind,value,created_at FROM events LIMIT 0",
+					"SELECT key,value FROM ui_state LIMIT 0",
+				]) this.db.prepare(query).all();
+			}
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 			if (file !== ":memory:") this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
 			if (version === 0) this.transaction(() => {
