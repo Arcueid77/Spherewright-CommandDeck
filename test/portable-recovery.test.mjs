@@ -50,7 +50,7 @@ test("a blocked pending task disables new execution while retaining the read-onl
 });
 
 function recoveryDriver(f, enabledNewExecution = false) {
-	let reloads = 0;
+	let reloads = 0, activationAttempts = 0, phaseActivationAttempts = 0;
 	const api = async (action, args) => {
 		if (action === "game" && args?.action === "snapshot") return { busy: false, phase: "blocked", error: "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES", developmentFrozen: true, syntheticOnly: true, currentTaskId: f.expected.task.id, tasks: [f.expected.task], unresolved: [f.expected.intent], events: [] };
 		if (action === "workbench" && args?.action === "state") return { executionBlocked: true, gameWriteAccess: "development_frozen", activeTask: null, roots: [], tasks: [] };
@@ -58,11 +58,11 @@ function recoveryDriver(f, enabledNewExecution = false) {
 		if (action === "snapshot") return { lastProbeResult: null };
 		throw new Error(action === "probe" ? "GAME_EXECUTION_OWNS_RUNTIME" : "PORTABLE_SMOKE_ACTION_REJECTED");
 	};
-	return { api, context: { root: f.directory }, getRuntimePid: () => 37, getProbeSequence: () => 0, getReloads: () => reloads,
+	return { api, context: { root: f.directory, runId: f.runId }, getRuntimePid: () => 37, getProbeSequence: () => 0, getReloads: () => reloads, getActivationAttempts: () => activationAttempts,
 		testCommand: async (name, args) => {
-			if (name === "reload") { reloads++; return true; }
+			if (name === "reload") { reloads++; phaseActivationAttempts = 0; return true; }
 			if (name === "portable-renderer-state") return { errors: [] };
-			assert.equal(name, "evaluate"); if (args.source.endsWith(".click()")) return true;
+			assert.equal(name, "evaluate"); if (args.source.includes("button.click()")) { activationAttempts++; return ++phaseActivationAttempts > 1; }
 			assert.ok(args.source.includes(".game-tasks-panel"));
 			return { stage: "等待核销 · 开发写入与构建已冻结", syntheticNotice: true, receipts: [f.expected.intent.actionId], buttons: [{ text: "开始分析", disabled: !enabledNewExecution }, { text: "核对并确认入队", disabled: true }, { text: "核销原动作", disabled: false }] };
 		} };
@@ -72,9 +72,10 @@ test("the recovery smoke writes its completion receipt only after both UI phases
 	const f = await fixture(t), driver = recoveryDriver(f), manifest = { sourceRevision: "synthetic-source", piCommit: "synthetic-pi" };
 	await runPortableRecoverySmoke(driver, f.expected, manifest, 37, async () => {});
 	assert.equal(driver.getReloads(), 1);
+	assert.equal(driver.getActivationAttempts(), 4, "Each phase must wait for a ready activation, even if a pending snapshot is already displayed");
 	const proof = JSON.parse(await readFile(join(f.directory, "application-proof.json"), "utf8"));
-	assert.equal(proof.legacyPendingRecovery.originalPendingSha256, f.expected.sha256); assert.equal(proof.pendingDisplayedWithNewExecutionDisabled, true); assert.equal(proof.noProbeAllocated, true);
-	for (const phase of ["before-reload", "after-reload"]) { const diagnostic = JSON.parse(await readFile(join(f.directory, `legacy-recovery-ui-${process.pid}-${phase}.private.json`), "utf8")); assert.equal(diagnostic.phase, phase); assert.equal(diagnostic.completed, true); }
+	assert.equal(proof.legacyPendingRecovery.originalPendingSha256, f.expected.sha256); assert.equal(proof.pendingDisplayedWithNewExecutionDisabled, true); assert.equal(proof.layoutReadyBeforePanelActivation, true); assert.equal(proof.noProbeAllocated, true);
+	for (const phase of ["before-reload", "after-reload"]) { const diagnostic = JSON.parse(await readFile(join(f.directory, `legacy-recovery-ui-${process.pid}-${phase}.private.json`), "utf8")); assert.equal(diagnostic.phase, phase); assert.equal(diagnostic.completed, true); assert.equal(diagnostic.activatedAfterLayoutReady, true); }
 });
 
 test("a new-execution regression retains the failing UI phase without writing a completion receipt", async t => {

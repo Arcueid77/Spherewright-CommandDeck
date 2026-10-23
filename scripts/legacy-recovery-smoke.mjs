@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, realpath, readFile, writeFile, mkdir, rm, rename } from "node:fs/promises";
+import { mkdtemp, realpath, readFile, writeFile, mkdir, rm, rename, lstat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, dirname, basename, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -40,8 +40,13 @@ try {
 			await writeFile(join(phaseRoot, "process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count; if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
 		} while (performance.now() < until);
 		assert.equal(remaining, 0); assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
+		for (const stage of ["before-reload", "after-reload"]) {
+			const file = join(directory, `legacy-recovery-ui-${child.pid}-${stage}.private.json`), info = await lstat(file); assert.ok(info.isFile() && !info.isSymbolicLink() && info.size > 0 && info.size <= 65536);
+			const bytes = await readFile(file), diagnostic = JSON.parse(bytes); assert.equal(diagnostic.phase, stage); assert.equal(diagnostic.completed, true); assert.equal(diagnostic.activatedAfterLayoutReady, true); assert.equal(diagnostic.ui.panelPresent, true); assert.ok(diagnostic.ui.stage.includes("等待核销") && diagnostic.ui.stage.includes("冻结")); assert.ok(diagnostic.ui.receipts.some(text => text.includes(seed.expected.intent.actionId))); assert.deepEqual(diagnostic.renderer.errors, []);
+			await writeFile(join(phaseRoot, `ui-${stage}.private.json`), bytes, { flag: "wx" });
+		}
 		const application = JSON.parse(await readFile(join(directory, "application-proof.json"), "utf8"));
-		assert.equal(application.runId, runId); assert.equal(application.sourceRevision, manifest.sourceRevision); assert.equal(application.piCommit, manifest.piCommit); assert.equal(application.legacyPendingRecovery?.originalPendingSha256, seed.expected.sha256); assert.equal(application.pendingDisplayedWithNewExecutionDisabled, true); assert.equal(application.originalActionQueryEntryRetained, true); assert.equal(application.noProbeAllocated, true); assert.equal(application.syntheticModelRequests, 0); assert.equal(application.syntheticTools, 0); assert.equal(application.gameCalls, 0); assert.equal(application.realModelRequests, 0);
+		assert.equal(application.runId, runId); assert.equal(application.sourceRevision, manifest.sourceRevision); assert.equal(application.piCommit, manifest.piCommit); assert.equal(application.legacyPendingRecovery?.originalPendingSha256, seed.expected.sha256); assert.equal(application.pendingDisplayedWithNewExecutionDisabled, true); assert.equal(application.originalActionQueryEntryRetained, true); assert.equal(application.layoutReadyBeforePanelActivation, true); assert.equal(application.noProbeAllocated, true); assert.equal(application.syntheticModelRequests, 0); assert.equal(application.syntheticTools, 0); assert.equal(application.gameCalls, 0); assert.equal(application.realModelRequests, 0);
 		const actual = readLegacyBaseRows(seed.file); assert.equal(actual.version, 2); assert.deepEqual(actual.rows, before.rows, "Migration/reopen changed an original v1 record");
 		await writeFile(join(phaseRoot, "application-proof.json"), JSON.stringify(application), { flag: "wx" });
 		phases.push({ phase, schemaVersion: actual.version, samePhysicalProfile: true, originalBaseRowsSha256: bundleHash(Buffer.from(JSON.stringify(actual.rows))), originalPendingSha256: seed.expected.sha256, developmentFrozen: true, noProbeAllocated: true, noPackagedChildrenRemain: true });

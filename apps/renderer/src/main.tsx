@@ -454,6 +454,7 @@ function App() {
 	const observationOnly = Boolean(useBridge().state.observationPolicy);
 	const [settings, setSettings] = useState(false);
 	const [confirmation, setConfirmation] = useState(false);
+	const [layoutReady, setLayoutReady] = useState(false);
 	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
 	const navigation = useWorkbenchNavigation();
 	useEffect(() => {
@@ -469,15 +470,15 @@ function App() {
 	useEffect(() => { if (settings || confirmation) document.body.dataset.deckOverlay = settings ? "settings" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation]);
 	return (
 		<div className="app">
-			<header inert={settings || confirmation}>
+			<header inert={settings || confirmation} aria-busy={!layoutReady}>
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
 				<div className="tag">{observationOnly ? "限时只读观测" : "开发 · 观察 · 有限研究"}</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
 				<button disabled={observationOnly} onClick={() => setSettings(true)}>模型设置</button>
-				<button onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
-				<button onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
+				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
+				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
 			<div className="workspace" inert={settings || confirmation}>
@@ -485,7 +486,7 @@ function App() {
 					className="dockview-theme-abyss"
 					dndStrategy="pointer"
 					components={components}
-					onReady={(event) => { dock.current = event.api; void ready(event); }}
+					onReady={(event) => { dock.current = event.api; setLayoutReady(false); void ready(event).then(() => setLayoutReady(true)); }}
 				/>
 			</div>
 			{settings && <ProviderSettings close={() => setSettings(false)} />}
