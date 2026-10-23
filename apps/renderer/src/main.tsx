@@ -11,6 +11,7 @@ import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPane
 import { ProviderSettings, type Profile } from "./providers";
 import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
+import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -60,6 +61,9 @@ declare global {
 			chooseBridge(): Promise<unknown>;
 			game<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			confirmResearch(taskId: string): Promise<unknown>;
+			diagnosticPreview(options: DiagnosticOptions): Promise<DiagnosticPreview>;
+			saveDiagnosticPreview(id: string): Promise<DiagnosticSave>;
+			discardDiagnosticPreview(id: string): Promise<unknown>;
 			targets(): Promise<Target[]>;
 			attach(id: string): Promise<NativeState>;
 			detach(): Promise<unknown>;
@@ -458,6 +462,7 @@ async function ready(event: DockviewReadyEvent) {
 function App() {
 	const observationOnly = Boolean(useBridge().state.observationPolicy);
 	const [settings, setSettings] = useState(false);
+	const [diagnostics, setDiagnostics] = useState(false);
 	const [confirmation, setConfirmation] = useState(false);
 	const [layoutReady, setLayoutReady] = useState(false);
 	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
@@ -472,21 +477,22 @@ function App() {
 		api.getPanel(navigation.panel)?.api.setActive();
 	}, [navigation]);
 	useEffect(() => window.deck.onEvent((event) => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); }), []);
-	useEffect(() => { if (settings || confirmation) document.body.dataset.deckOverlay = settings ? "settings" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation]);
+	useEffect(() => { if (settings || confirmation || diagnostics) document.body.dataset.deckOverlay = settings ? "settings" : diagnostics ? "diagnostics" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation, diagnostics]);
 	return (
 		<div className="app">
-			<header inert={settings || confirmation} aria-busy={!layoutReady}>
+			<header inert={settings || confirmation || diagnostics} aria-busy={!layoutReady}>
 				<div className="brand">
 					SPHEREWRIGHT <b>COMMANDDECK</b>
 				</div>
 				<div className="tag">{observationOnly ? "限时只读观测" : "开发 · 观察 · 有限研究"}</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
 				<button disabled={observationOnly} onClick={() => setSettings(true)}>模型设置</button>
+				<button disabled={!layoutReady} onClick={() => setDiagnostics(true)}>诊断报告</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
-			<div className="workspace" inert={settings || confirmation}>
+			<div className="workspace" inert={settings || confirmation || diagnostics}>
 				<DockviewReact
 					className="dockview-theme-abyss"
 					dndStrategy="pointer"
@@ -495,6 +501,7 @@ function App() {
 				/>
 			</div>
 			{settings && <ProviderSettings close={() => setSettings(false)} />}
+			{diagnostics && <DiagnosticDialog close={() => setDiagnostics(false)} />}
 		</div>
 	);
 }

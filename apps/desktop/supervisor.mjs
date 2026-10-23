@@ -2,7 +2,7 @@ import { app, utilityProcess, safeStorage } from "electron";
 import { EventEmitter, once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { WindowHost } from "./window-host.mjs";
 import { spawnOwnedUi, registerOwnedUi } from "./owned-ui-process.mjs";
@@ -22,17 +22,23 @@ import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
 import { OwnedFixtureHost } from "./owned-fixture.mjs";
-import { assertPortableAction, assertPortableRuntimeAction, portableRuntimeScenario, portableMcpScenario } from "./portable-mode.mjs";
+import { assertPortableAction, assertPortableRuntimeAction, portableRuntimeScenario, portableMcpScenario, portableDiagnosticMode } from "./portable-mode.mjs";
 import { syntheticProviderScope } from "./synthetic-scope.mjs";
 import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
 import { startupFailureCode } from "./startup-failure.mjs";
 import { runRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
+import { DiagnosticExports, readDiagnosticBuild } from "./diagnostic-export.mjs";
+import { diagnosticCode } from "./diagnostic-snapshot.mjs";
+import { assertDiagnosticSmokeAction } from "./diagnostic-smoke-scope.mjs";
+import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
 const portableScenario = portableSmoke ? portableRuntimeScenario(process.argv) : null;
 const portableMcpLoss = portableSmoke ? portableMcpScenario(process.argv) : null;
+const portableDiagnostics = portableSmoke && portableDiagnosticMode(process.argv);
 const smoke = process.argv.includes("--smoke") || portableSmoke;
+const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
 const runtimeScenario = portableScenario ?? (smoke && process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
 const sourceMcpFlags = process.argv.filter(arg => arg.startsWith("--smoke-mcp-loss"));
 if (sourceMcpFlags.length && (!smoke || !process.argv.includes("--smoke-game") || sourceMcpFlags.length !== 1 || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(sourceMcpFlags[0]) || runtimeScenario)) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
@@ -50,14 +56,14 @@ const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smo
 });
 let changingProfiles = false;
 function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
-const native = portableSmoke ? new OwnedFixtureHost() : new WindowHost();
+const native = portableSmoke || diagnosticSmoke ? new OwnedFixtureHost() : new WindowHost();
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle") || Boolean(portableMcpLoss));
 const fixtureProvider = gameSmoke ? syntheticProviderScope() : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
-const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke,
+const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
 	releaseDevelopment: () => workbenchCall("game-end"), planner: runGamePlanner, emit: () => emit({ type: "game-changed" }),
@@ -90,9 +96,24 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !diagnosticSmoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
+const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
+const diagnostics = new DiagnosticExports({
+	isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering,
+	protectedRoots: [privateDirectory, dirname(privateDirectory), ...(portableContext ? [join(portableContext.root, "ui-profile")] : []), ...(app.isPackaged ? [dirname(process.execPath)] : [])],
+	capture: async options => {
+		const [build, workbench] = await Promise.all([
+			readDiagnosticBuild(root, { packaged: app.isPackaged, applicationVersion: app.getVersion(), electronVersion: process.versions.electron, nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch }),
+			options.includeTasks ? workbenchCall("diagnostics", {}, 1500).catch(diagnosticFailure) : null,
+		]);
+		let gameSnapshot, bridgeSnapshot;
+		try { if (options.includeTasks) gameSnapshot = game.snapshot(); } catch (error) { gameSnapshot = diagnosticFailure(error); }
+		try { bridgeSnapshot = bridge.snapshot(); } catch (error) { bridgeSnapshot = diagnosticFailure(error); }
+		return { build, workbench, game: gameSnapshot, bridge: bridgeSnapshot, runtime: { available: workbenchReady, exitObserved: runtimeExit?.exited ?? null, probeBusy: state.busy, uiConnected: Boolean(ui?.registered && ui.child.connected), uiRecovering: recovering, uiReplacements: restarts } };
+	},
+});
 const safeEnvironment = () =>
 	Object.fromEntries(
 		Object.entries(process.env).filter(
@@ -111,17 +132,17 @@ function emit(event) {
 	else state.events = [...state.events.slice(-39), event];
 	send(ui, { type: "event", event });
 }
-function workbenchCall(action, args = {}) {
+function workbenchCall(action, args = {}, timeoutMs = 25000) {
 	if (!runtime || runtimeExit?.exited) return Promise.reject(new Error("RUNTIME_UNAVAILABLE"));
 	const id = "workbench:" + String(++testSequence);
 	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("WORKBENCH_RESPONSE_TIMEOUT")); }, 25000);
+		const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("WORKBENCH_RESPONSE_TIMEOUT")); }, timeoutMs);
 		runtimePending.set(id, { resolve, reject, timer });
 		runtime.postMessage({ type: "workbench", id, action, args });
 	});
 }
 async function stopRuntimeForSmoke() {
-	if (!smoke || !runtimeScenario || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
+	if (!smoke || !runtimeScenario && !diagnosticSmoke || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
 	const pid = runtime.pid; await runtimeExit.stop(); return { pid, exitObserved: runtimeExit.exited };
 }
 function runGamePlanner(command) {
@@ -198,7 +219,8 @@ async function probe(config) {
 	}
 }
 async function api(action, args, source) {
-	if (portableSmoke) {
+	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
+	if (portableSmoke && !diagnosticSmoke) {
 		if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });
 		else assertPortableAction(action, args);
 	}
@@ -226,6 +248,14 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, events: [...state.events] };
+	if (["diagnostics-preview", "diagnostics-begin-save", "diagnostics-write", "diagnostics-cancel-save", "diagnostics-discard"].includes(action)) {
+		if (source !== ui || !source?.registered) throw new Error("TRUSTED_DIAGNOSTIC_HOST_REQUIRED");
+		if (action === "diagnostics-preview") return diagnostics.preview(source, args?.generation, args?.options);
+		if (action === "diagnostics-begin-save") return diagnostics.beginSave(source, args?.generation, args?.id);
+		if (action === "diagnostics-write") return diagnostics.save(source, args?.generation, args?.grant, args?.path);
+		if (action === "diagnostics-cancel-save") return diagnostics.cancelSave(source, args?.generation, args?.grant);
+		return diagnostics.discard(source, args?.generation, args?.id);
+	}
 	if (action === "game") {
 		if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
 		if (args.action === "snapshot") return { ...game.snapshot(), readOnlyObservation: Boolean(observationPolicy) };
@@ -362,7 +392,7 @@ function clearUiTests(record) {
 		}
 }
 function startUi() {
-	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(portableScenario ? ["--portable-runtime-loss=" + portableScenario] : []), ...(portableMcpLoss ? ["--portable-mcp-loss=" + portableMcpLoss] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
+	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(diagnosticSmoke ? ["--smoke-diagnostics-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(portableDiagnostics ? ["--portable-diagnostics"] : []), ...(portableScenario ? ["--portable-runtime-loss=" + portableScenario] : []), ...(portableMcpLoss ? ["--portable-mcp-loss=" + portableMcpLoss] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
 	const child = spawnOwnedUi(process.execPath, args, {
 		cwd: root,
 		env: safeEnvironment(),
@@ -374,6 +404,7 @@ function startUi() {
 		lease: registerOwnedUi(child),
 		epoch: ++epoch,
 		loaded: 0,
+		documentGeneration: 0,
 		registered: false,
 		lastHeartbeat: performance.now(),
 		lastBeatSequence: 0,
@@ -419,6 +450,9 @@ function startUi() {
 			record.nativeDelayReported = false;
 			record.nativeProbePending = false;
 			record.nativeProbeUnknowns = 0;
+		} else if (message.type === "ui-document" && record.registered && Number.isSafeInteger(message.generation) && message.generation > record.documentGeneration) {
+			diagnostics.invalidate(record);
+			record.documentGeneration = message.generation;
 		} else if (message.type === "ui-loaded" && record.registered) {
 			record.loaded++;
 			record.lastHeartbeat = performance.now();
@@ -485,6 +519,7 @@ async function recoverUi(reason, expected = ui) {
 	recovering = true;
 	const old = ui;
 	game.invalidateUi(old.epoch);
+	diagnostics.invalidate(old);
 	const heartbeatAgeMs = performance.now() - old.lastHeartbeat;
 	recordUiLifecycle({ kind: "recovery", reason, epoch: old.epoch, heartbeatAgeMs, exited: old.child.exitCode !== null || old.child.signalCode !== null, nativeProbe: old.lastNativeProbe });
 	clearUiTests(old);
@@ -589,7 +624,7 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (!runtimeExit?.exited) runtime?.postMessage({ type: "abort" });
 	try {
 		// Drain game first so its retained original action can still use the same connection.
-		await settleShutdown([() => game.drain(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve()]);
+		await settleShutdown([() => game.drain(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve(), () => diagnostics.drain()]);
 		await bridge.close();
 		await native.request("detach");
 		await native.request("close");
@@ -757,7 +792,7 @@ if (!app.hasSingleInstanceLock()) {
 			await attachFromCommandLine(process.argv);
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
-				await runPortableSmoke({ root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
+				await runPortableSmoke({ root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
 				await shutdown(); return;
 			}
 			if (process.argv.includes("--demo-fixture")) {
@@ -766,7 +801,7 @@ if (!app.hasSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
@@ -777,7 +812,7 @@ if (!app.hasSingleInstanceLock()) {
 					events,
 					getUi: () => ui,
 					getRuntimePid: () => runtime.pid,
-					mcpLossScenario, context: mcpLossScenario ? gameFixtureContext : undefined,
+					mcpLossScenario, context: diagnosticSmoke ? { root: process.env.COMMANDDECK_DIAGNOSTIC_FIXTURE_ROOT, runId: process.env.COMMANDDECK_SMOKE_RUN_ID } : mcpLossScenario ? gameFixtureContext : undefined,
 					getBridgeClient: () => bridge.telemetry?.client,
 					stopRuntimeForSmoke, runtimeScenario,
 					registerSyntheticProvider: (...args) => fixtureProvider.register(...args),

@@ -65,6 +65,7 @@ jobs:
       - run: npm run test:game-runtime-planning
       - run: npm run test:game-mcp-accepted
       - run: npm run test:game-mcp-lost-ack
+      - run: npm run test:diagnostics
       - run: npm run package:desktop -- --output artifacts/portable-desktop
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop --reopen-history
       - run: npm run test:profile-lock -- --source artifacts/portable-desktop
@@ -72,6 +73,7 @@ jobs:
       - run: npm run test:legacy-recovery -- --source artifacts/portable-desktop
       - run: npm run test:packaged-runtime-loss -- --source artifacts/portable-desktop
       - run: npm run test:packaged-mcp-loss -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
       - name: Build isolated installer candidate
@@ -92,6 +94,8 @@ jobs:
             .local/legacy-recovery-smoke.json
             .local/packaged-runtime-loss-smoke.json
             .local/packaged-mcp-loss-smoke.json
+            .local/desktop-smoke-diagnostics.json
+            .local/packaged-diagnostics-smoke.json
             .local/desktop-smoke-game-mcp-accepted.json
             .local/desktop-smoke-game-mcp-lost-ack.json
             .local/desktop-smoke-runtime-loss.json

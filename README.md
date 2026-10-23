@@ -153,6 +153,19 @@ The demo starts only this repository's simulated game host and embeds the Electr
 
 Close the demo before running `npm run test:desktop`, `npm run test:desktop-host-exit`, `npm run test:desktop-recovery-limit` or `npm run test:workbench`. The M0 tests cover reload/renderer crash, an actual Electron UI-thread hang, a model round already in flight, abrupt simulator-host exit, and a second UI failure that stops automatic replacement. The workbench test separately checks editing, a command running across reload, UI replacement, restored drafts and no command replay. Each wrapper requires its own new run ID and completed proof. Synthetic results go under ignored `.local/`. M0 probe snapshots remain in memory; M1 development tasks use a versioned SQLite ledger under the application's private `userData/supervisor/workbench` directory. Private Pi histories stay there too, outside renderer storage and Git. The disposable UI has a separate Chromium profile.
 
+## Diagnostic reports (M5)
+
+Open **诊断报告** in the header, choose task/event summaries and cached performance data, then select **生成预览**. The complete JSON shown there is the exact content offered for saving. The native save picker selects a new `.json` file; cancelling preserves the same preview, while existing files and the application's installation/private-profile directories are refused. A preview expires after five minutes and is invalidated by changed options, UI reload or replacement. An accepted write may finish during shutdown; a failed or unconfirmed write may leave an incomplete new file and is never automatically retried.
+
+Reports contain bounded structural task/event/error records, package-reported source pins and cached numeric metrics. They omit credentials, approval tokens, private paths, world/session/action identities, prompts, model responses, command arguments and output. Task labels exist only within one report. Missing, unsupported and truncated data remain explicit; source builds do not invent a verified revision, and package metadata is not a signature or a full installation integrity check. Generating a report does not start a model, refresh MCP or query the game. Reports are informational and cannot be replayed as actions.
+
+```powershell
+npm run test:diagnostics
+npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
+```
+
+The source check uses an isolated temporary profile. The packaged check requires `portableDiagnostics: 1`, verifies/copies the full bundle outside the checkout, hides developer tools/shared runtimes and uses a fresh profile without user provider configuration. Both operate the actual renderer and trusted host, compare preview/file bytes, cancel saving, refuse overwrite, invalidate stale previews and generate a report after the test's own utility runtime exits. Native picker responses are mocked and explicitly recorded as such; no physical input or clean-Windows VM result is claimed. A native process observer independently checks exit. Private reports and raw evidence remain local; CI uploads only anonymous summaries.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

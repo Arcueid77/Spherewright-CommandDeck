@@ -23,6 +23,8 @@
 		"test:legacy-recovery": "node scripts/legacy-recovery-smoke.mjs",
 		"test:packaged-runtime-loss": "node scripts/packaged-runtime-smoke.mjs",
 		"test:packaged-mcp-loss": "node scripts/packaged-runtime-smoke.mjs --mcp-loss",
+		"test:diagnostics": "node scripts/diagnostic-smoke.mjs",
+		"test:packaged-diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"installer:toolchain": "node scripts/prepare-installer-toolchain.mjs",
 		"package:installer": "node scripts/package-installer.mjs",
 		"test:installer": "node scripts/installer-smoke.mjs",

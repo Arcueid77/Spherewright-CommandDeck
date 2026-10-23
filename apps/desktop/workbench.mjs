@@ -5,6 +5,7 @@ import { WorkspaceService } from "./workspace.mjs";
 import { originalChangeDiff } from "./change-history.mjs";
 import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { createHash } from "node:crypto";
+import { captureWorkbenchDiagnostics } from "./diagnostic-snapshot.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_OPERATION_FAILED";
 const record = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -155,6 +156,7 @@ export class Workbench {
 		if (!record(args)) throw new Error("INVALID_WORKBENCH_REQUEST");
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
 		if (action === "state") return this.state();
+		if (action === "diagnostics") return captureWorkbenchDiagnostics(this.store, { active: Boolean(this.operation || this.store.activeTask()), executionBlocked: !this.gameWritesFrozen || Boolean(this.store.ui("execution-blocked")), configurationBlocked: this.configurationBlocked });
 		if (action === "add") return this.add(args);
 		if (action === "refresh") { await this.workspace.refresh(args.rootId); return this.state(); }
 		if (action === "grants") {

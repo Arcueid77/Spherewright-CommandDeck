@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
 export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
+export function portableDiagnosticMode(argv) {
+	const values = argv.filter(arg => arg.startsWith("--portable-diagnostics"));
+	if (!values.length) return false;
+	if (values.length !== 1 || values[0] !== "--portable-diagnostics" || !argv.includes("--portable-smoke") || argv.some(arg => arg.startsWith("--portable-runtime-loss") || arg.startsWith("--portable-mcp-loss"))) throw new Error("PACKAGED_PORTABLE_DIAGNOSTIC_MODE_REQUIRED");
+	return true;
+}
 export function portableMcpScenario(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-mcp-loss"));
 	if (!values.length) return null;
@@ -57,11 +63,13 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
-	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv);
+	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
 	if (mcpScenario) allowed.add("--portable-mcp-loss=" + mcpScenario);
+	if (diagnostic) allowed.add("--portable-diagnostics");
+	if (diagnostic && argv.includes("--managed-ui")) allowed.add("--smoke-diagnostics-ui");
 	if ((scenario && scenario !== "idle" || mcpScenario) && argv.includes("--managed-ui")) allowed.add("--smoke-game-ui");
 	if (!app.isPackaged || argv.some(arg => arg.startsWith("--") && !allowed.has(arg)) || !/^[a-f0-9-]{36}$/.test(env.COMMANDDECK_PORTABLE_RUN_ID ?? "") || !isAbsolute(env.COMMANDDECK_PORTABLE_ROOT ?? "")) throw new Error("PACKAGED_PORTABLE_SMOKE_REQUIRED");
 	const root = await realpath(env.COMMANDDECK_PORTABLE_ROOT), info = await lstat(root);

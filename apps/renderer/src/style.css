@@ -54,6 +54,11 @@ textarea {
 .receipt summary { cursor: pointer; }
 .receipt pre { padding: 10px 0; }
 .settings-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 30px; background: #050a10cc; }
+.diagnostic-dialog { width: min(780px, 95vw); max-height: 90vh; overflow: auto; padding: 24px; border: 1px solid #35475b; border-radius: 10px; background: #101923; }
+.diagnostic-options { display: flex; flex-wrap: wrap; gap: 18px; margin: 16px 0; }
+.diagnostic-options label { display: flex; align-items: center; gap: 8px; }
+.diagnostic-dialog pre { max-height: 42vh; padding: 14px; overflow: auto; background: #080f17; border: 1px solid #293b4e; font-size: 12px; white-space: pre; }
+.diagnostic-hash { overflow-wrap: anywhere; }
 .provider-settings { background: #101c28; border: 1px solid #465566; border-radius: 8px; padding: 24px; width: min(690px, 100%); max-height: 100%; overflow: auto; box-shadow: 0 10px 60px #0009; }
 .settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .settings-heading h2 { margin: 0; }

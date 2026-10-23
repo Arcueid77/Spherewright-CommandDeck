@@ -1,5 +1,10 @@
 // The HWND-owning UI is disposable; Pi and native-host control live in a separate supervisor.
-if (process.argv.some(arg => arg === "--portable-smoke" || arg.startsWith("--portable-runtime-loss") || arg.startsWith("--portable-mcp-loss"))) {
+if (process.argv.some(arg => arg.startsWith("--smoke-diagnostics")) && !process.argv.includes("--portable-smoke")) {
+	const { app } = await import("electron");
+	const { prepareSourceDiagnosticMode } = await import("./diagnostic-smoke-scope.mjs");
+	await prepareSourceDiagnosticMode(app, process.argv);
+}
+if (process.argv.some(arg => arg === "--portable-smoke" || arg.startsWith("--portable-runtime-loss") || arg.startsWith("--portable-mcp-loss") || arg.startsWith("--portable-diagnostics"))) {
 	const { app } = await import("electron");
 	const { preparePortableMode } = await import("./portable-mode.mjs");
 	await preparePortableMode(app, process.argv);

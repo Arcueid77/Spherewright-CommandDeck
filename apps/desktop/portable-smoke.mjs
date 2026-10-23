@@ -8,6 +8,7 @@ import { readPortableRecovery, runPortableRecoverySmoke } from "./portable-recov
 import { runGameSmoke } from "./game-smoke.mjs";
 import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.mjs";
 import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
+import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -23,6 +24,13 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	if (driver.diagnostics) {
+		assert.equal(manifest.portableDiagnostics, 1); assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
+		const proof = await runDiagnosticSmoke(driver), report = JSON.parse(await readFile(join(context.root, "diagnostic-export.json"), "utf8"));
+		assert.equal(report.build.packaged, true); assert.equal(report.build.state, "reported-package-metadata"); assert.equal(report.build.sourceRevision, manifest.sourceRevision); assert.equal(report.build.piCommit, manifest.piCommit);
+		await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, packageMetadataMatchesBundle: true, gameCalls: 0 }), { flag: "wx" });
+		return;
+	}
 	if (driver.runtimeScenario || driver.mcpLossScenario) {
 		assert.equal(manifest[driver.mcpLossScenario ? "portableMcpFaults" : "portableRuntimeFaults"], 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);

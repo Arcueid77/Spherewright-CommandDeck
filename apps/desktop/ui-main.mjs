@@ -10,6 +10,8 @@ const rendererFile = join(root, "dist/renderer/index.html");
 const rendererUrl = pathToFileURL(rendererFile).href;
 const smoke = process.argv.includes("--smoke-ui");
 const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
+const diagnosticSmoke = smoke && process.argv.includes("--smoke-diagnostics-ui");
+let syntheticDiagnosticAnswer = null;
 const portableSmoke = smoke && process.argv.includes("--portable-smoke"), portableRendererErrors = [];
 let syntheticGameAnswer = null;
 let holdSyntheticGameAnswer = false, heldSyntheticGameAnswer = null;
@@ -19,6 +21,7 @@ let window,
 	allowClose = false,
 	closing = false;
 let confirmingGame = false;
+let diagnosticSaving = false, documentGeneration = 0;
 const pending = new Map();
 function send(message) {
 	if (process.connected) process.send(message, () => {});
@@ -64,6 +67,11 @@ async function testCommand(message) {
 			window.webContents.reload();
 			await loaded;
 			result = true;
+		} else if (message.name === "answer-diagnostic-save" && diagnosticSmoke && typeof message.cancelled === "boolean") {
+			if (diagnosticSaving || syntheticDiagnosticAnswer) throw new Error("DIAGNOSTIC_BUSY");
+			const directory = portableSmoke ? process.env.COMMANDDECK_PORTABLE_ROOT : process.env.COMMANDDECK_DIAGNOSTIC_FIXTURE_ROOT;
+			if (!directory || !message.cancelled && message.fileName !== "diagnostic-export.json") throw new Error("INVALID_DIAGNOSTIC_FIXTURE_DESTINATION");
+			syntheticDiagnosticAnswer = message.cancelled ? { canceled: true } : { canceled: false, filePath: join(directory, message.fileName) }; result = true;
 		} else if (message.name === "answer-game-confirmation" && gameSmoke && [0, 1].includes(message.response)) {
 			syntheticGameAnswer = message.response; result = true;
 		} else if (message.name === "hold-game-confirmation" && gameSmoke) {
@@ -205,11 +213,31 @@ if (typeof process.send !== "function") {
 				return request("game", args);
 			});
 			handle("deck:confirm-research", async (args) => {
-				if (confirmingGame) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+				if (confirmingGame || diagnosticSaving) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
 				confirmingGame = true;
 				try {
 					return await confirmResearchFromUi({ taskId: args?.taskId, request, showDialog: (options) => { if (gameSmoke && holdSyntheticGameAnswer) { holdSyntheticGameAnswer = false; return new Promise(resolve => { heldSyntheticGameAnswer = resolve; }); } if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
 				} finally { confirmingGame = false; }
+			});
+			handle("deck:diagnostic-preview", options => request("diagnostics-preview", { options, generation: documentGeneration }));
+			handle("deck:diagnostic-discard", id => request("diagnostics-discard", { id, generation: documentGeneration }));
+			handle("deck:diagnostic-save", async id => {
+				if (diagnosticSaving || confirmingGame) throw new Error("DIAGNOSTIC_BUSY");
+				diagnosticSaving = true;
+				const generation = documentGeneration; let grant;
+				try {
+					grant = await request("diagnostics-begin-save", { id, generation });
+					if (generation !== documentGeneration) throw new Error("DIAGNOSTIC_UI_CHANGED");
+					let selected;
+					if (diagnosticSmoke && syntheticDiagnosticAnswer) { selected = syntheticDiagnosticAnswer; syntheticDiagnosticAnswer = null; }
+					else selected = await dialog.showSaveDialog(window, { title: "保存诊断报告", defaultPath: grant.fileName, filters: [{ name: "JSON 诊断报告", extensions: ["json"] }], properties: ["showOverwriteConfirmation", "dontAddToRecent"] });
+					if (generation !== documentGeneration) throw new Error("DIAGNOSTIC_UI_CHANGED");
+					if (selected.canceled || !selected.filePath) { await request("diagnostics-cancel-save", { grant: grant.grant, generation }); return { cancelled: true }; }
+					return await request("diagnostics-write", { grant: grant.grant, generation, path: selected.filePath });
+				} finally {
+					if (grant) await request("diagnostics-cancel-save", { grant: grant.grant, generation }).catch(() => {});
+					diagnosticSaving = false;
+				}
 			});
 			handle("deck:focus-ui", async () => {
 				// Preserve Chromium's active editor/drag operation when this UI already owns focus.
@@ -239,6 +267,7 @@ if (typeof process.send !== "function") {
 				window.focus();
 				return result;
 			});
+			window.webContents.on("did-start-loading", () => send({ type: "ui-document", generation: ++documentGeneration }));
 			window.webContents.on("did-finish-load", () =>
 				send({ type: "ui-loaded" }),
 			);
