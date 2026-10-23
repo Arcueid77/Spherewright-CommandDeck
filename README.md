@@ -101,6 +101,8 @@ The compiler is the pinned official Inno Setup 7.1.0 distribution, checked by do
 
 The automated check accepts only an explicitly compiled test identity, requires its marked temporary installation directory and creates no Start-menu shortcuts. It verifies installation, running-process refusal, direct installed-app startup, same-candidate repair, profile preservation and normal uninstall. It launches the installed executable itself, rather than testing a copy extracted from the installation. Its app mode is fixture-only and cannot reach a real game/model. Upgrade/rollback, profile-schema migration and a clean Windows VM remain separate gates; implementing the test entry does not by itself prove those or M5 passed.
 
+Supervisor startup acquires its existing profile's single-instance lock before importing task/ledger modules. A second launch exits before creating or migrating a game ledger. The packaged app keeps the source application's identity rather than adding a different `productName` that would select another default profile; installer and window display names remain separate. `npm run test:profile-lock` checks the source entry with a real OS lock holder; add `-- --source artifacts/portable-desktop` to check a built bundle. All test profiles are isolated.
+
 After cloning recursively, run from the repository root:
 
 ~~~powershell

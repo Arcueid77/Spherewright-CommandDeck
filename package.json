@@ -18,6 +18,7 @@
 		"package:desktop": "node scripts/package-desktop.mjs",
 		"test:portable-desktop": "node scripts/portable-desktop-smoke.mjs",
 		"test:process-cohort": "node scripts/cohort-observer-smoke.mjs",
+		"test:profile-lock": "node scripts/profile-lock-smoke.mjs",
 		"installer:toolchain": "node scripts/prepare-installer-toolchain.mjs",
 		"package:installer": "node scripts/package-installer.mjs",
 		"test:installer": "node scripts/installer-smoke.mjs",

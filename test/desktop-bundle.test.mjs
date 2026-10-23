@@ -3,13 +3,20 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, lstat, symlink } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { bundleRelative, ridLockedCopy, inventoryBundle, copyBundleTree, verifyBundle, bundleManifestName, bundleExecutable } from "../scripts/desktop-bundle-files.mjs";
+import { bundleRelative, ridLockedCopy, inventoryBundle, copyBundleTree, verifyBundle, bundleManifestName, bundleExecutable, desktopPackageMetadata } from "../scripts/desktop-bundle-files.mjs";
 import { assertPortableAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
 
 async function fixture(t, prefix = "commanddeck-bundle-test-") {
 	const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
 	t.after(async () => { const path = await realpath(root); assert.equal(dirname(path).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(path).startsWith(prefix)); await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }); return root;
 }
+
+test("packaged application metadata preserves the source profile identity instead of adding a new product name", () => {
+	const source = { name: "spherewright-commanddeck", version: "0.0.1", type: "module", main: "apps/desktop/main.mjs", private: true };
+	const value = desktopPackageMetadata(source); assert.equal(value.name, source.name); assert.equal(Object.hasOwn(value, "productName"), false); assert.equal(value.main, source.main);
+	assert.equal(desktopPackageMetadata({ ...source, productName: "Explicit source identity" }).productName, "Explicit source identity");
+	assert.throws(() => desktopPackageMetadata({ ...source, productName: "" }), /METADATA_INVALID/);
+});
 
 test("bundle paths reject traversal, Windows aliases, private state and proprietary game DLLs", () => {
 	for (const value of ["../secret", "a/../b", "C:/outside", "a\\b", "NUL.dll", "a/name:stream", ".local/private.json", "vendor/.env", "UnityEngine.CoreModule.dll", "Assembly-CSharp.dll", "BepInEx.dll"]) assert.throws(() => bundleRelative(value));

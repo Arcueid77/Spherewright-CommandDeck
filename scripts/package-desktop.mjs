@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { readGit } from "../apps/desktop/workspace.mjs";
 import { sealCommandHost } from "../apps/desktop/command-cohort.mjs";
 import { materializePiRuntime } from "./pi-runtime-tree.mjs";
-import { bundleExecutable, bundleManifestName, bundleHash, copyBundleTree, inventoryBundle, ridLockedCopy, verifyBundle } from "./desktop-bundle-files.mjs";
+import { bundleExecutable, bundleManifestName, bundleHash, copyBundleTree, inventoryBundle, ridLockedCopy, verifyBundle, desktopPackageMetadata } from "./desktop-bundle-files.mjs";
 import { verifyRendererNotices } from "./renderer-notices.mjs";
 import { copyFrameworkNotices } from "./framework-notices.mjs";
 
@@ -61,7 +61,7 @@ await copyBundleTree(join(root, "node_modules/electron/dist"), output, { skip: p
 await rename(join(output, "electron.exe"), join(output, bundleExecutable));
 try { await lstat(join(output, "electron_wer.dll")); await rename(join(output, "electron_wer.dll"), join(output, "Spherewright-CommandDeck_wer.dll")); } catch (error) { if (error.code !== "ENOENT") throw error; }
 await mkdir(app, { recursive: true });
-await writeFile(join(app, "package.json"), JSON.stringify({ name: packageFile.name, productName: "Spherewright CommandDeck", version: packageFile.version, type: "module", main: packageFile.main }, null, 2), { flag: "wx" });
+await writeFile(join(app, "package.json"), JSON.stringify(desktopPackageMetadata(packageFile), null, 2), { flag: "wx" });
 await copyBundleTree(join(root, "apps/desktop"), join(app, "apps/desktop"));
 await copyBundleTree(join(root, "dist/renderer"), join(app, "dist/renderer"));
 await copyBundleTree(join(root, "LICENSE"), join(app, "LICENSE"));

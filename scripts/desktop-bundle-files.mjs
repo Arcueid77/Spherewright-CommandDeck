@@ -6,6 +6,12 @@ import { isDeepStrictEqual } from "node:util";
 export const bundleManifestName = "commanddeck-bundle.json";
 export const bundleExecutable = "Spherewright-CommandDeck.exe";
 export const bundleHash = bytes => createHash("sha256").update(bytes).digest("hex");
+export function desktopPackageMetadata(source) {
+	if (typeof source.name !== "string" || !source.name || typeof source.version !== "string" || source.type !== "module" || source.main !== "apps/desktop/main.mjs" || source.productName !== undefined && (typeof source.productName !== "string" || !source.productName)) throw new Error("BUNDLE_APPLICATION_METADATA_INVALID");
+	// Electron prefers productName for app identity and the default profile.
+	// Preserve the source app's identity instead of inventing another on install.
+	return { name: source.name, ...(source.productName === undefined ? {} : { productName: source.productName }), version: source.version, type: source.type, main: source.main };
+}
 export function bundleRelative(value) {
 	if (typeof value !== "string" || !value || value.length > 1800 || value.includes("\\") || isAbsolute(value)) throw new Error("BUNDLE_PATH_INVALID");
 	for (const part of value.split("/")) if (!part || part === "." || part === ".." || /[<>:"|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)) throw new Error("BUNDLE_PATH_INVALID");

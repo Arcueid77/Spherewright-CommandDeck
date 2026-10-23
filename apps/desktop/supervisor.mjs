@@ -1,6 +1,5 @@
 import { app, utilityProcess, safeStorage } from "electron";
 import { EventEmitter, once } from "node:events";
-import { mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basename, isAbsolute, join } from "node:path";
@@ -30,9 +29,8 @@ const portableSmoke = process.argv.includes("--portable-smoke");
 const smoke = process.argv.includes("--smoke") || portableSmoke;
 const observationPolicy = observationArguments(process.argv);
 const watchdogMs = 1000;
-const privateDirectory = join(app.getPath("userData"), "supervisor");
-mkdirSync(privateDirectory, { recursive: true });
-app.setPath("userData", privateDirectory); // The disposable UI keeps its original, separate Chromium profile.
+if (!app.hasSingleInstanceLock()) throw new Error("SUPERVISOR_PROFILE_OWNER_REQUIRED");
+const privateDirectory = app.getPath("userData");
 const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID] : []), "profiles.vault.json"), {
 	available: () => process.platform === "win32" && safeStorage.isEncryptionAvailable(),
 	encrypt: (text) => safeStorage.encryptStringAsync(text), decrypt: async (bytes) => (await safeStorage.decryptStringAsync(bytes)).result,
@@ -596,7 +594,7 @@ async function shutdown(exitCode = 0) {
 	allowQuit = true;
 	app.exit(exitCode);
 }
-if (!app.requestSingleInstanceLock()) {
+if (!app.hasSingleInstanceLock()) {
 	allowQuit = true;
 	if (smoke) {
 		console.error("SMOKE_INSTANCE_ALREADY_RUNNING");

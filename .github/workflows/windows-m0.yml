@@ -41,6 +41,7 @@ jobs:
       - run: npm run test:vault
       - run: npm run test:native
       - run: npm run test:process-cohort
+      - run: npm run test:profile-lock
       - run: npm run test:ui-watchdog
       - run: npm run probe:native-hang
       - run: npm run probe:native-focus
@@ -60,6 +61,7 @@ jobs:
       - run: npm run test:game
       - run: npm run package:desktop -- --output artifacts/portable-desktop
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop
+      - run: npm run test:profile-lock -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
       - name: Build isolated installer candidate
@@ -75,6 +77,7 @@ jobs:
           path: |
             .local/native-smoke.json
             .local/process-cohort-observer.json
+            .local/profile-lock-smoke.json
             .local/ui-watchdog-native.json
             .local/native-hang-probe.json
             .local/native-input-hang-probe.json

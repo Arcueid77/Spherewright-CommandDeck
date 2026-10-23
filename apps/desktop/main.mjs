@@ -6,4 +6,8 @@ if (process.argv.includes("--portable-smoke")) {
 }
 if (process.argv.includes("--vault-smoke")) await import("./vault-smoke.mjs");
 else if (process.argv.includes("--managed-ui")) await import("./ui-main.mjs");
-else await import("./supervisor.mjs");
+else {
+	const { app } = await import("electron");
+	const { startSupervisor } = await import("./supervisor-start.mjs");
+	await startSupervisor(app);
+}
