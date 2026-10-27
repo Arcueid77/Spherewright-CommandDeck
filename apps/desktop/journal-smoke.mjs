@@ -42,6 +42,8 @@ export async function finishJournalSmoke(driver, recording) {
 		archive = await request(driver, "read", { id: recording.id }); assert.equal(archive.recording.state, "stopped"); assert.equal(archive.readOnly, true); assert.equal(archive.executionAuthority, false);
 		if (driver.context) await writeFile(join(driver.context.root, "journal-original.private.json"), JSON.stringify({ runId: driver.context.runId, archive }), { flag: "wx" });
 	}
+	const knownProbeToolNamesRecorded = archive.events.some(event => event.domain === "probe" && event.kind === "tool" && event.facts.tool === "deck_echo");
+	if (!recording.previous) assert.equal(knownProbeToolNamesRecorded, true, "FORWARDED_PROBE_TOOL_NAME_MISSING");
 	await until(async () => await ui(driver, "document.querySelector('.journal-panel')?.getAttribute('data-journal-mode')==='replay'"), "READ_ONLY_VIEW");
 	const denied = await ui(driver, "(async()=>{let denied=0;for(const action of ['execute','commit','replay','resume'])try{await window.deck.journal(action,{})}catch{denied++}return denied})()"); assert.equal(denied, 4);
 	await assert.rejects(request(driver, "bookmark", { id: archive.recording.id, sequence: 1, tag: "attention" }), /JOURNAL_BOOKMARK_INVALID/);
@@ -58,7 +60,7 @@ export async function finishJournalSmoke(driver, recording) {
 	assert.deepEqual(await request(driver, "read", { id: archive.recording.id }), archive);
 	assert.equal(driver.getProbeSequence(), sequence); assert.equal(driver.getRuntimePid(), runtime);
 	const after = await driver.api("status"); assert.equal(after.attached, native.attached); assert.equal(after.targetPid, native.targetPid);
-	return { localEventJournal: true, recordingRowsRetained: true, bookmarkNavigation: true, historicalReplayReadOnly: true, replayExecutionActionsRejected: true, uiReloadRetainsJournal: true, noModelOrTaskReplay: true, originalNativeStateRetained: true, previousAppRecordingReopened: recording.previous, eventCount: archive.events.length, bookmarkCount: archive.bookmarks.length, videoRecordingVerified: false, physicalInputVerified: false };
+	return { localEventJournal: true, recordingRowsRetained: true, bookmarkNavigation: true, historicalReplayReadOnly: true, replayExecutionActionsRejected: true, uiReloadRetainsJournal: true, noModelOrTaskReplay: true, originalNativeStateRetained: true, previousAppRecordingReopened: recording.previous, knownProbeToolNamesRecorded, eventCount: archive.events.length, bookmarkCount: archive.bookmarks.length, videoRecordingVerified: false, physicalInputVerified: false };
 }
 export async function runJournalSmoke(driver) {
 	const recording = await beginJournalSmoke(driver, false);

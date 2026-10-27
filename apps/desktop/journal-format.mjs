@@ -36,7 +36,7 @@ export class JournalProjector {
 		else if (event?.type === "bridge-changed") { domain = "bridge"; kind = "state"; const bridge = context.bridge; facts = journalFacts({ state: bridge?.observation?.connected ? "connected" : "disconnected", busy: bridge?.busy, count: bridge?.observation?.summary?.data?.coverage?.returned, requests: bridge?.observation?.requests, code: bridge?.error }); }
 		else if (event?.type === "probe-state") { domain = "probe"; kind = "state"; facts = journalFacts({ busy: event.busy }); }
 		else if (event?.type === "probe-result") { domain = "probe"; kind = "result"; facts = journalFacts(event.result); }
-		else if (["tool_execution_start", "tool_execution_end"].includes(event?.type)) { domain = "probe"; kind = "tool"; facts = journalFacts({ name: event.toolName, state: event.type === "tool_execution_start" ? "running" : "completed" }); }
+		else if (["tool_execution_start", "tool_execution_end"].includes(event?.type)) { domain = "probe"; kind = "tool"; facts = journalFacts({ name: event.tool ?? event.toolName, state: event.type === "tool_execution_start" ? "running" : "completed" }); }
 		else if (event?.type === "system-power") { domain = "system"; kind = "power"; facts = journalFacts({ state: event.power?.phase, busy: event.power?.draining, code: event.power?.error }); }
 		else if (["runtime-stopped", "ui-health", "ui-recovered", "native-state"].includes(event?.type)) { domain = "system"; kind = event.type; facts = journalFacts({ available: event.nativeResponsive, busy: event.blocked }); }
 		else return null;

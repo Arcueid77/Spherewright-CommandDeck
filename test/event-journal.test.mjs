@@ -21,6 +21,10 @@ test("journal projection keeps stable per-recording aliases and never persists t
 	const game = projector.project({ type: "game-changed" }, { game: { currentTaskId: id, phase: "accepted", unresolved: [{ actionId: secret }], prompt: secret, scope: { sessionId: secret } } });
 	for (const value of [secret, id, "another-private-task", "sessionId", "actionId", "arguments"]) assert.ok(!JSON.stringify([first, second, repeated, game]).includes(value));
 	assert.equal(projector.project({ type: "text", text: secret }), null);
+	const forwardedTool = projector.project({ type: "tool_execution_start", tool: "deck_echo" });
+	assert.equal(forwardedTool.facts.tool, "deck_echo"); assert.equal(forwardedTool.facts.state, "running");
+	assert.equal(projector.project({ type: "tool_execution_end", toolName: "deck_echo" }).facts.tool, "deck_echo");
+	assert.equal(projector.project({ type: "tool_execution_start", tool: secret }).facts.tool, null);
 });
 test("stopped recordings and bookmarks reopen as data while a crashed active recording becomes interrupted", async t => {
 	const f = await fixture(t), store = f.open(); store.start({ sourceRevision: "a".repeat(40), piCommit: "b".repeat(40), credential: "PRIVATE" });

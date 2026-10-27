@@ -37,6 +37,7 @@ export async function runJournalInterruptionSmoke(driver, fixture, manifest) {
 		await request("bookmark", { id: recording.id, sequence: 2, tag: "checkpoint" });
 		const archive = await request("read", { id: recording.id }); assert.equal(archive.recording.state, "recording"); assert.equal(archive.readOnly, false); assert.equal(archive.executionAuthority, false);
 		assert.equal(archive.bookmarks.length, 1); assert.ok(archive.events.length >= 3);
+		assert.ok(archive.events.some(event => event.domain === "probe" && event.kind === "tool" && event.facts.tool === "deck_echo"));
 		const ready = join(driver.context.root, journalInterruptionStartedFile), staging = ready + ".pending";
 		await assert.rejects(lstat(ready), { code: "ENOENT" });
 		await writeFile(staging, JSON.stringify({ runId: driver.context.runId, sourceRevision: manifest.sourceRevision, supervisorPid: process.pid, archive }), { flag: "wx" }); await rename(staging, ready);
