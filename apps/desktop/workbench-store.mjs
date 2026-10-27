@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -31,6 +31,9 @@ export class WorkbenchStore {
 					"SELECT key,value FROM ui_state LIMIT 0",
 				]) this.db.prepare(query).all();
 			}
+			// SQLite may silently fall back to read-only. A valid schema alone
+			// cannot establish writable task storage; do not create probe records.
+			if (file !== ":memory:") { const descriptor = openSync(file, "r+"); closeSync(descriptor); }
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
 			if (file !== ":memory:") this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
 			if (version === 0) this.transaction(() => {

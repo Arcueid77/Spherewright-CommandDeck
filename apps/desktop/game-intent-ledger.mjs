@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { matchResearchBudget, nativeResearchStateHash, researchId } from "./research-preview.mjs";
@@ -39,6 +39,9 @@ export class GameIntentLedger {
 					...(version === 2 ? ["SELECT task_id,body FROM game_task_details LIMIT 0", "SELECT sequence,task_id,kind,body FROM game_task_events LIMIT 0"] : []),
 				]) this.db.prepare(query).all();
 			}
+			// An engine read-only fallback must not advertise usable task storage.
+			// This opens no transaction and changes no original ledger bytes.
+			if (file !== ":memory:") { const descriptor = openSync(file, "r+"); closeSync(descriptor); }
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=1000;");
 			if (version === 0) this.db.exec(`BEGIN IMMEDIATE;
 				CREATE TABLE game_tasks(id TEXT PRIMARY KEY, scope TEXT NOT NULL, state TEXT NOT NULL, preview_hash TEXT, preview_boot TEXT, expires_at INTEGER, approval_id TEXT, approval_at INTEGER);
