@@ -72,6 +72,7 @@ jobs:
       - run: npm run test:startup-failure -- --source artifacts/portable-desktop
       - run: npm run test:legacy-recovery -- --source artifacts/portable-desktop
       - run: npm run test:packaged-os-storage -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-ledger-evidence -- --source artifacts/portable-desktop
       - run: npm run test:packaged-runtime-loss -- --source artifacts/portable-desktop
       - run: npm run test:packaged-mcp-loss -- --source artifacts/portable-desktop
       - run: npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
@@ -101,6 +102,7 @@ jobs:
             .local/packaged-diagnostics-smoke.json
             .local/packaged-storage-smoke.json
             .local/packaged-os-storage-smoke.json
+            .local/packaged-ledger-evidence-smoke.json
             .local/packaged-command-smoke.json
             .local/desktop-smoke-game-mcp-accepted.json
             .local/desktop-smoke-game-mcp-lost-ack.json
