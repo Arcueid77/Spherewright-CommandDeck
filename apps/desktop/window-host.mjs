@@ -1,5 +1,6 @@
 import { OwnedFixtureHost } from "./owned-fixture.mjs";
 import { GameAdapterClient, inspectAdapterProcess, listGameAdapters } from "./game-adapter.mjs";
+import { boundCaptureSource } from "./capture-source.mjs";
 
 function publicState(value) {
 	const source = value.window ?? {};
@@ -20,6 +21,14 @@ function restored(value) {
 
 // No DSP launch/kill route. Disconnection retains the exact endpoint and blocks new attachment.
 export class WindowHost extends OwnedFixtureHost {
+	async captureSource() {
+		const client = this.adapter, target = this.adapterId, binding = this.binding;
+		if (!client || !target || !binding || this.transitions || this.adapterUnknown || client.stopped) throw new Error("WINDOW_CAPTURE_SELECTION_REQUIRED");
+		if (client.latest?.windowCaptureSource !== 1) throw new Error("WINDOW_CAPTURE_UNSUPPORTED");
+		const reply = await client.request("capture-source");
+		if (this.adapter !== client || this.adapterId !== target || this.binding !== binding || this.transitions || this.adapterUnknown || client.stopped) throw new Error("WINDOW_CAPTURE_SELECTION_CHANGED");
+		return Object.freeze({ ...boundCaptureSource(reply, client.descriptor), targetId: target });
+	}
 	watch(client) {
 		client.on("stopped", () => {
 			if (this.adapter !== client) return;

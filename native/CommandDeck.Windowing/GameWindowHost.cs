@@ -41,6 +41,22 @@ public sealed class WindowHostState
     public int GameCalls => 0;
 }
 
+public sealed class WindowCaptureSource
+{
+    public int Version => 1;
+    public string Hwnd { get; }
+    public string SourceId => "window:" + Hwnd + ":0";
+    public string WindowBinding { get; }
+    public int Width { get; }
+    public int Height { get; }
+    public long LayoutRevision { get; }
+    internal WindowCaptureSource(nint hwnd, string binding, int width, int height, long revision)
+    {
+        Hwnd = ((long)hwnd).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        WindowBinding = binding; Width = width; Height = height; LayoutRevision = revision;
+    }
+}
+
 // No Unity/game-world APIs, forms runtime, hooks, process termination or synthetic input.
 // The stable parent and game viewport both belong to this process; foreign UI stays replaceable.
 public sealed class GameWindowHost
@@ -67,6 +83,7 @@ public sealed class GameWindowHost
     private long pointerDownNotifications, gamePointerHits;
     private int pointerCoordinateMatches = -1;
     private bool destroyAuthorized;
+    private readonly string captureBinding = Guid.NewGuid().ToString("N");
 
     public GameWindowHost() { wndProc = WindowMessage; }
     public static nint FindCurrentUnityWindow() => Desktop.FindOwnUnityWindow();
@@ -74,6 +91,22 @@ public sealed class GameWindowHost
     public static bool IsCurrentSessionProcess(int pid) => Desktop.InCurrentSession(pid);
     public nint HostHandle => host;
     public nint GameHandle => game?.Hwnd ?? 0;
+    // Identity evidence only: no pixels, capture grant, focus or game operation.
+    public async Task<WindowCaptureSource> ReadCaptureSourceAsync(nint expectedGameWindow)
+    {
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var currentGame = game; var currentUi = ui;
+            Desktop.Require(!closing && fault == null && !revisions.Running && Volatile.Read(ref focusOperations) == 0, "WINDOW_CAPTURE_TRANSITION_PENDING");
+            Desktop.Require(host != 0 && Desktop.IsWindow(host) && Desktop.IsWindowVisible(host) && !Desktop.IsIconic(host), "WINDOW_CAPTURE_HOST_UNAVAILABLE");
+            Desktop.Require(currentGame?.SameLifetime() == true && currentGame.Hwnd == expectedGameWindow && Desktop.GetParent(currentGame.Hwnd) == host && Desktop.IsWindowVisible(currentGame.Hwnd), "WINDOW_CAPTURE_GAME_CHANGED");
+            Desktop.Require(currentUi?.SameLifetime() == true && Desktop.GetParent(currentUi.Hwnd) == host && Desktop.IsWindowVisible(currentUi.Hwnd), "WINDOW_CAPTURE_UI_CHANGED");
+            Desktop.Require(Desktop.GetClientRect(currentGame!.Hwnd, out var bounds) && bounds.Right > 0 && bounds.Bottom > 0, "WINDOW_CAPTURE_SIZE_UNAVAILABLE");
+            return new WindowCaptureSource(currentGame.Hwnd, captureBinding, bounds.Right, bounds.Bottom, revisions.Applied);
+        }
+        finally { gate.Release(); }
+    }
     public Task Completion => ended.Task;
     public void RequestHostClose()
     {

@@ -67,7 +67,7 @@ internal static class AdapterPipeClient
             {
                 using var command = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 8 });
                 string? method = command.RootElement.GetProperty("method").GetString();
-                if (method is not ("status" or "activate" or "adopt" or "rect" or "detach" or "deactivate" or "focus-ui"))
+                if (method is not ("status" or "capture-source" or "activate" or "adopt" or "rect" or "detach" or "deactivate" or "focus-ui"))
                     throw new InvalidOperationException("WINDOW_METHOD_UNSUPPORTED");
                 await writer.WriteLineAsync(line);
             }

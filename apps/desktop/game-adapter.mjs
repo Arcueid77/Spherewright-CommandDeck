@@ -99,12 +99,12 @@ export class GameAdapterClient extends EventEmitter {
 		this.pending.clear(); this.emit("stopped");
 	}
 	async request(method, args = {}) {
-		if (!["status", "activate", "adopt", "rect", "detach", "deactivate", "focus-ui"].includes(method))
+		if (!["status", "capture-source", "activate", "adopt", "rect", "detach", "deactivate", "focus-ui"].includes(method))
 			throw new Error("WINDOW_METHOD_UNSUPPORTED");
 		await this.ready;
 		if (this.stopped) throw new Error("ADAPTER_DISCONNECTED");
 		const id = String(++this.sequence);
-		if (method !== "status") this.mayHaveMutated = true;
+		if (!["status", "capture-source"].includes(method)) this.mayHaveMutated = true;
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => { this.pending.delete(id); reject(new Error("ADAPTER_OPERATION_TIMEOUT")); }, 7000);
 			this.pending.set(id, { resolve, reject, timer });

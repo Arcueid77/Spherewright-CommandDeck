@@ -28,7 +28,12 @@ try {
 	const target = (await router.request("list")).find((item) => item.id.startsWith("adapter:") && item.pid === game.child.pid);
 	assert.ok(target);
 	await router.request("attach", { targetId: target.id });
+	const captureSource = await router.captureSource(), captureIdentity = await game.request("fixture-identity");
+	assert.equal(captureSource.sourceId, `window:${captureIdentity.gameHwnd}:0`); assert.equal(captureSource.targetId, target.id);
+	const capturePublicState = await router.request("status"); assert.equal("captureSource" in capturePublicState, false); assert.equal("sourceId" in capturePublicState, false);
+	proof.privateCaptureSourceBindsSelectedWindow = true;
 	await game.request("fixture-break-marker");
+	await assert.rejects(router.captureSource(), /WINDOW_CAPTURE_GAME_CHANGED/);
 	const original = router.adapter;
 	assert.ok(original.transport.spawnargs.includes("--adapter-client"));
 	const helperExited = once(original.transport, "exit");

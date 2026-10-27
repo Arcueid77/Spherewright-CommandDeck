@@ -196,7 +196,7 @@ public sealed class AdapterServer
         await stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
         await stream.FlushAsync().ConfigureAwait(false);
     }
-    private object Status()
+    private object Status(WindowCaptureSource? captureSource = null)
     {
         using (var process = Process.GetCurrentProcess())
             return new
@@ -207,6 +207,7 @@ public sealed class AdapterServer
                 unityUpdateSequence = Volatile.Read(ref facts).UpdateSequence,
                 renderWidth = Volatile.Read(ref facts).RenderWidth, renderHeight = Volatile.Read(ref facts).RenderHeight,
                 applicationFocused = Volatile.Read(ref facts).ApplicationFocused,
+                windowCaptureSource = 1, captureSource,
                 gamePid = process.Id, gameStartedTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 window = host?.Status() ?? new WindowHostState(),
                 kind, quarantined, fault = adapterFault, gameCalls = 0, mode = "unity-game-owned-host",
@@ -233,6 +234,18 @@ public sealed class AdapterServer
                 }
             }
             else if (host == null) throw new InvalidOperationException("ACTIVATE_HOST_FIRST");
+            else if (method == "capture-source")
+            {
+                if (request.Properties().Any(property => property.Name != "id" && property.Name != "method"))
+                    throw new InvalidOperationException("WINDOW_CAPTURE_ARGUMENTS_REJECTED");
+                var current = Volatile.Read(ref facts);
+                if (!current.Windowed || current.Hwnd == 0) throw new InvalidOperationException("WINDOWED_GAME_REQUIRED");
+                var source = await host.ReadCaptureSourceAsync(current.Hwnd).ConfigureAwait(false);
+                var after = Volatile.Read(ref facts);
+                if (!after.Windowed || after.Hwnd != current.Hwnd || stopping || quarantined || adapterFault != null)
+                    throw new InvalidOperationException("WINDOW_CAPTURE_GAME_CHANGED");
+                return Status(source);
+            }
             else if (method == "adopt")
             {
                 string handle = (string?)request["hwnd"] ?? "";

@@ -109,9 +109,13 @@ try {
 	client = new GameAdapterClient(descriptor);
 	let state = await client.ready;
 	assert.equal(state.window.active, false);
+	assert.equal(state.windowCaptureSource, 1); assert.equal(state.captureSource, null);
+	await assert.rejects(client.request("capture-source"), /ADAPTER_REQUEST_REJECTED/);
+	assert.notEqual(client.mayHaveMutated, true);
 	restored(await game.request("restored"));
 	proof.authDoesNotCreateHost = true;
 	await client.request("activate");
+	await assert.rejects(client.request("capture-source"), /WINDOW_CAPTURE_UI_CHANGED/);
 	state = await client.request("adopt", uiReady);
 	assert.equal(state.window.attached, true); assert.equal(state.window.gameParentMatches, true);
 	await client.request("rect", { x: 150, y: 70, width: 620, height: 410, visible: true });
@@ -121,6 +125,12 @@ try {
 	});
 	const size = await game.request("restored");
 	assert.equal(size.gameWidth, 620); assert.equal(size.gameHeight, 410);
+	const captureBefore = await client.request("status"), capture = await client.request("capture-source"), captureAgain = await client.request("capture-source"), identity = await game.request("fixture-identity");
+	assert.equal(capture.captureSource.sourceId, `window:${identity.gameHwnd}:0`); assert.notEqual(capture.captureSource.hwnd, identity.hostHwnd); assert.notEqual(capture.captureSource.hwnd, uiReady.hwnd);
+	assert.equal(capture.captureSource.width, 620); assert.equal(capture.captureSource.height, 410); assert.equal(capture.captureSource.layoutRevision, capture.window.layoutApplied);
+	assert.deepEqual(captureAgain.captureSource, capture.captureSource); assert.equal(captureAgain.window.layoutRequested, captureBefore.window.layoutRequested);
+	await assert.rejects(client.request("capture-source", { hwnd: uiReady.hwnd }), /WINDOW_CAPTURE_ARGUMENTS_REJECTED/);
+	proof.captureSourceIsExactPrivateGameWindow = true; proof.captureSourceReadOnlyAndCannotRetarget = true;
 	assert.equal((await client.request("focus-ui")).window.uiThreadHasFocus, true);
 	proof.explicitActivationAndNativeLayout = true;
 	await assert.rejects(client.request("save"), /WINDOW_METHOD_UNSUPPORTED/);
@@ -141,6 +151,7 @@ try {
 	client = new GameAdapterClient(descriptor);
 	await client.ready; await client.request("activate"); await client.request("adopt", uiReady);
 	assert.equal((await game.request("fixture-break-marker")).broken, true);
+	await assert.rejects(client.request("capture-source"), /WINDOW_CAPTURE_GAME_CHANGED/);
 	await assert.rejects(client.request("deactivate"), /ADAPTER_REQUEST_REJECTED/);
 	assert.equal((await client.request("status")).quarantined, true);
 	client.disconnect();
