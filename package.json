@@ -26,6 +26,7 @@
 		"test:diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-storage": "node scripts/packaged-storage-smoke.mjs",
+		"test:packaged-os-storage": "node scripts/packaged-os-storage-smoke.mjs",
 		"test:packaged-command": "node scripts/packaged-command-smoke.mjs",
 		"installer:toolchain": "node scripts/prepare-installer-toolchain.mjs",
 		"package:installer": "node scripts/package-installer.mjs",
