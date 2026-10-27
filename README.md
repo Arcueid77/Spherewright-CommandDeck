@@ -218,6 +218,12 @@ The separate local SQLite journal retains at most 64 recordings, each with 4,096
 
 `npm run test:packaged-journal-interruption -- --source artifacts/portable-desktop` requires the separate `portableJournalInterruption: 1` fixture capability. In a fresh temporary profile it explicitly records one offline probe and a bookmark, independently verifies the exact owned application, then force-terminates only its retained spawn handle before the normal stop path. Two following starts perform no model requests: they must retain every original event/bookmark, mark only the recording as interrupted, keep it inactive, and permit read-only browsing. The controller also compares execution rows and Pi files, waits for owned images to exit, and verifies both complete bundles. Candidate/controller `d79d4033030ef97c4b855d703626c3db77c0af7c` passed all three actual starts: all six events (including the two named tool events), the bookmark and four Pi files survived, with only the expected interrupted state/reason changing. This is an explicit test-only mode; it does not prove recovery from power loss or video recording.
 
+## Video archive groundwork (M6)
+
+The encoded-video archive is a separate host component. It accepts ordered WebM/VP8 chunks, caps each recording at 128 MiB, each chunk at 2 MiB and local history at 32 recordings, and acknowledges an identical retry of the latest chunk without appending twice. SQLite admission precedes binary writes; accepted bytes are flushed before their counters commit. Recording interruption keeps the original prefix, while malformed, missing, future or unconfirmed evidence is preserved and refused. Completed clips have SHA-256 verification and bounded read-only readers; closing drains accepted chunks and closes readers. Capture permissions and game execution authority are outside this component.
+
+`npm run test:packaged-video-archive -- --source artifacts/portable-desktop` exercises the actual application encoder, archive, exit/reopen and decoder using a short generated canvas animation. It never requests desktop/camera/microphone capture. This slice's recording UI, selected native-window capture, privacy masks and performance acceptance remain pending. The latest native-window probe observed a locked Windows desktop and stopped before granting capture; resume that check on an active desktop.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

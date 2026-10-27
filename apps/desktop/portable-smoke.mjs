@@ -15,6 +15,7 @@ import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile
 import { checkPowerLifecycle } from "./power-smoke.mjs";
 import { beginJournalSmoke, finishJournalSmoke } from "./journal-smoke.mjs";
 import { readJournalInterruptionCase, runJournalInterruptionSmoke } from "./journal-interruption-smoke.mjs";
+import { readVideoArchiveCase, runVideoArchiveSmoke } from "./video-archive-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -33,10 +34,12 @@ export async function runPortableSmoke(driver) {
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
 	const journalInterruption = await readJournalInterruptionCase(context);
+	const videoArchiveCase = await readVideoArchiveCase(context);
 	if (journalInterruption) {
-		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
+		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
 		await runJournalInterruptionSmoke(driver, journalInterruption, manifest); return;
 	}
+	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest); return; }
 	if (driver.commandCase) {
 		assert.equal(manifest.portableCommandFaults, 2); assert.equal(manifest.nativeCommandProcessObserver, 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
