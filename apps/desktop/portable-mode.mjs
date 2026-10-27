@@ -5,6 +5,29 @@ import { tmpdir } from "node:os";
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
 export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
+export const portableCommandScenarios = Object.freeze(["reload", "runtime"]);
+export function portableCommandCase(argv) {
+	const values = argv.filter(arg => arg.startsWith("--portable-command"));
+	if (!values.length) return null;
+	const faults = values.filter(arg => arg.startsWith("--portable-command-loss=")), resume = values.includes("--portable-command-resume");
+	const scenario = faults[0]?.slice("--portable-command-loss=".length);
+	if (!argv.includes("--portable-smoke") || faults.length !== 1 || values.length !== (resume ? 2 : 1) || !portableCommandScenarios.includes(scenario) || argv.some(arg => /^--portable-(?:runtime-loss|mcp-loss|diagnostics|storage)/.test(arg))) throw new Error("PACKAGED_PORTABLE_COMMAND_CASE_REQUIRED");
+	return { scenario, resume };
+}
+
+export function assertPortableCommandAction(action, args, { rootId } = {}) {
+	if (["snapshot", "status", "viewport", "focus-ui", "close", "profiles", "targets"].includes(action)) return;
+	if (["game", "bridge"].includes(action) && args?.action === "snapshot") return;
+	if (action === "profiles-manage" && args?.action === "list") return;
+	if (action === "workbench") {
+		if (["state", "task", "ui-get", "ui-save"].includes(args?.action)) return;
+		if (typeof rootId === "string" && args?.args?.rootId === rootId) {
+			if (["checks", "list", "read", "diff", "refresh"].includes(args.action)) return;
+			if (args.action === "check" && args.args.checkId === "npm:test") return;
+		}
+	}
+	throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+}
 export function portableStorageCase(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-storage"));
 	if (!values.length) return null;
@@ -78,7 +101,7 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
-	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv);
+	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
@@ -86,6 +109,8 @@ export async function preparePortableMode(app, argv, env = process.env) {
 	if (diagnostic) allowed.add("--portable-diagnostics");
 	if (storage) allowed.add("--portable-storage-fault=" + storage.scenario);
 	if (storage?.resume) allowed.add("--portable-storage-resume");
+	if (command) allowed.add("--portable-command-loss=" + command.scenario);
+	if (command?.resume) allowed.add("--portable-command-resume");
 	if (diagnostic && argv.includes("--managed-ui")) allowed.add("--smoke-diagnostics-ui");
 	if ((scenario && scenario !== "idle" || mcpScenario || storage) && argv.includes("--managed-ui")) allowed.add("--smoke-game-ui");
 	if (!app.isPackaged || argv.some(arg => arg.startsWith("--") && !allowed.has(arg)) || !/^[a-f0-9-]{36}$/.test(env.COMMANDDECK_PORTABLE_RUN_ID ?? "") || !isAbsolute(env.COMMANDDECK_PORTABLE_ROOT ?? "")) throw new Error("PACKAGED_PORTABLE_SMOKE_REQUIRED");

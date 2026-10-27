@@ -75,6 +75,7 @@ jobs:
       - run: npm run test:packaged-mcp-loss -- --source artifacts/portable-desktop
       - run: npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
       - run: npm run test:packaged-storage -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-command -- --source artifacts/portable-desktop
       - run: npm run installer:toolchain
       - run: npm run package:installer -- --source artifacts/portable-desktop --output artifacts/installer
       - name: Build isolated installer candidate
@@ -98,6 +99,7 @@ jobs:
             .local/desktop-smoke-diagnostics.json
             .local/packaged-diagnostics-smoke.json
             .local/packaged-storage-smoke.json
+            .local/packaged-command-smoke.json
             .local/desktop-smoke-game-mcp-accepted.json
             .local/desktop-smoke-game-mcp-lost-ack.json
             .local/desktop-smoke-runtime-loss.json

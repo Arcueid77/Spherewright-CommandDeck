@@ -10,6 +10,7 @@ import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.
 import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
+import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -25,6 +26,13 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	if (driver.commandCase) {
+		assert.equal(manifest.portableCommandFaults, 1); assert.equal(manifest.nativeCommandProcessObserver, 1);
+		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
+		const proof = await runCommandFaultSmoke(driver);
+		await writeFile(join(context.root, "command-" + (driver.commandCase.resume ? "resume" : "fault") + "-application.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true }), { flag: "wx" });
+		return;
+	}
 	if (driver.storageCase) {
 		assert.equal(manifest.portableStorageFaults, 1); assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		const scenarioDriver = { ...driver, runId: context.runId };
