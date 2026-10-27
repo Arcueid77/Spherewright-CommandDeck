@@ -13,6 +13,7 @@ import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerP
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 import { JournalPanel } from "./journal";
+import { VideosPanel } from "./videos";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -61,6 +62,7 @@ declare global {
 			snapshot(): Promise<UiSnapshot>;
 			resumeSystem(): Promise<PowerState>;
 			journal<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			video<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			profiles(): Promise<Profile[]>;
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
@@ -409,6 +411,7 @@ const components = {
 	evidence: EvidencePanel,
 	events: EventPanel,
 	journal: JournalPanel,
+	videos: VideosPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
 	"game-agent": GameTasksPanel,
@@ -505,6 +508,7 @@ function App() {
 				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("journal")) api.addPanel({ id: "journal", component: "journal", title: "运行日记 / 回放", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("journal")?.api.setActive(); }}>运行日记</button>
+				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("videos")) api.addPanel({ id: "videos", component: "videos", title: "本地录像", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("videos")?.api.setActive(); }}>录像</button>
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
 			{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>

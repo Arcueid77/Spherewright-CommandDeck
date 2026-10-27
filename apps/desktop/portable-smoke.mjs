@@ -17,7 +17,7 @@ import { beginJournalSmoke, finishJournalSmoke } from "./journal-smoke.mjs";
 import { readJournalInterruptionCase, runJournalInterruptionSmoke } from "./journal-interruption-smoke.mjs";
 import { readVideoArchiveCase, runVideoArchiveSmoke } from "./video-archive-smoke.mjs";
 
-export async function runPortableSmoke(driver) {
+export async function runPortableSmoke(driver, videoArchive) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
 	async function settledUi() { const until = performance.now() + 5000; while (getUi()?.nativeProbePending) { assert.ok(performance.now() < until, "UI_NATIVE_PROBE_DID_NOT_SETTLE"); await new Promise(resolve => setTimeout(resolve, 25)); } }
 	assert.equal(app.isPackaged, true);
@@ -39,7 +39,7 @@ export async function runPortableSmoke(driver) {
 		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
 		await runJournalInterruptionSmoke(driver, journalInterruption, manifest); return;
 	}
-	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest); return; }
+	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.equal(manifest.videoPlaybackUi, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest, videoArchive); return; }
 	if (driver.commandCase) {
 		assert.equal(manifest.portableCommandFaults, 2); assert.equal(manifest.nativeCommandProcessObserver, 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);

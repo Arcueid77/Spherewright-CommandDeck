@@ -351,5 +351,8 @@ ul {
 .reference-form p { font-size: 12px; color: #91a5b4; }
 .task-references .statusline { flex-wrap: wrap; }
 .output-panel { overflow: auto; }
+.videos-panel { overflow: auto; }
+.videos-panel select { display: block; width: 100%; margin: 7px 0; }
+.videos-panel video { display: block; width: 100%; max-height: 55vh; min-height: 90px; margin: 12px 0; background: #000; }
 .output-panel > pre { flex: 1 0 80px; }
 .task-references .statusline { display: flex; gap: 6px; align-items: center; overflow-wrap: anywhere; }

@@ -1,9 +1,12 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, protocol } from "electron";
 import { once } from "node:events";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { confirmResearchFromUi } from "./research-confirmation.mjs";
+import { createVideoProtocol, videoScheme, videoPlaybackUrl } from "./video-protocol.mjs";
+
+protocol.registerSchemesAsPrivileged([{ scheme: videoScheme, privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const rendererFile = join(root, "dist/renderer/index.html");
@@ -22,6 +25,7 @@ let window,
 	closing = false;
 let confirmingGame = false;
 let diagnosticSaving = false, documentGeneration = 0;
+const videoEntries = new Map(); let videoSelection = 0;
 const pending = new Map();
 function send(message) {
 	if (process.connected) process.send(message, () => {});
@@ -185,6 +189,7 @@ if (typeof process.send !== "function") {
 				(_contents, _permission, callback) => callback(false),
 			);
 			window.webContents.session.setPermissionCheckHandler(() => false);
+			await window.webContents.session.protocol.handle(videoScheme, createVideoProtocol({ entries: videoEntries, generation: () => documentGeneration, read: (grant, generation, offset, length) => request("video", { action: "read", generation, args: { grant, offset, length } }) }));
 			const handle = (channel, action) =>
 				ipcMain.handle(channel, async (event, args) => {
 					if (
@@ -213,6 +218,18 @@ if (typeof process.send !== "function") {
 				"deck:resume-system": "resume-system",
 			}))
 				handle(channel, (args) => request(action, args));
+			handle("deck:video", async args => {
+				if (!args || !["snapshot", "open", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
+				if (args.action === "snapshot") return request("video", { action: "snapshot" });
+				if (args.action === "close") {
+					const entry = videoEntries.get(args.args?.grant); videoEntries.delete(args.args?.grant);
+					return entry ? request("video", { action: "close", generation: entry.generation, args: { grant: args.args.grant } }) : { closed: true };
+				}
+				const generation = documentGeneration, selection = ++videoSelection; videoEntries.clear();
+				const opened = await request("video", { action: "open", generation, args: { id: args.args?.id } });
+				if (generation !== documentGeneration || selection !== videoSelection || closing) { await request("video", { action: "close", generation, args: { grant: opened.grant } }); throw new Error("VIDEO_UI_CHANGED"); }
+				videoEntries.set(opened.grant, { ...opened, generation }); return { ...opened, url: videoPlaybackUrl(opened.grant) };
+			});
 			handle("deck:game", (args) => {
 				if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
 				return request("game", args);
@@ -272,7 +289,7 @@ if (typeof process.send !== "function") {
 				window.focus();
 				return result;
 			});
-			window.webContents.on("did-start-loading", () => send({ type: "ui-document", generation: ++documentGeneration }));
+			window.webContents.on("did-start-loading", () => { videoSelection++; videoEntries.clear(); send({ type: "ui-document", generation: ++documentGeneration }); });
 			window.webContents.on("did-finish-load", () =>
 				send({ type: "ui-loaded" }),
 			);

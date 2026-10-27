@@ -40,6 +40,8 @@ import { PowerLifecycle, bindPowerMonitor } from "./power-lifecycle.mjs";
 import { EventJournal } from "./event-journal.mjs";
 import { journalLimits } from "./journal-format.mjs";
 import { runJournalSmoke } from "./journal-smoke.mjs";
+import { VideoArchive, videoArchiveLimits } from "./video-archive.mjs";
+import { VideoPlaybackSessions } from "./video-playback.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -104,6 +106,7 @@ let runtime,
 	testSequence = 0,
 	restarts = 0;
 let runtimeExit, blockedWindow, desktopTray, journal, journalBuild, journalError, disposePowerMonitor, powerInspectionFault = false, initializingRuntime = true;
+let videoArchive, videoArchiveError;
 let recovering = false,
 	stopping = false,
 	allowQuit = false;
@@ -116,6 +119,8 @@ const state = {
 	events: [],
 };
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
+const videoPlayback = new VideoPlaybackSessions({ getArchive: () => videoArchive, isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering });
+function invalidateVideo(owner) { void videoPlayback.invalidate(owner).catch(() => console.error("VIDEO_READER_CLOSE_UNCONFIRMED")); }
 const diagnostics = new DiagnosticExports({
 	isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering,
 	protectedRoots: [privateDirectory, dirname(privateDirectory), ...(portableContext ? [join(portableContext.root, "ui-profile")] : []), ...(app.isPackaged ? [dirname(process.execPath)] : [])],
@@ -315,7 +320,7 @@ async function api(action, args, source) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game"].includes(action) && args?.action === "snapshot";
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot";
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -329,6 +334,15 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, power: systemPower.snapshot(), events: [...state.events] };
+	if (action === "video") {
+		if (!args || !["snapshot", "open", "read", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
+		if (args.action === "snapshot") return videoArchive?.snapshot() ?? { available: false, error: videoArchiveError ?? "VIDEO_ARCHIVE_NOT_READY", activeId: null, limits: videoArchiveLimits, recordings: [] };
+		if (source !== ui || !source?.registered) throw new Error("TRUSTED_UI_REQUIRED");
+		if (args.action === "open") return videoPlayback.open(source, args.generation, args.args?.id);
+		if (args.action === "close") return videoPlayback.close(source, args.generation, args.args?.grant);
+		const bytes = await videoPlayback.read(source, args.generation, args.args?.grant, args.args?.offset, args.args?.length);
+		return { bytes: bytes.length, data: Buffer.from(bytes).toString("base64") };
+	}
 	if (action === "journal") {
 		if (!args || !["snapshot", "read", "start", "stop", "bookmark"].includes(args.action)) throw new Error("INVALID_JOURNAL_ACTION");
 		if (!journal) { if (args.action === "snapshot") return { available: false, error: journalError ?? "JOURNAL_NOT_READY", activeId: null, scope: "host-events-v1", limits: journalLimits, recordings: [] }; throw new Error("JOURNAL_STORAGE_UNAVAILABLE"); }
@@ -546,6 +560,7 @@ function startUi() {
 			record.nativeProbeUnknowns = 0;
 		} else if (message.type === "ui-document" && record.registered && Number.isSafeInteger(message.generation) && message.generation > record.documentGeneration) {
 			diagnostics.invalidate(record);
+			invalidateVideo(record);
 			record.documentGeneration = message.generation;
 		} else if (message.type === "ui-loaded" && record.registered) {
 			record.loaded++;
@@ -590,6 +605,7 @@ function startUi() {
 	});
 	child.on("error", () => record.rejectReady(new Error("UI_LAUNCH_FAILED")));
 	child.on("exit", () => {
+		invalidateVideo(record);
 		clearTimeout(record.startupTimer);
 		clearUiTests(record);
 		if (!record.loaded) record.rejectReady(new Error("UI_EXITED_BEFORE_READY"));
@@ -614,6 +630,7 @@ async function recoverUi(reason, expected = ui) {
 	const old = ui;
 	game.invalidateUi(old.epoch);
 	diagnostics.invalidate(old);
+	invalidateVideo(old);
 	const heartbeatAgeMs = performance.now() - old.lastHeartbeat;
 	recordUiLifecycle({ kind: "recovery", reason, epoch: old.epoch, heartbeatAgeMs, exited: old.child.exitCode !== null || old.child.signalCode !== null, nativeProbe: old.lastNativeProbe });
 	clearUiTests(old);
@@ -759,6 +776,8 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
 	try { journal?.close(); } catch { console.error("JOURNAL_CLOSE_UNCONFIRMED"); }
+	await withDeadline(videoPlayback.drain(), 3000, "VIDEO_PLAYBACK_CLOSE_UNCONFIRMED").catch(() => console.error("VIDEO_PLAYBACK_CLOSE_UNCONFIRMED"));
+	if (videoArchive) await withDeadline(videoArchive.close(), 3000, "VIDEO_ARCHIVE_CLOSE_UNCONFIRMED").catch(() => console.error("VIDEO_ARCHIVE_CLOSE_UNCONFIRMED"));
 	disposePowerMonitor?.();
 	desktopTray?.destroy();
 	if (preserveApplication && runtime) await runtimeExit.stop();
@@ -876,6 +895,8 @@ if (!app.hasSingleInstanceLock()) {
 			journalBuild = await readDiagnosticBuild(root, { packaged: app.isPackaged });
 			try { journal = new EventJournal(join(privateDirectory, smoke ? "journal-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "journal"), { notify: () => send(ui, { type: "event", event: { type: "journal-changed" } }) }); }
 			catch (error) { journalError = /^JOURNAL_[A-Z_]+$/.test(error?.message ?? "") ? error.message : "JOURNAL_STORAGE_UNAVAILABLE"; }
+			try { videoArchive = new VideoArchive(join(privateDirectory, smoke ? "video-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "video"), { notify: () => send(ui, { type: "event", event: { type: "video-changed" } }) }); }
+			catch (error) { videoArchiveError = /^VIDEO_[A-Z_]+$/.test(error?.message ?? "") ? error.message : "VIDEO_ARCHIVE_UNAVAILABLE"; }
 			initializingRuntime = false;
 			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
@@ -894,7 +915,7 @@ if (!app.hasSingleInstanceLock()) {
 			await attachFromCommandLine(process.argv);
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
-				await runPortableSmoke({ getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss || storageCase ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, registerCommandWorkspace, profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); }, stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); }, tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); }, getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; }, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
+				await runPortableSmoke({ getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss || storageCase ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, registerCommandWorkspace, profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); }, stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); }, tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); }, getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; }, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } }, videoArchive);
 				await shutdown(); return;
 			}
 			if (process.argv.includes("--demo-fixture")) {

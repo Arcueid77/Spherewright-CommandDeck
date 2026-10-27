@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { lstat, readFile, writeFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { VideoArchive } from "./video-archive.mjs";
 
 export const videoArchiveCaseFile = "video-archive-case.private.json";
 export async function readVideoArchiveCase(context) {
@@ -36,8 +35,8 @@ await wait(0.15);const first=sample();await wait(1.1);const second=sample();vide
 }catch(error){return {error:String(error?.message??error)}}finally{video?.pause();video?.remove();if(url)URL.revokeObjectURL(url)}
 })()`; }
 
-export async function runVideoArchiveSmoke(driver, fixture, manifest) {
-	const archive = new VideoArchive(join(driver.privateDirectory, "video-archive-fixture")); let reader;
+export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
+	assert.ok(archive && !archive.closed && !archive.error, "HOST_VIDEO_ARCHIVE_REQUIRED"); let reader;
 	const runtime = driver.getRuntimePid(), sequence = driver.getProbeSequence(); assert.equal(sequence, 0);
 	try {
 		const work = await driver.api("workbench", { action: "state" }), game = await driver.api("game", { action: "snapshot" }), bridge = await driver.api("bridge", { action: "snapshot" });
@@ -59,10 +58,34 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest) {
 		const bytes = await reader.read(0, recording.bytes), decoded = await driver.testCommand("evaluate", { source: videoArchiveDecodeScript(bytes.toString("base64")) });
 		assert.equal(decoded.error, undefined); assert.equal(decoded.width, 160); assert.equal(decoded.height, 90); assert.notEqual(decoded.first.hash, decoded.second.hash, "DECODED_VIDEO_DID_NOT_ADVANCE");
 		for (const pixel of [decoded.first.pixel, decoded.second.pixel]) for (let index = 0; index < 3; index++) assert.ok(Math.abs(pixel[index] - [64, 128, 192][index]) <= 15, "DECODED_CANVAS_PIXELS_UNCONFIRMED");
-		await reader.close(); reader = null; await archive.close(); await driver.testCommand("reload");
+		await reader.close(); reader = null;
+		await checkVideoPlaybackUi(driver, recording, archive);
 		assert.equal(driver.getRuntimePid(), runtime); assert.equal(driver.getProbeSequence(), sequence);
-		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, readerReadOnly: true, uiReloadRetainsRuntimeWithoutModel: true, modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
+		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, readerReadOnly: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, uiReloadRetainsRuntimeWithoutModel: true, modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
 		await writeFile(join(driver.context.root, "video-archive-" + fixture.phase + ".json"), JSON.stringify(proof), { flag: "wx" });
-	} finally { await reader?.close(); if (!archive.closed) await archive.close(); }
+	} finally { await reader?.close(); }
 	assert.equal(await driver.getTray().activate("exit"), true);
+}
+
+async function checkVideoPlaybackUi(driver, recording, archive) {
+	const evaluate = source => driver.testCommand("evaluate", { source });
+	const until = async (predicate, label) => { const deadline = performance.now() + 10000; while (!await predicate()) { assert.ok(performance.now() < deadline, "VIDEO_UI_TIMEOUT_" + label); await new Promise(resolve => setTimeout(resolve, 40)); } };
+	const open = async () => {
+		await until(() => evaluate("[...document.querySelectorAll('header button')].some(button=>button.textContent==='录像'&&!button.disabled)"), "HEADER");
+		await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true");
+		await until(() => evaluate("[...document.querySelectorAll('.videos-panel button')].some(button=>button.textContent==='打开播放'&&!button.disabled)"), "OPEN");
+		assert.equal(await evaluate("document.querySelector('.videos-panel select').value"), recording.id);
+		await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='打开播放').click();true");
+		await until(() => evaluate("Boolean(document.querySelector('.videos-panel video')?.readyState>=1)"), "METADATA");
+		const played = await evaluate("(async()=>{const video=document.querySelector('.videos-panel video');await video.play();const deadline=performance.now()+7000;while(video.currentTime<1.1){if(video.error||performance.now()>deadline)throw new Error('VIDEO_PLAYBACK_DID_NOT_ADVANCE');await new Promise(resolve=>setTimeout(resolve,25))}video.pause();return {width:video.videoWidth,height:video.videoHeight,time:video.currentTime,frames:video.getVideoPlaybackQuality().totalVideoFrames,url:video.src}})()");
+		assert.equal(played.width, 160); assert.equal(played.height, 90); assert.ok(played.frames >= 2); assert.ok(played.time >= 1.1); assert.match(played.url, /^deck-video:\/\/stream\/[a-f0-9-]{36}$/); return played.url;
+	};
+	const first = await open();
+	const denied = await evaluate("(async()=>{const rows=[];for(const action of ['start','commit','replay','resume','read']){try{await window.deck.video(action);rows.push(false)}catch{rows.push(true)}}return rows})()"); assert.deepEqual(denied, [true, true, true, true, true]);
+	await driver.testCommand("reload"); await until(async () => archive.readers.size === 0, "RELOAD_CLOSE");
+	const stale = await evaluate(`(async()=>{const video=document.createElement('video');video.muted=true;video.src=${JSON.stringify(first)};try{return await new Promise(resolve=>{const timer=setTimeout(()=>resolve('timeout'),4000);video.onerror=()=>{clearTimeout(timer);resolve('refused')};video.onloadedmetadata=()=>{clearTimeout(timer);resolve('opened')};video.load()})}finally{video.removeAttribute('src');video.load()}})()`); assert.equal(stale, "refused");
+	const second = await open(); assert.notEqual(second, first);
+	await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='关闭播放').click();true");
+	await until(async () => archive.readers.size === 0 && !await evaluate("Boolean(document.querySelector('.videos-panel video'))"), "PLAYER_CLOSE");
+	assert.deepEqual(archive.snapshot().recordings, [recording]); assert.equal(archive.active, null);
 }

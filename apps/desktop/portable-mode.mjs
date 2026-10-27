@@ -78,6 +78,7 @@ export function assertPortableRuntimeAction(action, args, { scenario, internal =
 }
 
 export function assertPortableAction(action, args) {
+	if (action === "video" && ["snapshot", "open", "read", "close"].includes(args?.action)) return;
 	if (action === "journal" && ["snapshot", "read", "start", "stop", "bookmark"].includes(args?.action)) return;
 	if (["resume-system", "snapshot", "status", "targets", "viewport", "focus-ui", "start-fixture", "detach", "abort", "close", "profiles"].includes(action)) return;
 	if (action === "attach" && args === "owned-fixture") return;
