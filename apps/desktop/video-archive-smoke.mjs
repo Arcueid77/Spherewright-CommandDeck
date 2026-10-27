@@ -11,7 +11,7 @@ export async function readVideoArchiveCase(context) {
 	const value = JSON.parse(await readFile(file, "utf8")); assert.deepEqual(Object.keys(value).sort(), ["phase", "runId", "version"]); assert.equal(value.version, 1); assert.equal(value.runId, context.runId); assert.ok(["record", "reopen"].includes(value.phase)); return value;
 }
 
-const encode = `(async()=>{
+export const videoArchiveEncodeScript = `(async()=>{
 let stream, recorder, timer;
 try {
 const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const context=canvas.getContext('2d');let frames=0;
@@ -25,7 +25,7 @@ return {chunks:await Promise.all(chunks),mime:recorder.mimeType,canvasUpdates:fr
 } catch(error){return {error:String(error?.message??error)}}
 finally{clearInterval(timer);if(recorder?.state==='recording')recorder.stop();for(const track of stream?.getTracks()??[])track.stop()}
 })()`;
-function decode(base64) { return `(async()=>{
+export function videoArchiveDecodeScript(base64) { return `(async()=>{
 let url,video;try{
 const bytes=Uint8Array.from(atob(${JSON.stringify(base64)}),value=>value.charCodeAt(0));url=URL.createObjectURL(new Blob([bytes],{type:'video/webm'}));
 video=document.createElement('video');video.muted=true;video.style.cssText='position:fixed;right:0;bottom:0;width:160px;height:90px';video.src=url;document.body.append(video);await video.play();
@@ -45,7 +45,8 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest) {
 		let recording, updates = 0;
 		if (fixture.phase === "record") {
 			assert.equal(archive.snapshot().recordings.length, 0);
-			const encoded = await driver.testCommand("evaluate", { source: encode }); assert.equal(encoded.error, undefined); assert.equal(encoded.source, "generated-canvas-only"); assert.equal(encoded.mime, "video/webm;codecs=vp8"); assert.equal(encoded.audioTracks, 0); assert.ok(encoded.canvasUpdates >= 8);
+			const encoded = await driver.testCommand("evaluate", { source: videoArchiveEncodeScript }); assert.equal(encoded.error, undefined); assert.equal(encoded.source, "generated-canvas-only"); assert.equal(encoded.mime, "video/webm;codecs=vp8"); assert.equal(encoded.audioTracks, 0); assert.ok(encoded.canvasUpdates >= 8);
+			await writeFile(join(driver.context.root, "video-archive-encoding.private.json"), JSON.stringify({ mime: encoded.mime, canvasUpdates: encoded.canvasUpdates, chunks: encoded.chunks.map(value => ({ bytes: value.length, header: Buffer.from(value).subarray(0, 16).toString("hex") })) }), { flag: "wx" });
 			const id = (await archive.start({ width: 160, height: 90, frameRate: 10, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit })).activeId;
 			for (let index = 0; index < encoded.chunks.length; index++) await archive.append(id, index + 1, Uint8Array.from(encoded.chunks[index]));
 			await archive.finish(id); recording = archive.snapshot().recordings[0]; updates = encoded.canvasUpdates;
@@ -55,7 +56,7 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest) {
 			assert.equal(archive.snapshot().activeId, null); assert.deepEqual(archive.snapshot().recordings, [expected.recording]); recording = expected.recording;
 		}
 		assert.equal(recording.state, "complete"); assert.ok(recording.bytes < 32768); reader = await archive.openReader(recording.id); assert.equal(reader.readOnly, true); assert.equal(reader.executionAuthority, false); assert.equal(reader.observedSha256, recording.sha256);
-		const bytes = await reader.read(0, recording.bytes), decoded = await driver.testCommand("evaluate", { source: decode(bytes.toString("base64")) });
+		const bytes = await reader.read(0, recording.bytes), decoded = await driver.testCommand("evaluate", { source: videoArchiveDecodeScript(bytes.toString("base64")) });
 		assert.equal(decoded.error, undefined); assert.equal(decoded.width, 160); assert.equal(decoded.height, 90); assert.notEqual(decoded.first.hash, decoded.second.hash, "DECODED_VIDEO_DID_NOT_ADVANCE");
 		for (const pixel of [decoded.first.pixel, decoded.second.pixel]) for (let index = 0; index < 3; index++) assert.ok(Math.abs(pixel[index] - [64, 128, 192][index]) <= 15, "DECODED_CANVAS_PIXELS_UNCONFIRMED");
 		await reader.close(); reader = null; await archive.close(); await driver.testCommand("reload");

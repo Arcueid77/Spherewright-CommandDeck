@@ -69,3 +69,13 @@ test("runtime catalog corruption latches without rewriting the original row duri
 	try { const row = db.prepare("SELECT state,mime,bytes FROM recordings WHERE id=?").get(id); assert.equal(row.state, "recording"); assert.equal(row.mime, "invalid-private-data"); assert.equal(row.bytes, 0); } finally { db.close(); }
 	assert.equal((await readFile(join(f.directory, id + ".webm"))).length, 0);
 });
+test("WebM initialization may span fragments while invalid continuations and incomplete completion remain refused", async t => {
+	const f = await fixture(t), archive = f.open(), id = (await archive.start(metadata)).activeId;
+	await archive.append(id, 1, first.subarray(0, 1)); await archive.append(id, 1, first.subarray(0, 1));
+	await assert.rejects(archive.append(id, 2, Buffer.from([0xff])), /VIDEO_WEBM_HEADER_REQUIRED/);
+	await archive.append(id, 2, first.subarray(1, 2)); await archive.append(id, 3, first.subarray(2)); await archive.finish(id);
+	const reader = await archive.openReader(id); assert.deepEqual(await reader.read(0, first.length), first); await reader.close();
+	const incomplete = (await archive.start(metadata)).activeId; await archive.append(incomplete, 1, first.subarray(0, 1)); await archive.finish(incomplete);
+	const row = archive.snapshot().recordings.find(row => row.id === incomplete); assert.equal(row.state, "interrupted"); assert.equal(row.reason, "no_data"); assert.equal(row.bytes, 1); assert.equal(row.sha256, null);
+	await assert.rejects(archive.openReader(incomplete), /VIDEO_PLAYBACK_UNAVAILABLE/);
+});

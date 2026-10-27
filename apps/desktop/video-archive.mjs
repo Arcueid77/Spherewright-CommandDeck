@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 
 export const videoArchiveLimits = Object.freeze({ recordings: 32, recordingBytes: 134217728, chunkBytes: 2097152, readBytes: 1048576 });
 export const videoMime = "video/webm;codecs=vp8";
+const webmHeader = Buffer.from("1a45dfa3", "hex");
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const revision = value => typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
 const reasons = ["user_stopped", "application_exit", "application_interrupted", "ui_lost", "power_interrupted", "window_changed", "byte_limit", "no_data"];
@@ -71,7 +72,7 @@ export class VideoArchive {
 			const id = randomUUID(); let file;
 			try { file = await open(this.path(id), "wx", 0o600); this.db.prepare("INSERT INTO recordings VALUES(?,'recording',?,NULL,0,0,0,?,?,?,?,?,?,?,NULL,NULL)").run(id, this.utc(), videoMime, metadata.width, metadata.height, metadata.frameRate, revision(metadata.sourceRevision), revision(metadata.piCommit), metadata.journalId ?? null); }
 			catch { await file?.close().catch(() => {}); await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
-			this.active = { id, file, bytes: 0, chunks: 0, elapsed: 0, started: this.now(), hash: createHash("sha256"), last: null }; this.notice(); return this.snapshot();
+			this.active = { id, file, bytes: 0, chunks: 0, elapsed: 0, header: Buffer.alloc(0), started: this.now(), hash: createHash("sha256"), last: null }; this.notice(); return this.snapshot();
 		});
 	}
 	append(id, sequence, data) {
@@ -82,7 +83,8 @@ export class VideoArchive {
 			const hash = createHash("sha256").update(bytes).digest("hex");
 			if (sequence === active.chunks && active.last?.hash === hash) return active.last.receipt;
 			if (!Number.isSafeInteger(sequence) || sequence !== active.chunks + 1) throw new Error("VIDEO_CHUNK_SEQUENCE_CHANGED");
-			if (!active.chunks && (bytes.length < 4 || bytes.subarray(0, 4).toString("hex") !== "1a45dfa3")) throw new Error("VIDEO_WEBM_HEADER_REQUIRED");
+			const header = Buffer.concat([active.header, bytes.subarray(0, Math.max(0, 4 - active.header.length))]);
+			if (!header.equals(webmHeader.subarray(0, header.length))) throw new Error("VIDEO_WEBM_HEADER_REQUIRED");
 			if (active.bytes + bytes.length > this.limits.recordingBytes) { await this.interruptActive("byte_limit"); throw new Error("VIDEO_RECORDING_BYTE_LIMIT"); }
 			let transaction = false;
 			try {
@@ -91,7 +93,7 @@ export class VideoArchive {
 				for (let offset = 0; offset < bytes.length;) { const written = await active.file.write(bytes, offset, bytes.length - offset, active.bytes + offset); if (!written.bytesWritten) throw new Error("VIDEO_WRITE_INCOMPLETE"); offset += written.bytesWritten; }
 				await active.file.sync(); const elapsed = this.elapsed();
 				this.db.prepare("UPDATE recordings SET bytes=?,chunks=?,elapsed_ms=? WHERE id=? AND state='recording'").run(active.bytes + bytes.length, sequence, elapsed, id); this.db.exec("COMMIT"); transaction = false;
-				active.bytes += bytes.length; active.chunks = sequence; active.elapsed = elapsed; active.hash.update(bytes);
+				active.bytes += bytes.length; active.chunks = sequence; active.elapsed = elapsed; active.header = header; active.hash.update(bytes);
 				const receipt = { id, sequence, bytes: active.bytes }; active.last = { hash, receipt }; this.notice(); return receipt;
 			} catch { if (transaction) try { this.db.exec("ROLLBACK"); } catch {} await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 		});
@@ -99,7 +101,7 @@ export class VideoArchive {
 	finish(id) {
 		return this.queue(async () => {
 			this.assertWritable(); if (!this.active || this.active.id !== id) throw new Error("VIDEO_RECORDING_CHANGED"); const active = this.active;
-			if (!active.bytes) { await this.interruptActive("no_data"); return this.snapshot(); }
+			if (active.header.length < 4) { await this.interruptActive("no_data"); return this.snapshot(); }
 			try { await active.file.sync(); this.db.prepare("UPDATE recordings SET state='complete',stopped_at=?,elapsed_ms=?,reason='user_stopped',sha256=? WHERE id=? AND state='recording'").run(this.utc(), this.elapsed(), active.hash.digest("hex"), id); await active.file.close(); this.active = null; this.notice(); return this.snapshot(); }
 			catch { await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 		});
@@ -120,8 +122,8 @@ export class VideoArchive {
 		const reader = { close: () => { closed = true; return closing ??= file.close().then(() => { this.readers.delete(reader); }, error => { closing = null; throw error; }); } }; this.readers.add(reader);
 		try {
 			if (!current.isFile() || current.nlink !== 1 || current.ino !== info.ino || current.dev !== info.dev || current.size !== info.size) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
-			const hash = createHash("sha256"), buffer = Buffer.alloc(65536); let offset = 0;
-			while (offset < row.bytes) { if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE"); const result = await file.read(buffer, 0, Math.min(buffer.length, row.bytes - offset), offset); if (!result.bytesRead) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); if (offset === 0 && buffer.subarray(0, 4).toString("hex") !== "1a45dfa3") throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); hash.update(buffer.subarray(0, result.bytesRead)); offset += result.bytesRead; }
+			const hash = createHash("sha256"), buffer = Buffer.alloc(65536); let offset = 0, header = Buffer.alloc(0);
+			while (offset < row.bytes) { if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE"); const result = await file.read(buffer, 0, Math.min(buffer.length, row.bytes - offset), offset); if (!result.bytesRead) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); header = Buffer.concat([header, buffer.subarray(0, Math.min(result.bytesRead, Math.max(0, 4 - header.length)))]); if (!header.equals(webmHeader.subarray(0, header.length))) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); hash.update(buffer.subarray(0, result.bytesRead)); offset += result.bytesRead; }
 			const digest = hash.digest("hex"); if (row.sha256 !== null && digest !== row.sha256) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
 			const final = await file.stat(); if (final.size !== current.size || final.mtimeMs !== current.mtimeMs || final.ctimeMs !== current.ctimeMs) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
 			if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE");
