@@ -11,6 +11,7 @@ import { bundleExecutable, copyBundleTree, verifyBundle, inventoryBundle } from 
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { commandFixtureFiles } from "../apps/desktop/command-fault-smoke.mjs";
 import { portableCommandScenarios } from "../apps/desktop/portable-mode.mjs";
+import { copyCommandToolchain } from "./command-toolchain-fixture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_COMMAND_BUNDLE_REQUIRED");
@@ -20,12 +21,13 @@ const proofRoot = join(root, ".local/packaged-command", runId); await mkdir(proo
 const directories = [], cases = []; let passed = false;
 async function temporary() { const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))); directories.push(directory); return directory; }
 const copyRoot = await temporary(), copy = join(copyRoot, "bundle"), toolchain = join(copyRoot, "trusted-toolchain");
+await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, copyRoot, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
 	// Developer checks use an explicit real Node/npm and Git installation. They
 	// are outside the approved workspace; this is not an SDK-free acceptance.
 	const originalNode = await realpath(process.execPath), originalNpm = await realpath(join(dirname(originalNode), "node_modules/npm"));
-	await mkdir(toolchain); await copyBundleTree(originalNode, join(toolchain, "node.exe")); await copyBundleTree(originalNpm, join(toolchain, "node_modules/npm"));
+	await mkdir(toolchain); await copyBundleTree(originalNode, join(toolchain, "node.exe")); await mkdir(join(toolchain, "node_modules")); await copyCommandToolchain(originalNpm, join(toolchain, "node_modules/npm"));
 	const gitExe = execFileSync(join(process.env.SystemRoot, "System32/where.exe"), ["git.exe"], { windowsHide: true, encoding: "utf8" }).trim().split(/\r?\n/)[0]; assert.ok((await lstat(gitExe)).isFile());
 	const toolchainBefore = await inventoryBundle(toolchain), nodeSha256 = createHash("sha256").update(await readFile(originalNode)).digest("hex");
 	for (const scenario of portableCommandScenarios) {
@@ -93,7 +95,7 @@ try {
 		cases.push({ scenario, applicationRuns: 2, phases, independentOwnedImageExitObservedAfterEachRun: true, externalCounterRemainsOne: true, externalHeartbeatUnchangedAcrossRestart: true, originalRecordsVerifiedReadOnlyAfterEachExit: true });
 	}
 	assert.deepEqual(await inventoryBundle(toolchain), toolchainBefore); await verifyBundle(copy); await verifyBundle(source);
-	const proof = { packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, cases, applicationRuns: 4, actualPackagedApplication: true, outsideSourceCheckout: true, realDeveloperToolchainRequired: true, nodeSha256, bundleAndCopiedToolchainUnchanged: true, scopedImagesOnly: true, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
+	const proof = { packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, cases, applicationRuns: 4, actualPackagedApplication: true, outsideSourceCheckout: true, realDeveloperToolchainRequired: true, npmConfigurationExcluded: true, nodeSha256, bundleAndCopiedToolchainUnchanged: true, scopedImagesOnly: true, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-command-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
 	console.log(JSON.stringify({ packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: 4, gameCalls: 0, realModelRequests: 0 }));
 } finally {
