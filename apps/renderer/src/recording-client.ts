@@ -3,7 +3,7 @@ import { paintMaskedVideo } from "../../desktop/video-frame.mjs";
 
 export type RecordingState = { phase: string; error: string | null; permit: string | null; recordingId: string | null; profile: string; masks: RecordingMask[]; size: { width: number; height: number; frameRate: number } | null; cleanupPending: boolean; bytes: number; chunks: number };
 type ClientState = RecordingState & { busy: boolean; notice: string; preview: MediaStream | null; drawnFrames: number };
-type Runtime = { permit: string; input: MediaStream; output: MediaStream; video: HTMLVideoElement; canvas: HTMLCanvasElement; timer: ReturnType<typeof setInterval>; masks: RecordingMask[]; drawn: number; closed: boolean; stopping: boolean; recorder?: MediaRecorder; stopped?: Promise<void>; sink: Promise<void>; pending: number; sequence: number };
+type Runtime = { permit: string; input: MediaStream; output: MediaStream; encoderOutput?: MediaStream; video: HTMLVideoElement; canvas: HTMLCanvasElement; timer: ReturnType<typeof setInterval>; masks: RecordingMask[]; render: () => void; drawn: number; closed: boolean; stopping: boolean; recorder?: MediaRecorder; stopped?: Promise<void>; sink: Promise<void>; pending: number; sequence: number };
 const call = <T,>(action: string, args: Record<string, unknown> = {}) => window.deck.recording<T>(action, args);
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 function bounded<T>(promise: Promise<T>, ms: number): Promise<T> { let timer: ReturnType<typeof setTimeout>; return Promise.race([promise, new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error("VIDEO_OPERATION_TIMEOUT")), ms); })]).finally(() => clearTimeout(timer)); }
@@ -34,7 +34,7 @@ class RecordingClient {
 	private cleanup() {
 		for (const track of this.acquiring?.getTracks() ?? []) track.stop(); this.acquiring = null;
 		const runtime = this.runtime; this.runtime = null;
-		if (runtime) { runtime.closed = true; clearInterval(runtime.timer); if (runtime.recorder?.state === "recording") runtime.recorder.stop(); runtime.video.pause(); runtime.video.srcObject = null; for (const track of [...runtime.input.getTracks(), ...runtime.output.getTracks()]) track.stop(); }
+		if (runtime) { runtime.closed = true; clearInterval(runtime.timer); if (runtime.recorder?.state === "recording") runtime.recorder.stop(); runtime.video.pause(); runtime.video.srcObject = null; for (const track of [...runtime.input.getTracks(), ...runtime.output.getTracks(), ...runtime.encoderOutput?.getTracks() ?? []]) track.stop(); }
 		this.publish({ preview: null });
 	}
 	async cancel(notice = "预览已关闭。") {
@@ -61,8 +61,8 @@ class RecordingClient {
 			const context = composition.getContext("2d", { alpha: false }), committed = canvas.getContext("2d", { alpha: false }); if (!context || !committed) throw new Error("VIDEO_FRAME_UNAVAILABLE");
 			const draw = (masks: RecordingMask[]) => { paintMaskedVideo(context, video, canvas.width, canvas.height, masks); committed.drawImage(composition, 0, 0); };
 			draw(ready.masks); const output = canvas.captureStream(ready.size.frameRate);
-			const runtime: Runtime = { permit, input, output, video, canvas, masks: ready.masks, drawn: 1, closed: false, stopping: false, timer: setInterval(() => {}, 100000), sink: Promise.resolve(), pending: 0, sequence: 0 }; clearInterval(runtime.timer);
-			runtime.timer = setInterval(() => { if (runtime.closed) return; try { draw(runtime.masks); runtime.drawn++; } catch (error) { void this.cancel(message(error)); } }, 1000 / ready.size.frameRate);
+			const runtime: Runtime = { permit, input, output, video, canvas, masks: ready.masks, render: () => { draw(runtime.masks); runtime.drawn++; }, drawn: 1, closed: false, stopping: false, timer: setInterval(() => {}, 100000), sink: Promise.resolve(), pending: 0, sequence: 0 }; clearInterval(runtime.timer);
+			runtime.timer = setInterval(() => { if (runtime.closed) return; try { runtime.render(); } catch (error) { void this.cancel(message(error)); } }, 1000 / ready.size.frameRate);
 			this.acquiring = null; this.runtime = runtime;
 			for (const track of input.getTracks()) { track.addEventListener("ended", () => { if (!runtime.closed) void this.cancel("窗口捕获已结束。"); }); track.addEventListener("mute", () => { if (!runtime.closed) void this.cancel("窗口捕获暂不可用，已停止录制。"); }); }
 			this.publish({ ...ready, preview: output, drawnFrames: 1 });
@@ -71,7 +71,7 @@ class RecordingClient {
 	}
 	async masks(masks: RecordingMask[]) {
 		const runtime = this.runtime; if (!runtime || this.state.phase !== "preview" || this.state.busy) return; const ticket = ++this.operation; this.publish({ busy: true });
-		try { const state = await call<RecordingState>("set-masks", { permit: runtime.permit, masks }); if (ticket === this.operation && !runtime.closed) { runtime.masks = state.masks; this.publish(state); } }
+		try { const state = await call<RecordingState>("set-masks", { permit: runtime.permit, masks }); if (ticket === this.operation && !runtime.closed) { runtime.masks = state.masks; runtime.render(); this.publish(state); } }
 		catch (error) { if (ticket === this.operation) await this.cancel(message(error)); }
 		finally { if (ticket === this.operation) this.publish({ busy: false }); }
 	}
@@ -79,7 +79,8 @@ class RecordingClient {
 		const runtime = this.runtime; if (!runtime || this.state.phase !== "preview" || this.state.busy) return; const ticket = ++this.operation; this.publish({ busy: true, notice: "" });
 		try {
 			const state = await call<RecordingState>("start", { permit: runtime.permit }); if (ticket !== this.operation || runtime.closed) return; this.publish(state);
-			const recorder = new MediaRecorder(runtime.output, { mimeType: "video/webm;codecs=vp8", videoBitsPerSecond: recordingProfiles[this.state.profile].bitsPerSecond }); runtime.recorder = recorder;
+			runtime.render(); runtime.encoderOutput = runtime.canvas.captureStream(recordingProfiles[this.state.profile].frameRate);
+			const recorder = new MediaRecorder(runtime.encoderOutput, { mimeType: "video/webm;codecs=vp8", videoBitsPerSecond: recordingProfiles[this.state.profile].bitsPerSecond }); runtime.recorder = recorder;
 			runtime.stopped = new Promise<void>((resolve, reject) => { recorder.onstop = () => resolve(); recorder.onerror = () => reject(new Error("VIDEO_ENCODER_FAILED")); }); void runtime.stopped.catch(() => { if (!runtime.closed) void this.cancel("编码器已停止，接受的片段会保留。"); });
 			recorder.ondataavailable = event => {
 				if (runtime.closed || !event.data.size) return;

@@ -232,6 +232,8 @@ Recording controls are now implemented in **录像**: **准备选定窗口 → �
 
 Normal stop drains accepted encoded chunks. Window/document changes, lock, hidden UI or write pressure stop admission and retain the original prefix; a fresh preview is required to restart. Unconfirmed cleanup blocks another capture until the original UI confirms closure or its replacement/exit is established. Closing the video dock tab keeps recording active; capture state and a stop control remain in the header. Hiding the whole UI stops capture. Ten focused cases, all 365 Node22 tests, type/renderer builds and the existing journal/power desktop checks passed. A generated-canvas source run also retained a black mask and visible changing content through actual WebM encoding/archive/decode, with no desktop capture. The updated packaged check exercises the real coordinator/archive using explicitly synthetic source ports and checks that mask after both starts; it does not prove production recording controls or native-window capture. Those require an active desktop and remain pending; the latest native preflight stopped at a locked desktop before granting any source.
 
+Mask updates are committed synchronously before starting an encoder, and recording gets a fresh canvas track rather than reusing preview frames. The strengthened encoded fixture first generates an unmasked preview, commits its mask, creates the fresh encoder track, then checks the very first decoded frame at time zero and a later frame after both application starts. Its `encodedPrivacyFixture: 2` capability requires a rebuilt package; prior masked-video evidence does not cover this stronger first-frame check.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

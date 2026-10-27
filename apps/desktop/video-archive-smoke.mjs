@@ -13,28 +13,28 @@ export async function readVideoArchiveCase(context) {
 }
 
 export const videoArchiveEncodeScript = `(async()=>{
-let stream, recorder, timer;
+let stream, previewStream, recorder, timer;
 try {
 const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const context=canvas.getContext('2d');let frames=0;
-const raw=document.createElement('canvas'),staging=document.createElement('canvas');raw.width=staging.width=160;raw.height=staging.height=90;const rawContext=raw.getContext('2d'),stagingContext=staging.getContext('2d');const paint=${paintMaskedVideo.toString()};
-const draw=()=>{rawContext.fillStyle='rgb(64,128,192)';rawContext.fillRect(0,0,160,90);rawContext.fillStyle='rgb(224,80,32)';rawContext.fillRect((frames++*11)%140,75,20,15);paint(stagingContext,raw,160,90,[{x:0,y:0,width:2500,height:2500}]);context.drawImage(staging,0,0)};draw();
+const raw=document.createElement('canvas'),staging=document.createElement('canvas');raw.width=staging.width=160;raw.height=staging.height=90;const rawContext=raw.getContext('2d'),stagingContext=staging.getContext('2d');const paint=${paintMaskedVideo.toString()};let masks=[];
+const draw=()=>{rawContext.fillStyle='rgb(64,128,192)';rawContext.fillRect(0,0,160,90);rawContext.fillStyle='rgb(224,80,32)';rawContext.fillRect((frames++*11)%140,75,20,15);paint(stagingContext,raw,160,90,masks);context.drawImage(staging,0,0)};draw();previewStream=canvas.captureStream(15);await new Promise(resolve=>setTimeout(resolve,100));masks=[{x:0,y:0,width:2500,height:2500}];draw();
 stream=canvas.captureStream(15);if(stream.getAudioTracks().length)throw new Error('UNEXPECTED_AUDIO');
 recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8',videoBitsPerSecond:200000});const chunks=[];
 recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data.arrayBuffer().then(value=>Array.from(new Uint8Array(value))))};
 const stopped=new Promise((resolve,reject)=>{recorder.onstop=resolve;recorder.onerror=()=>reject(new Error('OWN_CANVAS_RECORDER_FAILED'))});
 recorder.start(250);timer=setInterval(draw,100);await new Promise(resolve=>setTimeout(resolve,1800));recorder.stop();await stopped;
-return {chunks:await Promise.all(chunks),mime:recorder.mimeType,canvasUpdates:frames,source:'generated-canvas-only',audioTracks:stream.getAudioTracks().length,maskedBeforeEncoding:true};
+return {chunks:await Promise.all(chunks),mime:recorder.mimeType,canvasUpdates:frames,source:'generated-canvas-only',audioTracks:stream.getAudioTracks().length,maskedBeforeEncoding:true,freshEncoderTrackAfterMask:true};
 } catch(error){return {error:String(error?.message??error)}}
-finally{clearInterval(timer);if(recorder?.state==='recording')recorder.stop();for(const track of stream?.getTracks()??[])track.stop()}
+finally{clearInterval(timer);if(recorder?.state==='recording')recorder.stop();for(const track of [...stream?.getTracks()??[],...previewStream?.getTracks()??[]])track.stop()}
 })()`;
 export function videoArchiveDecodeScript(base64) { return `(async()=>{
 let url,video;try{
 const bytes=Uint8Array.from(atob(${JSON.stringify(base64)}),value=>value.charCodeAt(0));url=URL.createObjectURL(new Blob([bytes],{type:'video/webm'}));
-video=document.createElement('video');video.muted=true;video.style.cssText='position:fixed;right:0;bottom:0;width:160px;height:90px';video.src=url;document.body.append(video);await video.play();
+video=document.createElement('video');video.muted=true;video.preload='auto';video.style.cssText='position:fixed;right:0;bottom:0;width:160px;height:90px';video.src=url;document.body.append(video);
 const deadline=performance.now()+7000;const wait=async time=>{while(video.readyState<2||video.currentTime<time){if(performance.now()>deadline)throw new Error('OWN_VIDEO_DECODE_TIMEOUT');await new Promise(resolve=>setTimeout(resolve,25))}};
 const canvas=document.createElement('canvas');canvas.width=160;canvas.height=90;const context=canvas.getContext('2d',{willReadFrequently:true});
 const sample=()=>{context.drawImage(video,0,0,160,90);const row=context.getImageData(0,82,160,1).data;let hash=2166136261;for(const value of row)hash=Math.imul(hash^value,16777619);return {hash:hash>>>0,pixel:Array.from(context.getImageData(8,8,1,1).data),visiblePixel:Array.from(context.getImageData(80,30,1,1).data)}};
-await wait(0.15);const first=sample();await wait(1.1);const second=sample();video.pause();return {width:video.videoWidth,height:video.videoHeight,first,second,time:video.currentTime};
+await wait(0);const first=sample(),firstTime=video.currentTime;await video.play();await wait(1.1);const second=sample();video.pause();return {width:video.videoWidth,height:video.videoHeight,first,second,firstTime,time:video.currentTime};
 }catch(error){return {error:String(error?.message??error)}}finally{video?.pause();video?.remove();if(url)URL.revokeObjectURL(url)}
 })()`; }
 
@@ -50,6 +50,7 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 			const encoded = await driver.testCommand("evaluate", { source: videoArchiveEncodeScript }); assert.equal(encoded.error, undefined); assert.equal(encoded.source, "generated-canvas-only"); assert.equal(encoded.mime, "video/webm;codecs=vp8"); assert.equal(encoded.audioTracks, 0); assert.ok(encoded.canvasUpdates >= 8);
 			await writeFile(join(driver.context.root, "video-archive-encoding.private.json"), JSON.stringify({ mime: encoded.mime, canvasUpdates: encoded.canvasUpdates, chunks: encoded.chunks.map(value => ({ bytes: value.length, header: Buffer.from(value).subarray(0, 16).toString("hex") })) }), { flag: "wx" });
 			assert.equal(encoded.maskedBeforeEncoding, true);
+			assert.equal(encoded.freshEncoderTrackAfterMask, true);
 			// Synthetic ports exercise the actual coordinator/archive with generated
 			// canvas bytes. They never invoke OS capture or the production UI grant.
 			const owner = {}, source = { version: 1, sourceId: "window:1:0", windowBinding: "f".repeat(32), width: 160, height: 90, layoutRevision: 1, gamePid: 1, gameStartedTicks: "639000000000000000", kind: "fixture", targetId: "generated-canvas-only" };
@@ -69,12 +70,13 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 		assert.equal(recording.state, "complete"); assert.ok(recording.bytes < 32768); reader = await archive.openReader(recording.id); assert.equal(reader.readOnly, true); assert.equal(reader.executionAuthority, false); assert.equal(reader.observedSha256, recording.sha256);
 		const bytes = await reader.read(0, recording.bytes), decoded = await driver.testCommand("evaluate", { source: videoArchiveDecodeScript(bytes.toString("base64")) });
 		assert.equal(decoded.error, undefined); assert.equal(decoded.width, 160); assert.equal(decoded.height, 90); assert.notEqual(decoded.first.hash, decoded.second.hash, "DECODED_VIDEO_DID_NOT_ADVANCE");
+		assert.equal(decoded.firstTime, 0, "FIRST_DECODED_FRAME_NOT_SAMPLED");
 		for (const pixel of [decoded.first.pixel, decoded.second.pixel]) for (let index = 0; index < 3; index++) assert.ok(pixel[index] <= 8, "DECODED_PRIVACY_MASK_UNCONFIRMED");
 		for (const pixel of [decoded.first.visiblePixel, decoded.second.visiblePixel]) for (let index = 0; index < 3; index++) assert.ok(Math.abs(pixel[index] - [64, 128, 192][index]) <= 15, "DECODED_CANVAS_PIXELS_UNCONFIRMED");
 		await reader.close(); reader = null;
 		await checkVideoPlaybackUi(driver, recording, archive);
 		assert.equal(driver.getRuntimePid(), runtime); assert.equal(driver.getProbeSequence(), sequence);
-		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, privacyMaskRetainedOnDecode: true, generatedCanvasCoordinatorRoundtrip: fixture.phase === "record", readerReadOnly: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, uiReloadRetainsRuntimeWithoutModel: true, modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
+		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, privacyMaskRetainedOnDecode: true, privacyFirstDecodedFrameVerified: true, generatedCanvasCoordinatorRoundtrip: fixture.phase === "record", readerReadOnly: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, uiReloadRetainsRuntimeWithoutModel: true, modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
 		await writeFile(join(driver.context.root, "video-archive-" + fixture.phase + ".json"), JSON.stringify(proof), { flag: "wx" });
 	} finally { await reader?.close(); }
 	assert.equal(await driver.getTray().activate("exit"), true);
