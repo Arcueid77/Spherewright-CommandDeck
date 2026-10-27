@@ -25,6 +25,7 @@ export async function beginJournalSmoke(driver, previous) {
 	return { previous: false, id: (await request(driver, "snapshot")).activeId };
 }
 export async function finishJournalSmoke(driver, recording) {
+	await openPanel(driver);
 	const sequence = driver.getProbeSequence(), runtime = driver.getRuntimePid(), native = await driver.api("status");
 	let archive = recording.archive;
 	if (!recording.previous) {
