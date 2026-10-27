@@ -9,6 +9,7 @@ import { runGameSmoke } from "./game-smoke.mjs";
 import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.mjs";
 import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
+import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -24,6 +25,13 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	if (driver.storageCase) {
+		assert.equal(manifest.portableStorageFaults, 1); assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
+		const scenarioDriver = { ...driver, runId: context.runId };
+		const proof = driver.storageCase.resume ? await runStorageResumeSmoke(scenarioDriver) : await runGameSmoke(scenarioDriver);
+		await writeFile(join(context.root, "storage-" + (driver.storageCase.resume ? "resume" : "fault") + "-application.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, syntheticFactoryOnly: true }), { flag: "wx" });
+		return;
+	}
 	if (driver.diagnostics) {
 		assert.equal(manifest.portableDiagnostics, 1); assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		const proof = await runDiagnosticSmoke(driver), report = JSON.parse(await readFile(join(context.root, "diagnostic-export.json"), "utf8"));

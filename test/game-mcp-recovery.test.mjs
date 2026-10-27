@@ -36,8 +36,16 @@ async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } 
 	try { await bridge.select(marker); } catch (error) { throw new Error(diagnostics.at(-1) ?? error.message); } const host = open();
 	const start = target => (target ?? host).start({ mode: "assist", techId: 100, providerId: "synthetic-provider", modelId: "fixture", prompt: "One normal enqueue only" });
 	async function submitted() { start(); const before = await host.settled(), challenge = host.confirmation(before.currentTaskId, 1); host.confirm(approval, challenge.nonce, 1); const value = await host.settled(); await clients[0].exited; assert.equal(clients[0].exitConfirmed, true); assert.equal(value.phase, "blocked"); assert.equal(value.developmentFrozen, true); const world = JSON.parse(await readFile(worldPath, "utf8")); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); return value.unresolved[0]; }
-	return { host, open, start, submitted, bridge, authority, clients, world: async () => JSON.parse(await readFile(worldPath, "utf8")), frozen: () => frozen, modelRequests: () => modelRequests, changeCohort: () => { cohortChanged = true; } };
+	return { host, open, start, submitted, bridge, authority, approval, clients, world: async () => JSON.parse(await readFile(worldPath, "utf8")), frozen: () => frozen, modelRequests: () => modelRequests, changeCohort: () => { cohortChanged = true; } };
 }
+
+test("the persistent normal storage fixture retains one original action across a service restart without injecting a disconnect", async t => {
+	const f = await fixture(t, "storage-normal"); f.start(); const prepared = await f.host.settled(), challenge = f.host.confirmation(prepared.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); const completed = await f.host.settled(); assert.equal(completed.phase, "completed"); const original = completed.tasks[0].intent;
+	await f.bridge.disconnect(); assert.equal(f.clients[0].exitConfirmed, true); await f.bridge.connect();
+	const client = f.clients[1], result = await client.researchPort(f.authority).result({ actionId: original.actionId }); assert.equal(result.result.actionId, original.actionId); assert.equal(result.result.idempotencyKey, original.idempotencyKey);
+	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 2); assert.equal(world.resultReads, 2); assert.equal(world.lossInjected, false); assert.equal(f.modelRequests(), 1);
+});
 
 test("accepted MCP exit can explicitly reconnect and reconcile only the original action without replay", async t => {
 	const f = await fixture(t), original = await f.submitted(); assert.equal(original.state, "accepted"); assert.equal(original.actionId, "synthetic-action");

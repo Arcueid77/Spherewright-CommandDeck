@@ -7,15 +7,16 @@ import { join } from "node:path";
 import { ReadOnlyMcpClient } from "./mcp-client.mjs";
 import { runGameRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
 import { runGameMcpLossSmoke } from "./mcp-loss-smoke.mjs";
+import { runGameStorageFaultSmoke } from "./storage-fault-smoke.mjs";
 import { preparePortableFixtureDirectory, createSyntheticResearchWorld, syntheticMcpEnvironment } from "./synthetic-scope.mjs";
 
 export function gameFixtureOptions(root, runId, { mode = "normal", directory = join(root, ".local/m3-smoke", runId) } = {}) {
 	if (!/^[0-9a-f-]{36}$/.test(runId ?? "")) throw new Error("EXPLICIT_GAME_SMOKE_REQUIRED");
-	assert.ok(["normal", "pending", "mcp-drop-after-accept", "mcp-lost-ack"].includes(mode));
+	assert.ok(["normal", "pending", "mcp-drop-after-accept", "mcp-lost-ack", "storage-normal"].includes(mode));
 	const marker = join(directory, "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M3_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
-		launch(_selection, { researchAuthority }) { const persistent = ["mcp-drop-after-accept", "mcp-lost-ack"].includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
+		launch(_selection, { researchAuthority }) { const persistent = ["mcp-drop-after-accept", "mcp-lost-ack", "storage-normal"].includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
 	};
 }
 
@@ -24,7 +25,7 @@ export async function runGameSmoke(driver) {
 	const scenario = driver.runtimeScenario ?? (process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
 	const base = driver.context ? await preparePortableFixtureDirectory(driver.context) : join(driver.root, ".local/m3-smoke", driver.runId), marker = join(base, "Spherewright.Mcp.exe");
 	await mkdir(base, { recursive: true }); await writeFile(marker, "OWNED_M3_SYNTHETIC_FIXTURE", { flag: "wx" });
-	if (driver.mcpLossScenario) await createSyntheticResearchWorld(base, driver.runId);
+	if (driver.mcpLossScenario || driver.storageCase) await createSyntheticResearchWorld(base, driver.runId);
 	const key = "synthetic-game-smoke-" + randomUUID(), profileId = "deckvault-" + randomUUID(); let requests = 0;
 	const server = createServer(async (request, response) => {
 		assert.equal(request.headers.authorization, "Bearer " + key); let body = ""; for await (const part of request) body += part;
@@ -72,6 +73,7 @@ export async function runGameSmoke(driver) {
 		const denied = await evaluate("(async()=>{let count=0;for(const action of ['approve','commit','game-confirmed','game-confirmation'])try{await window.deck.game(action,{userConfirmed:true})}catch{count++}try{await window.deck.workbench('game-end')}catch{count++}try{await window.deck.workbench('agent',{})}catch{count++}return count})()"); assert.equal(denied, 6);
 		await assert.rejects(driver.api("bridge", { action: "disconnect" }), /GAME_TASK_OWNS_BRIDGE/);
 		await until(async () => (await evaluate("document.body.innerText")).includes("等待你确认"), "APPROVAL_DISPLAY");
+		if (driver.storageCase) return await runGameStorageFaultSmoke(driver, { evaluate, state, until, requests: () => requests, base });
 		if (driver.mcpLossScenario) { await runGameMcpLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
 		if (scenario) { await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
 		if (!physical) await driver.testCommand("answer-game-confirmation", { response: 0 });

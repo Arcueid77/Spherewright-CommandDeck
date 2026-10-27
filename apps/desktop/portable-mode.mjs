@@ -4,6 +4,21 @@ import { tmpdir } from "node:os";
 
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
 export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
+export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
+export function portableStorageCase(argv) {
+	const values = argv.filter(arg => arg.startsWith("--portable-storage"));
+	if (!values.length) return null;
+	const faults = values.filter(arg => arg.startsWith("--portable-storage-fault=")), resume = values.includes("--portable-storage-resume");
+	const scenario = faults[0]?.slice("--portable-storage-fault=".length);
+	if (!argv.includes("--portable-smoke") || faults.length !== 1 || values.length !== (resume ? 2 : 1) || !portableStorageScenarios.includes(scenario) || argv.some(arg => /^--portable-(?:runtime-loss|mcp-loss|diagnostics)/.test(arg))) throw new Error("PACKAGED_PORTABLE_STORAGE_CASE_REQUIRED");
+	return { scenario, resume };
+}
+
+export function assertPortableStorageAction(action, args, { internal = false } = {}) {
+	if (["probe", "attach", "start-fixture"].includes(action)) throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	if (["diagnostics-preview", "diagnostics-begin-save", "diagnostics-write", "diagnostics-cancel-save", "diagnostics-discard"].includes(action)) return;
+	return assertPortableRuntimeAction(action, args, { scenario: "confirmation", internal });
+}
 export function portableDiagnosticMode(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-diagnostics"));
 	if (!values.length) return false;
@@ -63,14 +78,16 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
-	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv);
+	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
 	if (mcpScenario) allowed.add("--portable-mcp-loss=" + mcpScenario);
 	if (diagnostic) allowed.add("--portable-diagnostics");
+	if (storage) allowed.add("--portable-storage-fault=" + storage.scenario);
+	if (storage?.resume) allowed.add("--portable-storage-resume");
 	if (diagnostic && argv.includes("--managed-ui")) allowed.add("--smoke-diagnostics-ui");
-	if ((scenario && scenario !== "idle" || mcpScenario) && argv.includes("--managed-ui")) allowed.add("--smoke-game-ui");
+	if ((scenario && scenario !== "idle" || mcpScenario || storage) && argv.includes("--managed-ui")) allowed.add("--smoke-game-ui");
 	if (!app.isPackaged || argv.some(arg => arg.startsWith("--") && !allowed.has(arg)) || !/^[a-f0-9-]{36}$/.test(env.COMMANDDECK_PORTABLE_RUN_ID ?? "") || !isAbsolute(env.COMMANDDECK_PORTABLE_ROOT ?? "")) throw new Error("PACKAGED_PORTABLE_SMOKE_REQUIRED");
 	const root = await realpath(env.COMMANDDECK_PORTABLE_ROOT), info = await lstat(root);
 	if (!info.isDirectory() || dirname(root).toLowerCase() !== (await realpath(tmpdir())).toLowerCase() || !basename(root).startsWith("commanddeck-desktop-smoke-")) throw new Error("PORTABLE_SMOKE_ROOT_INVALID");
