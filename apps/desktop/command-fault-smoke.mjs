@@ -60,7 +60,7 @@ export async function runCommandFaultSmoke(driver) {
 		await until(async () => { try { return await readFile(join(driver.context.root, "command-observed.release"), "utf8") === "owned command images observed\n"; } catch (error) { if (error.code === "ENOENT") return false; throw error; } }, "EXTERNAL_COMMAND_OBSERVATION");
 		if (scenario === "runtime") {
 			const stopped = await driver.stopRuntimeForSmoke(); assert.equal(stopped.pid, runtimePid); assert.equal(stopped.exitObserved, true); runtimeExitObserved = true;
-			await until(() => evaluate("document.body.innerText.includes('开发运行时已停止')"), "RUNTIME_STOP_NOTICE");
+			await until(() => evaluate("(()=>{const panel=document.querySelector('.development-panel');return Boolean(panel?.textContent.includes('开发运行时已停止')&&['开始任务','停止任务','运行检查'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.disabled)))})()"), "RUNTIME_STOP_NOTICE");
 			await assert.rejects(request("state"), /INVALID_WORKBENCH_ACTION|RUNTIME_UNAVAILABLE/);
 		} else {
 			await driver.testCommand("reload"); await ready(); assert.equal(driver.getRuntimePid(), runtimePid);
