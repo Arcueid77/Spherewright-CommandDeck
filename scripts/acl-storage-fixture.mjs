@@ -11,7 +11,7 @@ const hash = value => createHash("sha256").update(value).digest("hex");
 async function invoke(scope, operation, descriptors = {}) {
 	await ownedStorageFile(scope);
 	const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Root", scope.root, "-File", scope.file, "-Operation", operation];
-	if (operation !== "inspect") args.push("-OriginalDacl", descriptors.originalDacl, "-DeniedDacl", descriptors.deniedDacl);
+	if (["deny", "restore"].includes(operation)) args.push("-OriginalDacl", descriptors.originalDacl, "-DeniedDacl", descriptors.deniedDacl);
 	const temporaryParent = await realpath(tmpdir());
 	return await new Promise((resolve, reject) => {
 		const child = spawn(join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"), args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TEMP: temporaryParent, TMP: temporaryParent, PSModulePath: join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/Modules") } });
@@ -21,8 +21,8 @@ async function invoke(scope, operation, descriptors = {}) {
 		child.once("error", error => { clearTimeout(timer); reject(error); });
 		child.once("close", code => {
 			clearTimeout(timer);
-			const failure = stderr.match(/ACL_FIXTURE_[A-Z_]+_FAILED:([a-z-]+:[A-Za-z0-9_.-]{1,180})/)?.[1];
-			if (code !== 0 || timedOut || oversized) return reject(new Error("ACL_FIXTURE_" + operation.toUpperCase() + "_FAILED" + (failure ? ":" + failure : "")));
+			const failure = stderr.match(/ACL_FIXTURE_[A-Z_-]+_FAILED:([a-z-]+:[A-Za-z0-9_.-]{1,180})/)?.[1], diff = stderr.match(/ACL_FIXTURE_DESCRIPTOR_DIFF:(\{[^\r\n]{1,2048}\})/)?.[1];
+			if (code !== 0 || timedOut || oversized) return reject(new Error("ACL_FIXTURE_" + operation.toUpperCase() + "_FAILED" + (failure ? ":" + failure : "") + (diff ? ":" + diff : "")));
 			try { const proof = JSON.parse(stdout); if (proof.version !== 1) throw new Error("ACL_FIXTURE_REPLY_INVALID"); resolve(proof); } catch (error) { reject(error); }
 		});
 	});
@@ -38,8 +38,12 @@ export async function denyOwnedAclFileWrites(scope) {
 	// Keep an explicit private recovery record even if the test controller exits.
 	await writeFile(join(scope.root, "acl-restore-" + randomUUID() + ".private.json"), JSON.stringify({ version: 1, root: scope.root, file: scope.file, ...descriptors }), { flag: "wx", mode: 0o600 });
 	leases.set(lease, { root: scope.root, file: scope.file, descriptors });
-	try { const proof = await invoke(scope, "deny", descriptors); if (!proof.denied || !proof.exactDaclReadback) throw new Error("ACL_FIXTURE_DENIAL_UNPROVEN"); }
-	catch (error) { await restoreOwnedAclFileWrites({ ...scope, lease }); throw error; }
+	try { const proof = await invoke(scope, "deny", descriptors); if (!proof.denied || !proof.exactDaclReadback || !proof.daclOnly || proof.ownerGroup !== descriptors.ownerGroup) throw new Error("ACL_FIXTURE_DENIAL_UNPROVEN"); }
+	catch (error) {
+		try { await restoreOwnedAclFileWrites({ ...scope, lease }); }
+		catch (restorationError) { throw new AggregateError([error, restorationError], "ACL_FIXTURE_DENIAL_AND_RESTORATION_FAILED"); }
+		throw error;
+	}
 	return lease;
 }
 
@@ -47,9 +51,15 @@ export async function restoreOwnedAclFileWrites({ root, file, lease }) {
 	const saved = leases.get(lease);
 	if (!saved || saved.root !== root || saved.file !== file) throw new Error("ACL_FIXTURE_RESTORE_LEASE_INVALID");
 	const proof = await invoke({ root, file }, "restore", saved.descriptors);
-	if (!proof.restored || !(proof.exactDaclReadback || proof.alreadyOriginal)) throw new Error("ACL_FIXTURE_RESTORATION_UNPROVEN");
+	if (!proof.restored || !(proof.exactDaclReadback || proof.alreadyOriginal) || proof.ownerGroup !== saved.descriptors.ownerGroup || (!proof.alreadyOriginal && !proof.daclOnly)) throw new Error("ACL_FIXTURE_RESTORATION_UNPROVEN");
 	leases.delete(lease);
-	return { exactOriginalDaclRestored: true, originalDaclSha256: lease.originalDaclSha256 };
+	return { exactOriginalDaclRestored: true, ownerGroupPreserved: true, originalDaclSha256: lease.originalDaclSha256 };
+}
+
+export async function protectOwnedAclFixture(scope) {
+	const proof = await invoke(scope, "protect-fixture");
+	if (!proof.protectedFixture || !proof.exactDaclReadback || !proof.daclOnly) throw new Error("ACL_FIXTURE_PROTECTION_UNPROVEN");
+	return { protectedFixture: true };
 }
 
 export async function assertOwnedAclReadonlyFile(scope) {

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { denyOwnedFileWrites, restoreOwnedFileWrites, assertOwnedReadonlyFile } from "../scripts/readonly-storage-fixture.mjs";
-import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile } from "../scripts/acl-storage-fixture.mjs";
+import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile, protectOwnedAclFixture } from "../scripts/acl-storage-fixture.mjs";
 import { WorkbenchStore } from "../apps/desktop/workbench-store.mjs";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { startupFailureCode } from "../apps/desktop/startup-failure.mjs";
@@ -68,4 +68,13 @@ test("both current ledgers refuse an actual ACL write denial before reporting st
 		assert.deepEqual(await readFile(f.file), before);
 		construct(f.file).close();
 	}
+});
+
+test("DACL-only changes preserve a protected file's exact permissions and owner/group", { skip: process.platform !== "win32" }, async t => {
+	const f = await fixture(t), before = await readFile(f.file);
+	assert.equal((await protectOwnedAclFixture(f)).protectedFixture, true);
+	const lease = await denyOwnedAclFileWrites(f);
+	try { await assertOwnedAclReadonlyFile(f); assert.deepEqual(await readFile(f.file), before); }
+	finally { const proof = await restoreOwnedAclFileWrites({ ...f, lease }); assert.equal(proof.exactOriginalDaclRestored, true); assert.equal(proof.ownerGroupPreserved, true); }
+	const db = new DatabaseSync(f.file); try { db.exec("INSERT INTO fixture VALUES('restored-protected')"); assert.equal(db.prepare("SELECT count(*) AS n FROM fixture").get().n, 2); } finally { db.close(); }
 });
