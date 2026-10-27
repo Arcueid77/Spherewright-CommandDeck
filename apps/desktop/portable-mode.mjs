@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
 export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
-export const portableCommandScenarios = Object.freeze(["reload", "runtime"]);
+export const portableCommandScenarios = Object.freeze(["reload", "runtime", "helper", "exit"]);
 export function portableCommandCase(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-command"));
 	if (!values.length) return null;

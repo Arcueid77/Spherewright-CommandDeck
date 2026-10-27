@@ -25,7 +25,7 @@ export async function prepareCommandHost(source, cache) {
 }
 
 // This manages normal Windows job descendants, not an OS sandbox for arbitrary same-user repository code.
-export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs = 180000, signal, onOutput = () => {} }) {
+export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs = 180000, signal, onOutput = () => {}, onHostSpawn }) {
 	if (process.platform !== "win32" || !isAbsolute(host) || !isAbsolute(executable) || !isAbsolute(cwd) || !Array.isArray(args) || args.some((value) => typeof value !== "string" || value.length > 8192 || value.includes("\0")) || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000) throw new Error("INVALID_MANAGED_COMMAND");
 	if (signal?.aborted) return Promise.reject(new Error("COMMAND_CANCELLED_BEFORE_START"));
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:API_?KEY|TOKEN|SECRET|PASSWORD|^PI_|^NODE_OPTIONS$|^ELECTRON_)/i.test(key)));
@@ -59,7 +59,6 @@ export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs 
 		child.on("error", (error) => { launchError = error.code; fail(); });
 		const deadline = setTimeout(() => { ownedTermination = true; child.kill(); }, timeoutMs + 15000);
 		signal?.addEventListener("abort", abort, { once: true });
-		child.stdin.write(JSON.stringify({ executable, arguments: args, directory: cwd, timeoutMs }) + "\n");
 		child.on("close", (code) => {
 			clearTimeout(deadline); signal?.removeEventListener("abort", abort);
 			if (!child.stdin.destroyed) child.stdin.end();
@@ -70,5 +69,9 @@ export function runManagedCommand({ host, executable, args = [], cwd, timeoutMs 
 				reject(error);
 			} else resolve({ exitCode: receipt.exitCode, reason: receipt.reason, treeConfirmed: true, streamsDrained: true, outputTruncated: receipt.outputTruncated === true });
 		});
+		// Only a trusted in-process owner receives this creation handle. It is
+		// never serialized to the renderer or resolved again from a process ID.
+		try { onHostSpawn?.(child); } catch { protocolFailed = true; ownedTermination = true; child.kill(); return; }
+		child.stdin.write(JSON.stringify({ executable, arguments: args, directory: cwd, timeoutMs }) + "\n");
 	});
 }

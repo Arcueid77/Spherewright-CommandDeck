@@ -24,9 +24,10 @@ async function executable(name) {
 }
 
 export class Workbench {
-	constructor({ directory, helperSource, emit = () => {}, resolveProfile }) {
+	constructor({ directory, helperSource, emit = () => {}, resolveProfile, onCommandHostSpawn }) {
 		this.directory = directory; this.helperSource = helperSource; this.emit = emit;
 		this.resolveProfile = resolveProfile; this.configurationBlocked = false;
+		this.onCommandHostSpawn = onCommandHostSpawn;
 		this.store = new WorkbenchStore(join(directory, "workbench.sqlite"));
 		this.workspace = new WorkspaceService(this.store);
 		this.store.recoverInterrupted();
@@ -142,7 +143,7 @@ export class Workbench {
 		if (signal.aborted) throw new Error("COMMAND_CANCELLED_BEFORE_START");
 		const invocation = this.store.beginInvocation(task.id, "workspace_check", { checkId, label: command.label, helper: host.identity });
 		try {
-			const result = await runManagedCommand({ ...command, host: host.executable, signal, onOutput: (value) => this.notify(task.id, "command-output", value) });
+			const result = await runManagedCommand({ ...command, host: host.executable, signal, onOutput: (value) => this.notify(task.id, "command-output", value), onHostSpawn: child => this.onCommandHostSpawn?.({ child, taskId: task.id, host: host.executable }) });
 			this.store.finishInvocation(invocation, { result, error: result.exitCode !== 0 || result.reason !== "exited" ? "CHECK_DID_NOT_PASS" : null });
 			this.notify(task.id, "check-result", { checkId, ...result });
 			if (result.exitCode !== 0 || result.reason !== "exited") throw new Error(result.reason === "timeout" ? "CHECK_TIMED_OUT" : "CHECK_DID_NOT_PASS");

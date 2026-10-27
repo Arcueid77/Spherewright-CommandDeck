@@ -110,6 +110,12 @@ test("helper loss after creation but before Resume cannot orphan a suspended roo
 	assert.throws(() => process.kill(processRecord.pid, 0), { code: "ESRCH" });
 });
 
+test("a failing trusted creation observer ends only its owned helper and cannot dispatch the command", windows, async (t) => {
+	const f = await fixture(t), marker = join(f.directory, "observer-failed.txt");
+	await assert.rejects(runManagedCommand({ ...f, cwd: f.directory, executable: process.execPath, args: ["-e", "require('node:fs').writeFileSync(process.argv[1],'must not run')", marker], onHostSpawn: () => { throw new Error("FIXTURE_OBSERVER_FAILED"); } }), error => error.message === "COMMAND_OUTCOME_UNKNOWN" && error.unknown === true && error.diagnostic.ownedTermination === true);
+	await assert.rejects(readFile(marker), { code: "ENOENT" });
+});
+
 test("missing helper receipt reports unknown and never a successful command", windows, async (t) => {
 	const f = await fixture(t);
 	await assert.rejects(runManagedCommand({ ...f, host: join(f.directory, "missing.exe"), cwd: f.directory, executable: process.execPath }), (error) => error.message === "COMMAND_OUTCOME_UNKNOWN" && error.unknown === true);

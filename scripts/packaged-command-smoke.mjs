@@ -16,7 +16,7 @@ import { copyCommandToolchain } from "./command-toolchain-fixture.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_COMMAND_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
-assert.equal(manifest.portableCommandFaults, 1, "PACKAGED_COMMAND_MODE_UNSUPPORTED_REBUILD_REQUIRED"); assert.equal(manifest.nativeCommandProcessObserver, 1);
+assert.equal(manifest.portableCommandFaults, 2, "PACKAGED_COMMAND_MODE_UNSUPPORTED_REBUILD_REQUIRED"); assert.equal(manifest.nativeCommandProcessObserver, 1);
 const proofRoot = join(root, ".local/packaged-command", runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
 async function temporary() { const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))); directories.push(directory); return directory; }
@@ -31,6 +31,7 @@ try {
 	const gitExe = execFileSync(join(process.env.SystemRoot, "System32/where.exe"), ["git.exe"], { windowsHide: true, encoding: "utf8" }).trim().split(/\r?\n/)[0]; assert.ok((await lstat(gitExe)).isFile());
 	const toolchainBefore = await inventoryBundle(toolchain), nodeSha256 = createHash("sha256").update(await readFile(originalNode)).digest("hex");
 	for (const scenario of portableCommandScenarios) {
+		const unknownCase = scenario === "runtime" || scenario === "helper";
 		const directory = await temporary(), caseId = randomUUID(), evidence = join(proofRoot, scenario), workspace = join(directory, "command-workspace"); await mkdir(evidence); await mkdir(workspace);
 		await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, scenario, directory, copy, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 		for (const [name, text] of Object.entries(commandFixtureFiles)) await writeFile(join(workspace, name), text, { flag: "wx" });
@@ -74,30 +75,43 @@ try {
 			assert.equal(remaining, 0); if (observationError) throw observationError; assert.equal(timedOut, false); assert.equal(code, 0, "COMMAND_APPLICATION_" + phase.toUpperCase() + "_FAILED");
 			const proofBytes = await readFile(join(directory, "command-" + phase + "-application.json")), proof = JSON.parse(proofBytes);
 			assert.equal(proof.runId, caseId); assert.equal(proof.commandScenario, scenario); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit);
-			for (const key of ["packaged", "visibleRenderer", "rendererNodeDisabled", "actualWorkbenchCommand", "realDeveloperToolchainRequired", "originalInvocationRetained", "noAutomaticReplay", "stoppedHeartbeatObserved", "noProbeAllocated"]) assert.equal(proof[key], true, key);
-			assert.equal(proof.originalCounter, 1); assert.equal(proof.gameCalls, 0); assert.equal(proof.realModelRequests, 0); assert.equal(proof.runtimeExitObserved, !resume && scenario === "runtime"); assert.equal(proof.unknownRemainsBlocked, resume && scenario === "runtime");
+			for (const key of ["packaged", "visibleRenderer", "rendererNodeDisabled", "actualWorkbenchCommand", "realDeveloperToolchainRequired", "originalInvocationRetained", "noAutomaticReplay", "noProbeAllocated"]) assert.equal(proof[key], true, key);
+			assert.equal(proof.stoppedHeartbeatObserved, resume || scenario !== "exit"); assert.equal(proof.normalExitWhileCommandRunning, !resume && scenario === "exit");
+			assert.equal(proof.originalCounter, 1); assert.equal(proof.gameCalls, 0); assert.equal(proof.realModelRequests, 0); assert.equal(proof.runtimeExitObserved, !resume && scenario === "runtime"); assert.equal(proof.helperExitObserved, !resume && scenario === "helper"); assert.equal(proof.unknownRemainsBlocked, unknownCase && (resume || scenario === "helper")); assert.equal(proof.explicitRetryRefusedBeforeInvocation, resume && unknownCase);
 			await writeFile(join(evidence, phase + "-application-proof.json"), proofBytes, { flag: "wx" }); phases.push(proof);
 			assert.equal(await readFile(join(workspace, ".local/count"), "utf8"), "1");
 			const heartbeat = await readFile(join(workspace, ".local/heartbeat"));
+			await new Promise(resolve => setTimeout(resolve, 150)); assert.deepEqual(await readFile(join(workspace, ".local/heartbeat")), heartbeat);
 			if (!resume) { heartbeatAfterFault = heartbeat; originalBytes = await readFile(join(directory, "command-original.private.json")); await writeFile(join(evidence, "original.private.json"), originalBytes, { flag: "wx" }); }
 			else { assert.deepEqual(heartbeat, heartbeatAfterFault); assert.deepEqual(await readFile(join(directory, "command-original.private.json")), originalBytes); }
 			const original = JSON.parse(originalBytes), db = new DatabaseSync(join(directory, "supervisor-profile/supervisor", "m1-smoke-" + caseId, "workbench.sqlite"), { readOnly: true });
 			try {
-				const tasks = db.prepare("SELECT id,state,scope,error FROM tasks").all(), originalTask = tasks.find(task => task.id === original.task.id); assert.equal(tasks.length, resume && scenario === "runtime" ? 2 : 1); assert.ok(originalTask); assert.deepEqual(JSON.parse(originalTask.scope), original.task.scope);
-				assert.equal(originalTask.state, scenario === "reload" ? "succeeded" : resume ? "interrupted" : "running");
+				const tasks = db.prepare("SELECT id,state,scope,error FROM tasks").all(), originalTask = tasks.find(task => task.id === original.task.id); assert.equal(tasks.length, resume && unknownCase ? 2 : 1); assert.ok(originalTask); assert.deepEqual(JSON.parse(originalTask.scope), original.task.scope);
+				assert.equal(originalTask.state, scenario === "reload" ? "succeeded" : scenario === "helper" ? "failed" : scenario === "exit" ? "cancelled" : resume ? "interrupted" : "running");
 				if (tasks.length === 2) { const refusal = tasks.find(task => task.id !== originalTask.id); assert.equal(refusal.state, "failed"); assert.equal(refusal.error, "DEVELOPMENT_EXECUTION_BLOCKED"); }
-				const invocations = db.prepare("SELECT * FROM invocations").all(); assert.equal(invocations.length, 1); assert.equal(invocations[0].id, original.task.invocations[0].id); assert.equal(invocations[0].state, scenario === "reload" ? "completed" : resume ? "unknown" : "prepared");
+				const invocations = db.prepare("SELECT * FROM invocations").all(); assert.equal(invocations.length, 1); assert.equal(invocations[0].id, original.task.invocations[0].id); assert.equal(invocations[0].state, scenario === "reload" ? "completed" : scenario === "helper" ? "unknown" : scenario === "exit" ? "failed" : resume ? "unknown" : "prepared");
 				assert.deepEqual(JSON.parse(invocations[0].arguments), original.task.invocations[0].arguments);
-				const frozen = db.prepare("SELECT value FROM ui_state WHERE key='execution-blocked'").get(); assert.equal(Boolean(frozen), resume && scenario === "runtime");
+				if (scenario === "exit") { const receipt = JSON.parse(invocations[0].result); assert.equal(receipt.reason, "cancelled"); assert.equal(receipt.treeConfirmed, true); assert.equal(receipt.streamsDrained, true); }
+				if (scenario === "helper") { const diagnostic = JSON.parse(invocations[0].result); assert.equal(diagnostic.created, true); assert.equal(diagnostic.started, true); assert.equal(diagnostic.receipt ?? null, null); }
+				const frozen = db.prepare("SELECT value FROM ui_state WHERE key='execution-blocked'").get(); assert.equal(Boolean(frozen), unknownCase && (resume || scenario === "helper"));
+				if (frozen) assert.equal(JSON.parse(frozen.value).taskId, original.task.id);
 			} finally { db.close(); }
+			if (!resume && scenario === "helper") {
+				// Remove only the derived marker in this test-owned profile after
+				// independent exit. Original command evidence stays untouched.
+				const fixture = new DatabaseSync(join(directory, "supervisor-profile/supervisor", "m1-smoke-" + caseId, "workbench.sqlite"));
+				try { const originalInvocations = fixture.prepare("SELECT * FROM invocations").all(); assert.equal(fixture.prepare("DELETE FROM ui_state WHERE key='execution-blocked'").run().changes, 1); assert.deepEqual(fixture.prepare("SELECT * FROM invocations").all(), originalInvocations); } finally { fixture.close(); }
+				await writeFile(join(evidence, "derived-marker-removal.json"), JSON.stringify({ isolatedTestProfileOnly: true, afterIndependentExit: true, originalInvocationUnchanged: true }), { flag: "wx" });
+			}
 		}
 		assert.equal(git("status", "--porcelain").toString().trim(), "");
-		cases.push({ scenario, applicationRuns: 2, phases, independentOwnedImageExitObservedAfterEachRun: true, externalCounterRemainsOne: true, externalHeartbeatUnchangedAcrossRestart: true, originalRecordsVerifiedReadOnlyAfterEachExit: true });
+		cases.push({ scenario, applicationRuns: 2, phases, independentOwnedImageExitObservedAfterEachRun: true, externalCounterRemainsOne: true, externalHeartbeatUnchangedAcrossRestart: true, originalRecordsVerifiedReadOnlyAfterEachExit: true, derivedMarkerRemovedOnlyInOwnedFixture: scenario === "helper" });
 	}
 	assert.deepEqual(await inventoryBundle(toolchain), toolchainBefore); await verifyBundle(copy); await verifyBundle(source);
-	const proof = { packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, cases, applicationRuns: 4, actualPackagedApplication: true, outsideSourceCheckout: true, realDeveloperToolchainRequired: true, npmConfigurationExcluded: true, nodeSha256, bundleAndCopiedToolchainUnchanged: true, scopedImagesOnly: true, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
+	const applicationRuns = portableCommandScenarios.length * 2;
+	const proof = { packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, cases, applicationRuns, actualPackagedApplication: true, outsideSourceCheckout: true, realDeveloperToolchainRequired: true, npmConfigurationExcluded: true, nodeSha256, bundleAndCopiedToolchainUnchanged: true, scopedImagesOnly: true, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-command-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
-	console.log(JSON.stringify({ packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: 4, gameCalls: 0, realModelRequests: 0 }));
+	console.log(JSON.stringify({ packagedCommandSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns, gameCalls: 0, realModelRequests: 0 }));
 } finally {
 	if (passed) for (const directory of directories.reverse()) { const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-desktop-smoke-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 }

@@ -5,7 +5,7 @@ import { Workbench } from "./workbench.mjs";
 import { randomUUID } from "node:crypto";
 import { startupFailureCode } from "./startup-failure.mjs";
 
-let controller, workbench, gameController, gameTaskId;
+let controller, workbench, gameController, gameTaskId, commandHelperFixture;
 const credentialPending = new Map();
 const gameReadPending = new Map();
 function resolveProfile(task, signal, taskType = "development") {
@@ -75,12 +75,20 @@ if (process.parentPort) {
 				if (data.action === "initialize") {
 					if (workbench) throw new Error("WORKBENCH_ALREADY_INITIALIZED");
 					workbench = new Workbench({ directory: data.args.directory, helperSource: data.args.helperSource, resolveProfile, emit: (event) => process.parentPort.postMessage({ type: "event", event }) });
+					if (data.args.commandFixture) {
+						const { createCommandHelperFaultFixture } = await import("./command-helper-fault-fixture.mjs");
+						commandHelperFixture = await createCommandHelperFaultFixture({ context: data.args.commandFixture, directory: data.args.directory });
+						workbench.onCommandHostSpawn = value => commandHelperFixture.capture(value);
+					}
 					for (const root of data.args.roots ?? []) if (!workbench.store.roots().some((existing) => existing.path.toLowerCase() === root.path.toLowerCase())) await workbench.add(root);
 					result = workbench.state();
 				} else {
 					if (!workbench) throw new Error("WORKBENCH_NOT_INITIALIZED");
 					if (controller && ["agent", "check", "save"].includes(data.action)) throw new Error("PROBE_ALREADY_RUNNING");
-					if (data.action === "game-begin") {
+					if (data.action === "stop-command-helper-fixture") {
+						if (!commandHelperFixture || workbench.operation?.id !== data.args.taskId || workbench.store.task(data.args.taskId).kind !== "check") throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED");
+						result = await commandHelperFixture.stop(data.args.taskId);
+					} else if (data.action === "game-begin") {
 						if (gameController || controller || workbench.configurationBlocked || workbench.closing || workbench.operation || workbench.store.activeTask() || workbench.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_RUNTIME_BUSY");
 						workbench.gameWritesFrozen = false; workbench.admissionGeneration++; result = { locked: true };
 					} else if (data.action === "game-end") { if (gameController) throw new Error("GAME_RUNTIME_NOT_DRAINED"); workbench.gameWritesFrozen = true; workbench.admissionGeneration++; result = { unlocked: true }; }
