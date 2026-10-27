@@ -49,9 +49,10 @@ try {
 			if (kind === "legacy-game") { legacy = await seedLegacyRecovery(directory, caseId); selectedFile = legacy.file; }
 			else {
 				await launch("fresh", 0);
-				const initial = JSON.parse(await readFile(join(directory, "application-proof.json"), "utf8")); assert.equal(initial.runId, caseId); assert.equal(initial.emptyIsolatedWorkspace, true); assert.equal(initial.gameCalls, 0); assert.equal(initial.realModelRequests, 0); assert.equal(initial.syntheticModelRequests, 2);
+				const initialBytes = await readFile(join(directory, "application-proof.json")), initial = JSON.parse(initialBytes); assert.equal(initial.runId, caseId); assert.equal(initial.emptyIsolatedWorkspace, true); assert.equal(initial.gameCalls, 0); assert.equal(initial.realModelRequests, 0); assert.equal(initial.syntheticModelRequests, 2);
 				history = await seedPortableHistory({ directory, bundle: copy, runId: caseId });
-				await rename(join(directory, "application-proof.json"), join(evidence, "fresh-application-proof.json"));
+				await writeFile(join(evidence, "fresh-application-proof.json"), initialBytes, { flag: "wx" }); assert.deepEqual(await readFile(join(evidence, "fresh-application-proof.json")), initialBytes);
+				const retained = join(directory, "fresh-application-proof.retained.json"); await assert.rejects(lstat(retained), { code: "ENOENT" }); await rename(join(directory, "application-proof.json"), retained);
 				selectedFile = join(directory, "supervisor-profile/supervisor", "m1-smoke-" + caseId, "workbench.sqlite"); stages.push({ phase: "fresh", independentExitObserved: true });
 			}
 			await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, kind, directory, selectedFile, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
