@@ -158,6 +158,9 @@ export class WorkbenchStore {
 	invocations(taskId) {
 		return this.db.prepare("SELECT * FROM invocations WHERE task_id=? ORDER BY created_at,id").all(taskId).map((row) => ({ id: row.id, name: row.name, arguments: parse(row.arguments), state: row.state, createdAt: row.created_at, finishedAt: row.finished_at, result: parse(row.result), error: row.error }));
 	}
+	unknownCommand() {
+		return this.db.prepare("SELECT i.task_id AS taskId,t.state AS taskState FROM invocations i JOIN tasks t ON t.id=i.task_id WHERE i.name='workspace_check' AND i.state='unknown' ORDER BY i.created_at,i.id LIMIT 1").get() ?? null;
+	}
 	prepareChange({ taskId, rootId, path, beforeText, beforeHash, afterText, afterHash }) {
 		const id = randomUUID();
 		this.db.prepare("INSERT INTO changes(id,task_id,root_id,path,before_text,before_hash,after_text,after_hash,state,created_at) VALUES(?,?,?,?,?,?,?,?,'prepared',?)").run(id, taskId, rootId, path, beforeText, beforeHash, afterText, afterHash, now());

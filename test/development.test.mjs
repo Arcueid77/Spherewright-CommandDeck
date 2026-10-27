@@ -52,6 +52,32 @@ test("editor tasks and check receipts persist without replay after reopening the
 	} finally { await reopened.close(); }
 });
 
+test("unknown command receipts freeze a reopened workbench even without a UI marker or recent task listing", async (t) => {
+	const f = await fixture(t), originalTask = f.workbench.store.createTask({ rootId: f.rootId, kind: "check", prompt: "npm:test" });
+	f.workbench.store.setTaskState(originalTask.id, "running");
+	const invocation = f.workbench.store.beginInvocation(originalTask.id, "workspace_check", { checkId: "npm:test", helper: "synthetic-original-helper" });
+	f.workbench.store.finishInvocation(invocation, { error: "COMMAND_OUTCOME_UNKNOWN", unknown: true, result: { created: true, started: true, receipt: null } });
+	f.workbench.store.setTaskState(originalTask.id, "failed", { error: "COMMAND_OUTCOME_UNKNOWN", result: { outcomeUnknown: true } });
+	f.workbench.store.db.prepare("UPDATE tasks SET created_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(originalTask.id);
+	const original = f.workbench.store.invocations(originalTask.id);
+	for (let index = 0; index < 101; index++) {
+		const later = f.workbench.store.createTask({ rootId: f.rootId, kind: "check", prompt: "blocked fixture attempt" });
+		f.workbench.store.setTaskState(later.id, "running");
+		f.workbench.store.setTaskState(later.id, "failed", { error: "DEVELOPMENT_EXECUTION_BLOCKED" });
+	}
+	assert.equal(f.workbench.store.ui("execution-blocked"), null); assert.equal(f.workbench.store.tasks().some(task => task.id === originalTask.id), false);
+	await f.workbench.close();
+	const reopened = new Workbench({ directory: f.directory, helperSource });
+	try {
+		assert.equal(reopened.state().executionBlocked, true);
+		assert.equal(reopened.store.ui("execution-blocked").taskId, originalTask.id);
+		assert.deepEqual(reopened.store.invocations(originalTask.id), original);
+		const rejected = await reopened.request("check", { rootId: f.rootId, checkId: "npm:test" }); await reopened.operation.done;
+		assert.equal(reopened.store.task(rejected.id).error, "DEVELOPMENT_EXECUTION_BLOCKED"); assert.deepEqual(reopened.store.invocations(rejected.id), []);
+		await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
+	} finally { await reopened.close(); }
+});
+
 test("unknown check IDs and nonzero exits cannot become successful checks", windows, async (t) => {
 	const f = await fixture(t, 'node -e "process.exit(3)"');
 	const invalid = await f.workbench.request("check", { rootId: f.rootId, checkId: "arbitrary:shell" });

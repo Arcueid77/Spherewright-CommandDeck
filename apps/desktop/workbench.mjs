@@ -30,7 +30,8 @@ export class Workbench {
 		this.store = new WorkbenchStore(join(directory, "workbench.sqlite"));
 		this.workspace = new WorkspaceService(this.store);
 		this.store.recoverInterrupted();
-		for (const task of this.store.tasks()) if (task.state === "interrupted" && this.store.invocations(task.id).some((entry) => entry.name === "workspace_check" && entry.state === "unknown")) this.store.saveUi("execution-blocked", { reason: "INTERRUPTED_COMMAND_REQUIRES_RECONCILIATION", taskId: task.id });
+		const unknown = this.store.unknownCommand();
+		if (unknown) this.store.saveUi("execution-blocked", { reason: unknown.taskState === "interrupted" ? "INTERRUPTED_COMMAND_REQUIRES_RECONCILIATION" : "UNKNOWN_COMMAND_REQUIRES_RECONCILIATION", taskId: unknown.taskId });
 		this.operation = null; this.closing = false; this.admissionGeneration = 0;
 		// The trusted supervisor reserves this gate before a game task; renderer/model cannot toggle it.
 		this.gameWritesFrozen = true;
