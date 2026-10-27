@@ -11,7 +11,7 @@ import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { seedLegacyRecovery, readLegacyBaseRows } from "./legacy-recovery-fixture.mjs";
 import { seedPortableHistory } from "./portable-history-fixture.mjs";
 import { assertOwnedReadonlyFile, denyOwnedFileWrites, restoreOwnedFileWrites } from "./readonly-storage-fixture.mjs";
-import { assertOwnedAclReadonlyFile, denyOwnedAclFileWrites, restoreOwnedAclFileWrites } from "./acl-storage-fixture.mjs";
+import { assertOwnedAclReadonlyFile, denyOwnedAclFileWrites, restoreOwnedAclFileWrites, protectOwnedAclFixture, resetOwnedAclAutoFixture } from "./acl-storage-fixture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 const options = new Map();
@@ -73,6 +73,11 @@ try {
 			}
 			await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, kind, directory, selectedFile, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 			const before = await readFile(selectedFile), originalMembers = await readdir(dirname(selectedFile));
+			if (acl && legacy) {
+				await protectOwnedAclFixture({ root: directory, file: selectedFile });
+				await resetOwnedAclAutoFixture({ root: directory, file: selectedFile });
+				assert.deepEqual(await readFile(selectedFile), before, "ACL_FIXTURE_INITIALIZATION_CHANGED_LEDGER_BYTES");
+			}
 			originalAccess = await access.deny({ root: directory, file: selectedFile });
 			const denied = await access.assert({ root: directory, file: selectedFile }); assert.deepEqual(await readFile(selectedFile), before);
 			assert.equal(denied.fault, fault);
@@ -91,7 +96,7 @@ try {
 				stages.push({ phase, blocked: true, independentExitObserved: true, originalLedgerSha256: bundleHash(before), originalLedgerBytesPreserved: true, ledgerMembers: members.map(name => name === basename(selectedFile) ? "database" : name.endsWith("-wal") ? "wal" : "shm") });
 			}
 			const restoration = await access.restore({ root: directory, file: selectedFile, state: originalAccess }); originalAccess = undefined;
-			if (acl) assert.equal(restoration.exactOriginalDaclRestored, true);
+			if (acl) { assert.equal(restoration.exactOriginalDaclRestored, true); assert.equal(restoration.ownerGroupPreserved, true); if (legacy) assert.equal(restoration.autoInheritedMetadataChanged, true); }
 			const writable = await open(selectedFile, "r+"); await writable.close(); assert.deepEqual(await readFile(selectedFile), before);
 			await launch("restored", 0);
 			const proofBytes = await readFile(join(directory, "application-proof.json")), proof = JSON.parse(proofBytes);
@@ -102,7 +107,7 @@ try {
 			} else { assert.equal(proof.closedHistoryReopened, true); assert.equal(proof.history.closedHistorySha256, history.sha256); assert.equal(proof.noModelReplay, true); assert.equal(proof.syntheticModelRequests, 2); }
 			await writeFile(join(evidence, "restored-application-proof.json"), proofBytes, { flag: "wx" });
 			stages.push({ phase: "restored", independentExitObserved: true, writeAccessRestored: true, ...(acl ? restoration : {}), samePhysicalProfile: true, originalHistoryPreserved: true, originalPendingRemainsFrozen: Boolean(legacy) });
-			cases.push({ kind, applicationRuns: stages.length, stages, actualOsWriteDenied: true, sqliteReadOnlyObserved: true, ...(acl ? { exactOriginalDaclRestored: true, readonlyAttributeChanged: false } : {}), repeatedDeniedStartup: true, noAlternateProfile: true, noAutomaticTaskReplay: true, syntheticModelRequests: history ? 4 : 0, originalPendingReconciled: false });
+			cases.push({ kind, applicationRuns: stages.length, stages, actualOsWriteDenied: true, sqliteReadOnlyObserved: true, ...(acl ? { exactOriginalDaclRestored: true, readonlyAttributeChanged: false, initialAclShape: legacy ? "protected-non-auto-inherited" : "existing-profile", autoInheritedMetadataChanged: restoration.autoInheritedMetadataChanged } : {}), repeatedDeniedStartup: true, noAlternateProfile: true, noAutomaticTaskReplay: true, syntheticModelRequests: history ? 4 : 0, originalPendingReconciled: false });
 		} finally {
 			// Never make a file writable under an application whose exit is unknown.
 			if (selectedFile && originalAccess !== undefined && exited) await access.restore({ root: directory, file: selectedFile, state: originalAccess });

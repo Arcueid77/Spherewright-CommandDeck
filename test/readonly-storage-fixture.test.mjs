@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { denyOwnedFileWrites, restoreOwnedFileWrites, assertOwnedReadonlyFile } from "../scripts/readonly-storage-fixture.mjs";
-import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile, protectOwnedAclFixture } from "../scripts/acl-storage-fixture.mjs";
+import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile, protectOwnedAclFixture, resetOwnedAclAutoFixture, changeOwnedAclRuleFixture, clearOwnedAclRuleFixture } from "../scripts/acl-storage-fixture.mjs";
 import { WorkbenchStore } from "../apps/desktop/workbench-store.mjs";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { startupFailureCode } from "../apps/desktop/startup-failure.mjs";
@@ -77,4 +77,20 @@ test("DACL-only changes preserve a protected file's exact permissions and owner/
 	try { await assertOwnedAclReadonlyFile(f); assert.deepEqual(await readFile(f.file), before); }
 	finally { const proof = await restoreOwnedAclFileWrites({ ...f, lease }); assert.equal(proof.exactOriginalDaclRestored, true); assert.equal(proof.ownerGroupPreserved, true); }
 	const db = new DatabaseSync(f.file); try { db.exec("INSERT INTO fixture VALUES('restored-protected')"); assert.equal(db.prepare("SELECT count(*) AS n FROM fixture").get().n, 2); } finally { db.close(); }
+});
+
+test("Windows may initialize AutoInherited metadata while the complete original ACL and protection are restored", { skip: process.platform !== "win32" }, async t => {
+	const f = await fixture(t), before = await readFile(f.file);
+	await protectOwnedAclFixture(f);
+	assert.equal((await resetOwnedAclAutoFixture(f)).nonAutoFixture, true);
+	const lease = await denyOwnedAclFileWrites(f);
+	try { await assertOwnedAclReadonlyFile(f); assert.deepEqual(await readFile(f.file), before); }
+	finally { const proof = await restoreOwnedAclFileWrites({ ...f, lease }); assert.equal(proof.exactOriginalDaclRestored, true); assert.equal(proof.ownerGroupPreserved, true); assert.equal(proof.autoInheritedMetadataChanged, true); }
+});
+
+test("an unexpected real ACE change is rejected and retained rather than overwritten by restoration", { skip: process.platform !== "win32" }, async t => {
+	const f = await fixture(t), lease = await denyOwnedAclFileWrites(f);
+	await changeOwnedAclRuleFixture(f);
+	try { await assert.rejects(restoreOwnedAclFileWrites({ ...f, lease }), /unexpected-permissions/); await assertOwnedAclReadonlyFile(f); }
+	finally { await clearOwnedAclRuleFixture(f); await restoreOwnedAclFileWrites({ ...f, lease }); }
 });
