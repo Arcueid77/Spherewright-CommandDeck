@@ -8,6 +8,13 @@ import { ownedStorageFile, assertOwnedFileWritesDenied } from "./readonly-storag
 
 const leases = new WeakMap(), script = fileURLToPath(new URL("acl-storage-fixture.ps1", import.meta.url));
 const hash = value => createHash("sha256").update(value).digest("hex");
+// Cold Windows PowerShell/ACL initialization may exceed 15 seconds under the
+// full CI suite. This remains bounded and does not weaken any DACL readback.
+export const aclFixtureTimeoutMs = 45000;
+export function aclFixtureFailure(operation, { timedOut, oversized, exitCode }) {
+	const reason = timedOut ? "timeout" : oversized ? "output-limit" : "exit-" + (Number.isInteger(exitCode) ? exitCode : "unknown");
+	return "ACL_FIXTURE_" + operation.toUpperCase() + "_FAILED:" + reason;
+}
 async function invoke(scope, operation, descriptors = {}) {
 	await ownedStorageFile(scope);
 	const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Root", scope.root, "-File", scope.file, "-Operation", operation];
@@ -16,13 +23,13 @@ async function invoke(scope, operation, descriptors = {}) {
 	return await new Promise((resolve, reject) => {
 		const child = spawn(join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"), args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TEMP: temporaryParent, TMP: temporaryParent, PSModulePath: join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/Modules") } });
 		let stdout = "", stderr = "", timedOut = false, oversized = false;
-		const timer = setTimeout(() => { timedOut = true; child.kill(); }, 15000);
+		const timer = setTimeout(() => { timedOut = true; child.kill(); }, aclFixtureTimeoutMs);
 		child.stdout.on("data", bytes => { stdout += bytes; if (stdout.length > 65536) { oversized = true; child.kill(); } }); child.stderr.on("data", bytes => { stderr = (stderr + bytes).slice(-4096); });
 		child.once("error", error => { clearTimeout(timer); reject(error); });
 		child.once("close", code => {
 			clearTimeout(timer);
 			const failure = stderr.match(/ACL_FIXTURE_[A-Z_-]+_FAILED:([a-z-]+:[A-Za-z0-9_.-]{1,180})/)?.[1], diff = stderr.match(/ACL_FIXTURE_DESCRIPTOR_DIFF:(\{[^\r\n]{1,2048}\})/)?.[1];
-			if (code !== 0 || timedOut || oversized) return reject(new Error("ACL_FIXTURE_" + operation.toUpperCase() + "_FAILED" + (failure ? ":" + failure : "") + (diff ? ":" + diff : "")));
+			if (code !== 0 || timedOut || oversized) return reject(new Error(aclFixtureFailure(operation, { timedOut, oversized, exitCode: code }) + (failure ? ":" + failure : "") + (diff ? ":" + diff : "")));
 			try { const proof = JSON.parse(stdout); if (proof.version !== 1) throw new Error("ACL_FIXTURE_REPLY_INVALID"); resolve(proof); } catch (error) { reject(error); }
 		});
 	});

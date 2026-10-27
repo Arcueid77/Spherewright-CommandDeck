@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { denyOwnedFileWrites, restoreOwnedFileWrites, assertOwnedReadonlyFile } from "../scripts/readonly-storage-fixture.mjs";
-import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile, protectOwnedAclFixture, resetOwnedAclAutoFixture, changeOwnedAclRuleFixture, clearOwnedAclRuleFixture } from "../scripts/acl-storage-fixture.mjs";
+import { denyOwnedAclFileWrites, restoreOwnedAclFileWrites, assertOwnedAclReadonlyFile, protectOwnedAclFixture, resetOwnedAclAutoFixture, changeOwnedAclRuleFixture, clearOwnedAclRuleFixture, aclFixtureFailure } from "../scripts/acl-storage-fixture.mjs";
 import { WorkbenchStore } from "../apps/desktop/workbench-store.mjs";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { startupFailureCode } from "../apps/desktop/startup-failure.mjs";
@@ -17,6 +17,13 @@ async function fixture(t, kind = "game", initialize = file => { const db = new D
 	t.after(async () => { const canonical = await realpath(root); assert.equal(canonical, root); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-desktop-smoke-")); await rm(canonical, { recursive: true }); });
 	return { root, file };
 }
+
+test("ACL helper diagnostics distinguish deadline, output limit and process rejection", () => {
+	assert.equal(aclFixtureFailure("inspect", { timedOut: true, oversized: false, exitCode: null }), "ACL_FIXTURE_INSPECT_FAILED:timeout");
+	assert.equal(aclFixtureFailure("inspect", { timedOut: false, oversized: true, exitCode: null }), "ACL_FIXTURE_INSPECT_FAILED:output-limit");
+	assert.equal(aclFixtureFailure("restore", { timedOut: false, oversized: false, exitCode: 1 }), "ACL_FIXTURE_RESTORE_FAILED:exit-1");
+	assert.equal(aclFixtureFailure("deny", { timedOut: false, oversized: false, exitCode: null }), "ACL_FIXTURE_DENY_FAILED:exit-unknown");
+});
 
 test("Windows storage fault uses real file denial and SQLite read-only rejection while preserving bytes", { skip: process.platform !== "win32" }, async t => {
 	const f = await fixture(t), before = await readFile(f.file), mode = await denyOwnedFileWrites(f);
