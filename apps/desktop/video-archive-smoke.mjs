@@ -87,10 +87,10 @@ async function checkVideoPlaybackUi(driver, recording, archive) {
 		await until(() => evaluate("[...document.querySelectorAll('header button')].some(button=>button.textContent==='录像'&&!button.disabled)"), "HEADER");
 		await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true");
 		await until(() => evaluate("[...document.querySelectorAll('.videos-panel button')].some(button=>button.textContent==='打开播放'&&!button.disabled)"), "OPEN");
-		assert.equal(await evaluate("document.querySelector('.videos-panel select').value"), recording.id);
+		assert.equal(await evaluate("document.querySelector('.videos-panel select[aria-label=本地录像]').value"), recording.id);
 		await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='打开播放').click();true");
-		await until(() => evaluate("Boolean(document.querySelector('.videos-panel video')?.readyState>=1)"), "METADATA");
-		const played = await evaluate("(async()=>{const video=document.querySelector('.videos-panel video');await video.play();const deadline=performance.now()+7000;while(video.currentTime<1.1){if(video.error||performance.now()>deadline)throw new Error('VIDEO_PLAYBACK_DID_NOT_ADVANCE');await new Promise(resolve=>setTimeout(resolve,25))}video.pause();return {width:video.videoWidth,height:video.videoHeight,time:video.currentTime,frames:video.getVideoPlaybackQuality().totalVideoFrames,url:video.src}})()");
+		await until(() => evaluate("Boolean(document.querySelector('.videos-panel video[aria-label=本地录像播放器]')?.readyState>=1)"), "METADATA");
+		const played = await evaluate("(async()=>{const video=document.querySelector('.videos-panel video[aria-label=本地录像播放器]');await video.play();const deadline=performance.now()+7000;while(video.currentTime<1.1){if(video.error||performance.now()>deadline)throw new Error('VIDEO_PLAYBACK_DID_NOT_ADVANCE');await new Promise(resolve=>setTimeout(resolve,25))}video.pause();return {width:video.videoWidth,height:video.videoHeight,time:video.currentTime,frames:video.getVideoPlaybackQuality().totalVideoFrames,url:video.src}})()");
 		assert.equal(played.width, 160); assert.equal(played.height, 90); assert.ok(played.frames >= 2); assert.ok(played.time >= 1.1); assert.match(played.url, /^deck-video:\/\/stream\/[a-f0-9-]{36}$/); return played.url;
 	};
 	const first = await open();
@@ -99,6 +99,6 @@ async function checkVideoPlaybackUi(driver, recording, archive) {
 	const stale = await evaluate(`(async()=>{const video=document.createElement('video');video.muted=true;video.src=${JSON.stringify(first)};try{return await new Promise(resolve=>{const timer=setTimeout(()=>resolve('timeout'),4000);video.onerror=()=>{clearTimeout(timer);resolve('refused')};video.onloadedmetadata=()=>{clearTimeout(timer);resolve('opened')};video.load()})}finally{video.removeAttribute('src');video.load()}})()`); assert.equal(stale, "refused");
 	const second = await open(); assert.notEqual(second, first);
 	await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='关闭播放').click();true");
-	await until(async () => archive.readers.size === 0 && !await evaluate("Boolean(document.querySelector('.videos-panel video'))"), "PLAYER_CLOSE");
+	await until(async () => archive.readers.size === 0 && !await evaluate("Boolean(document.querySelector('.videos-panel video[aria-label=本地录像播放器]'))"), "PLAYER_CLOSE");
 	assert.deepEqual(archive.snapshot().recordings, [recording]); assert.equal(archive.active, null);
 }
