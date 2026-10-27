@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 export async function runWorkbenchSmoke(driver) {
 	const originalTray = driver.getTray(); assert.ok(originalTray);
+	const journalId = (await driver.api("journal", { action: "start" })).activeId;
 	const base = join(driver.root, ".local", "m1-smoke", driver.runId), source = join(base, "source");
 	await mkdir(source, { recursive: true });
 	const git = (...args) => execFileSync("git", ["-c", `core.hooksPath=${devNull}`, "-c", "user.name=CommandDeck fixture", "-c", "user.email=fixture@invalid.example", ...args], { cwd: source, windowsHide: true, stdio: "pipe" });
@@ -156,5 +157,11 @@ export async function runWorkbenchSmoke(driver) {
 	const proof = { runId: driver.runId, edited: true, checkExitCode: 0, checkStarts: 1, uiReloadDuringCheck: true, uiProcessReplaced: true, replacementHydrated: true, sameRuntime: true, draftRestored: true, editorRestored: true, historicalResultRestored: true, ipcWhitelistRejectsControlActions: true, protectedProfileRoundtrip: true, rendererCannotResolveCredential: true, profileMutationBlockedDuringTask: true, splitEchoRedacted: true, providerSettingsRenderAndDismiss: true, syntheticCredentialOnly: true, externalModelRequests: 0, noNodeInRenderer: true, visualCapture: capture.captured ? "captured" : "unavailable", gameCalls: 0, realDsp: "not_attached", physicalInput: "not_tested" };
 	Object.assign(proof, { originalDiffAfterCommit: true, crossRepositoryReference: true, referencePinsOldCommit: true, referenceSurvivesReload: true, historyPreservesUnsavedDraft: true, taskClickNavigatesToLog: true, navigationDoesNotRepeatCommand: true });
 	proof.supervisorTrayRetainedAcrossUiReplacement = true;
+	await driver.api("journal", { action: "stop", args: { id: journalId } });
+	const journal = await driver.api("journal", { action: "read", args: { id: journalId } });
+	assert.ok(journal.events.some(event => event.domain === "development" && event.facts.state === "running"));
+	assert.ok(journal.events.some(event => event.domain === "development" && event.facts.state === "succeeded"));
+	assert.ok(!JSON.stringify(journal).includes(syntheticKey)); assert.ok(!JSON.stringify(journal).includes(JSON.stringify(source).slice(1, -1)));
+	proof.developmentJournalPreservesStagesWithoutPrivateContent = true;
 	await writeFile(join(driver.root, ".local/desktop-smoke-workbench.json"), JSON.stringify(proof, null, 2));
 }

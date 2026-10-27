@@ -50,6 +50,7 @@
 		"test:workbench": "node scripts/run-desktop-smoke.mjs --smoke-workbench",
 		"test:tray": "node scripts/run-desktop-smoke.mjs --smoke-tray",
 		"test:power": "node scripts/run-desktop-smoke.mjs --smoke-power",
+		"test:journal": "node scripts/run-desktop-smoke.mjs --smoke-journal",
 		"test:renamed-ui": "node scripts/run-desktop-smoke.mjs --renamed-electron --smoke-workbench",
 		"test:vault": "node scripts/run-vault-smoke.mjs",
 		"test:bridge": "node scripts/run-desktop-smoke.mjs --smoke-bridge",

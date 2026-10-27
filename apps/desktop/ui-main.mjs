@@ -209,6 +209,7 @@ if (typeof process.send !== "function") {
 				"deck:probe": "probe",
 				"deck:abort": "abort",
 				"deck:snapshot": "snapshot",
+				"deck:journal": "journal",
 				"deck:resume-system": "resume-system",
 			}))
 				handle(channel, (args) => request(action, args));

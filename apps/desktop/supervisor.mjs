@@ -37,6 +37,9 @@ import { createDesktopTray } from "./desktop-tray.mjs";
 import { runTraySmoke } from "./tray-smoke.mjs";
 import { runPowerSmoke } from "./power-smoke.mjs";
 import { PowerLifecycle, bindPowerMonitor } from "./power-lifecycle.mjs";
+import { EventJournal } from "./event-journal.mjs";
+import { journalLimits } from "./journal-format.mjs";
+import { runJournalSmoke } from "./journal-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -100,7 +103,7 @@ let runtime,
 	probeSequence = 0,
 	testSequence = 0,
 	restarts = 0;
-let runtimeExit, blockedWindow, desktopTray, disposePowerMonitor, powerInspectionFault = false, initializingRuntime = true;
+let runtimeExit, blockedWindow, desktopTray, journal, journalBuild, journalError, disposePowerMonitor, powerInspectionFault = false, initializingRuntime = true;
 let recovering = false,
 	stopping = false,
 	allowQuit = false;
@@ -109,7 +112,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
@@ -184,6 +187,10 @@ function send(record, message) {
 	} catch {}
 }
 function emit(event) {
+	if (journal?.active) {
+		try { journal.capture(event, event.type === "game-changed" ? { game: game.snapshot() } : event.type === "bridge-changed" ? { bridge: bridge.snapshot() } : {}); }
+		catch { journal.fail(); }
+	}
 	if (event.type === "text")
 		state.probeText = (state.probeText + event.text).slice(-32768);
 	else state.events = [...state.events.slice(-39), event];
@@ -322,6 +329,15 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, power: systemPower.snapshot(), events: [...state.events] };
+	if (action === "journal") {
+		if (!args || !["snapshot", "read", "start", "stop", "bookmark"].includes(args.action)) throw new Error("INVALID_JOURNAL_ACTION");
+		if (!journal) { if (args.action === "snapshot") return { available: false, error: journalError ?? "JOURNAL_NOT_READY", activeId: null, scope: "host-events-v1", limits: journalLimits, recordings: [] }; throw new Error("JOURNAL_STORAGE_UNAVAILABLE"); }
+		if (args.action === "snapshot") return journal.snapshot();
+		if (args.action === "read") { try { return journal.read(args.args?.id); } catch (error) { if (!["JOURNAL_RECORDING_INVALID", "JOURNAL_RECORDING_NOT_FOUND"].includes(error.message)) journal.fail(); throw error; } }
+		if (args.action === "start") return journal.start(journalBuild);
+		if (args.action === "stop") { if (!args.args?.id || journal.active?.id !== args.args.id) throw new Error("JOURNAL_RECORDING_CHANGED"); return journal.stop(); }
+		return journal.bookmark(args.args?.id, args.args?.sequence, args.args?.tag);
+	}
 	if (action === "resume-system") {
 		if (source !== ui || !source?.registered) throw new Error("TRUSTED_UI_REQUIRED");
 		return systemPower.retry();
@@ -738,9 +754,11 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 		}
 	}
 	await vault.tail;
+	try { if (journal?.active) journal.stop("application_exit"); } catch { console.error("JOURNAL_EXIT_RECORD_UNCONFIRMED"); }
 	game.close();
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
+	try { journal?.close(); } catch { console.error("JOURNAL_CLOSE_UNCONFIRMED"); }
 	disposePowerMonitor?.();
 	desktopTray?.destroy();
 	if (preserveApplication && runtime) await runtimeExit.stop();
@@ -855,6 +873,9 @@ if (!app.hasSingleInstanceLock()) {
 			workbenchReady = true;
 			await game.initialize();
 			await ledgerPresence.seal();
+			journalBuild = await readDiagnosticBuild(root, { packaged: app.isPackaged });
+			try { journal = new EventJournal(join(privateDirectory, smoke ? "journal-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "journal"), { notify: () => send(ui, { type: "event", event: { type: "journal-changed" } }) }); }
+			catch (error) { journalError = /^JOURNAL_[A-Z_]+$/.test(error?.message ?? "") ? error.message : "JOURNAL_STORAGE_UNAVAILABLE"; }
 			initializingRuntime = false;
 			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
@@ -882,7 +903,7 @@ if (!app.hasSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-power") ? runPowerSmoke : process.argv.includes("--smoke-tray") ? runTraySmoke : diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = process.argv.includes("--smoke-journal") ? runJournalSmoke : process.argv.includes("--smoke-power") ? runPowerSmoke : process.argv.includes("--smoke-tray") ? runTraySmoke : diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),

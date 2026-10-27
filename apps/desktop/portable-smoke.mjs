@@ -13,6 +13,7 @@ import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
 import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
 import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile.mjs";
 import { checkPowerLifecycle } from "./power-smoke.mjs";
+import { beginJournalSmoke, finishJournalSmoke } from "./journal-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -70,6 +71,8 @@ export async function runPortableSmoke(driver) {
 	if (recovery) { if (profileCase) assert.equal(profileCase.phase, "recover"); await runPortableRecoverySmoke({ ...driver, profileCase }, recovery, manifest, runtimePid, settledUi); return; }
 	if (profileCase) assert.equal(profileCase.phase, "bootstrap");
 	const history = await readPortableHistory(context);
+	assert.equal(manifest.eventJournal, 1);
+	const journalRecording = await beginJournalSmoke(driver, Boolean(history));
 	assert.equal(manifest.desktopTray, 1);
 	const desktopTray = driver.getTray(); assert.ok(desktopTray); assert.equal(desktopTray.nativeTray.isDestroyed(), false);
 	let historyProof = null;
@@ -102,10 +105,12 @@ export async function runPortableSmoke(driver) {
 	const command = await runManagedCommand({ host: host.executable, executable: join(process.env.SystemRoot, "System32/where.exe"), args: ["/Q", "CommandDeck-Smoke-Missing-" + context.runId], cwd: privateDirectory, timeoutMs: 5000 });
 	assert.equal(command.exitCode, 1); assert.equal(command.treeConfirmed, true); assert.equal(command.streamsDrained, true);
 	if (history) await assertPortableHistory(api, history);
+	const journalProof = await finishJournalSmoke(driver, journalRecording);
 	const fullProfileBootstrap = profileCase ? await runProfileBootstrap(driver) : null;
 	const proof = { runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: result.sourceCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: !history, closedHistoryReopened: Boolean(history), history: historyProof, userProfilesUntouched: true, externalActionsRejected: true, embeddedPiRoundtrip: true, syntheticModelRequests: 2, syntheticTools: 1, uiReloadRetainsRuntimeAndResult: true, noModelReplay: true, ownNativeFixtureEmbeddedAndDetached: true, selfContainedCommandCache: true, commandExitCode: 1, commandTreeAndStreamsConfirmed: true, gameCalls: 0, realModelRequests: 0, cleanWindowsVmVerified: false, installerVerified: false };
 	if (fullProfileBootstrap) proof.fullProfileBootstrap = fullProfileBootstrap;
 	proof.powerLifecycle = powerProof;
+	proof.eventJournal = journalProof;
 	Object.assign(proof, { supervisorTrayRetainedAcrossReload: true, nativeTrayMenuRestoresMinimizedUi: true, exitRequestedThroughTray: true, physicalTrayInputVerified: false, embeddedHostMinimizeVerified: false });
 	await writeFile(join(context.root, "application-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	assert.equal(await desktopTray.activate("exit"), true);

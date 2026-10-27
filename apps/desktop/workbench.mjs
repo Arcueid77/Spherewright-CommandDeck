@@ -6,6 +6,7 @@ import { originalChangeDiff } from "./change-history.mjs";
 import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { createHash } from "node:crypto";
 import { captureWorkbenchDiagnostics } from "./diagnostic-snapshot.mjs";
+import { journalFacts } from "./journal-format.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_OPERATION_FAILED";
 const record = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -39,7 +40,7 @@ export class Workbench {
 	}
 	notify(taskId, kind, value) {
 		const sequence = this.store.event(taskId, kind, value);
-		this.emit({ type: "workbench", taskId, sequence, kind });
+		this.emit({ type: "workbench", taskId, sequence, kind, facts: journalFacts(value) });
 	}
 	state() {
 		return {
@@ -114,21 +115,24 @@ export class Workbench {
 		const operation = { id: task.id, controller, done: null };
 		this.operation = operation;
 		let timedOut = false;
+		let recordedOutcome = journalFacts({});
 		const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, 300000);
 		operation.done = Promise.resolve().then(async () => {
 			try {
 				const result = await action(task, controller.signal);
 				this.store.setTaskState(task.id, timedOut ? "failed" : controller.signal.aborted ? "cancelled" : "succeeded", { result, error: timedOut ? "TASK_TIME_LIMIT" : null });
+				recordedOutcome = journalFacts({ state: timedOut ? "failed" : controller.signal.aborted ? "cancelled" : "succeeded", error: timedOut ? "TASK_TIME_LIMIT" : null });
 			} catch (error) {
 				this.store.setTaskState(task.id, controller.signal.aborted && !timedOut && !error.unknown ? "cancelled" : "failed", { error: timedOut ? "TASK_TIME_LIMIT" : codeOf(error), result: { outcomeUnknown: error.unknown === true } });
+				recordedOutcome = journalFacts({ state: controller.signal.aborted && !timedOut && !error.unknown ? "cancelled" : "failed", error: timedOut ? "TASK_TIME_LIMIT" : codeOf(error) });
 			} finally {
 				clearTimeout(deadline);
 				try { await this.workspace.refresh(rootId); } catch {}
 				this.operation = null;
-				this.emit({ type: "workbench", taskId: task.id, kind: "settled" });
+				this.emit({ type: "workbench", taskId: task.id, kind: "settled", facts: recordedOutcome });
 			}
 		});
-		this.emit({ type: "workbench", taskId: task.id, kind: "started" });
+		this.emit({ type: "workbench", taskId: task.id, kind: "started", facts: journalFacts({ state: "running" }) });
 		return task;
 	}
 	async invokeCheck(task, checkId, signal) {

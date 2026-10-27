@@ -206,6 +206,16 @@ Wake waits for that drain, checks the current native-window state and resumes th
 
 `npm run test:power` exercises the actual supervisor, UI and native NO DSP host with synthesized Electron [powerMonitor](https://www.electronjs.org/docs/latest/api/power-monitor) events, including UI reload while paused, rejection of premature resume, a failed wake check and UI-triggered retry, stale read data and the same MCP process. Focused checks also retain a receipt arriving during drain and reject an old confirmation without a second commit. The portable default/reopen flow includes the two event cycles when `powerLifecycle: 1` is declared; candidate `7df5023d8b842a60f8f0f133f3b1e2f93b12a41f` passed both actual starts and all four event cycles outside the checkout, with retained history, zero observed packaged children after each exit and unchanged complete bundles. Actual OS sleep, physical input, DSP suspend/resume and clean-Windows behavior still need separate acceptance.
 
+## Local event journal (M6)
+
+Open **运行日记** in the header and choose **开始事件记录**. Recording is explicit and stays in the supervisor across panel closure and UI reload. The panel provides previous/next event, a position slider, continuous local browsing and four fixed bookmark tags. Stop recording before browsing its immutable history; application restart marks any unfinished recording as interrupted and does not resume it automatically.
+
+This slice records structured host events, without video. It projects development/game task stages, known tool names, connection/power state, bounded counters and known error codes. Task identities become aliases scoped to one recording. Prompts, model replies, source text, command arguments/output, credentials, private paths, world/session/action identities and arbitrary notes are not stored. Packaged records retain the declared Deck/Pi build revisions; source runs do not invent a fixed candidate. These observations are not execution receipts or approval authority. Playback never dispatches model, MCP or development/game actions.
+
+The separate local SQLite journal retains at most 64 recordings, each with 4,096 events and 128 bookmarks. Reaching the event limit stops and labels the recording; history is never automatically deleted. This slice has no import, export or deletion interface. A missing registered database, unsupported/corrupt schema or storage failure disables the journal while preserving its evidence; the execution ledgers and their safety gates remain authoritative.
+
+`npm run test:journal` exercises the actual Electron UI and supervisor with owned fixtures: record/stop, bookmark navigation, continuous browsing, read-only historical playback, rejected execution actions and UI reload without repeating the probe. The workbench integration also checks recorded task start/end states without the synthetic credential or fixture source path. Current evidence is source mode; complete packaged application restart, video recording and physical input still require separate verification.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

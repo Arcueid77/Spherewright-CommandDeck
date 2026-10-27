@@ -12,6 +12,7 @@ import { ProviderSettings, type Profile } from "./providers";
 import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
+import { JournalPanel } from "./journal";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -59,6 +60,7 @@ declare global {
 			focusUi(): Promise<unknown>;
 			snapshot(): Promise<UiSnapshot>;
 			resumeSystem(): Promise<PowerState>;
+			journal<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			profiles(): Promise<Profile[]>;
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
@@ -406,6 +408,7 @@ const components = {
 	game: GamePanel,
 	evidence: EvidencePanel,
 	events: EventPanel,
+	journal: JournalPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
 	"game-agent": GameTasksPanel,
@@ -501,6 +504,7 @@ function App() {
 				<button disabled={!layoutReady} onClick={() => setDiagnostics(true)}>诊断报告</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
+				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("journal")) api.addPanel({ id: "journal", component: "journal", title: "运行日记 / 回放", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("journal")?.api.setActive(); }}>运行日记</button>
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
 			{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>
