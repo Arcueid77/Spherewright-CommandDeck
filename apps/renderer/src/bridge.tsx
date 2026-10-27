@@ -46,7 +46,7 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
 	useEffect(() => {
 		stopped.current = false; void refresh();
 		const timer = setInterval(() => { setClock(performance.now()); void refresh(); }, 1000);
-		const unsubscribe = window.deck.onEvent((event) => { if (event.type === "supervisor-disconnected") { stopped.current = true; unavailable(); } else if (event.type === "bridge-changed") void refresh(); });
+		const unsubscribe = window.deck.onEvent((event) => { if (event.type === "supervisor-disconnected") { stopped.current = true; unavailable(); } else if (event.type === "system-power") { generation.current++; unavailable(); void refresh(); } else if (event.type === "bridge-changed") void refresh(); });
 		document.addEventListener("visibilitychange", syncVisibility);
 		return () => { stopped.current = true; generation.current++; measure.interrupt(); clearInterval(timer); unsubscribe(); document.removeEventListener("visibilitychange", syncVisibility); };
 	}, []);

@@ -1,6 +1,6 @@
 // Native Windows modal loops may pump window messages while suppressing Node timers.
 // A responsive HWND prevents a false replacement, never proves task health or input isolation.
-export function createUiWatchdog({ current, unavailable, inspect, recover, notice = () => {}, now = () => performance.now(), thresholdMs = 1000, nativeNoticeMs = 15000 }) {
+export function createUiWatchdog({ current, unavailable, inspect, recover, notice = () => {}, generation = () => 0, now = () => performance.now(), thresholdMs = 1000, nativeNoticeMs = 15000 }) {
 	let pending = false;
 	return async function check() {
 		const record = current();
@@ -10,10 +10,11 @@ export function createUiWatchdog({ current, unavailable, inspect, recover, notic
 		pending = true;
 		record.nativeProbePending = true;
 		const sequence = record.lastBeatSequence;
+		const inspectionGeneration = generation();
 		try {
 			let state;
 			try { state = await inspect(record); } catch {}
-			if (record !== current() || unavailable() || record.lastBeatSequence !== sequence || record.child?.exitCode != null || record.child?.signalCode != null || now() - record.lastHeartbeat <= thresholdMs) return;
+			if (inspectionGeneration !== generation() || record !== current() || unavailable() || record.lastBeatSequence !== sequence || record.child?.exitCode != null || record.child?.signalCode != null || now() - record.lastHeartbeat <= thresholdMs) return;
 			record.nextNativeProbe = now() + 500;
 			record.lastNativeProbe = { probeStatus: state?.probeStatus ?? "inspector_unavailable", probeElapsedMs: state?.probeElapsedMs, totalProbeMs: state?.totalProbeMs };
 			if (state?.exists !== true || state.pidMatches !== true || !["responsive", "timeout"].includes(state.probeStatus)) {
@@ -33,6 +34,6 @@ export function createUiWatchdog({ current, unavailable, inspect, recover, notic
 				}
 				return;
 			} else if (state.responding === false && state.probeStatus === "timeout") await recover("ui-heartbeat-timeout", record);
-		} finally { pending = false; }
+		} finally { pending = false; if (inspectionGeneration !== generation()) record.nativeProbePending = false; }
 	};
 }

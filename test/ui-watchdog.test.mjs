@@ -2,6 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createUiWatchdog } from "../apps/desktop/ui-watchdog.mjs";
 
+test("a native timeout from before suspend cannot replace the UI after wake", async () => {
+	let finish, generation = 0, recovered = 0;
+	const record = { loaded: true, lastHeartbeat: 0, lastBeatSequence: 1 };
+	const check = createUiWatchdog({ current: () => record, unavailable: () => false, generation: () => generation, now: () => 2000, inspect: () => new Promise(resolve => { finish = resolve; }), recover: async () => { recovered++; } });
+	const pending = check(); assert.equal(record.nativeProbePending, true);
+	generation++; finish({ exists: true, pidMatches: true, probeStatus: "timeout", responding: false }); await pending;
+	assert.equal(recovered, 0); assert.equal(record.nativeProbePending, false);
+});
+
 function fixture(inspect) {
 	let time = 1100, record = { loaded: true, lastHeartbeat: 0 };
 	const recovered = [], notices = [];

@@ -12,6 +12,7 @@ import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
 import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
 import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile.mjs";
+import { checkPowerLifecycle } from "./power-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -93,6 +94,8 @@ export async function runPortableSmoke(driver) {
 	if (history) await assertPortableHistory(api, history);
 	await settledUi(); await api("start-fixture"); await settledUi(); await api("attach", "owned-fixture");
 	const attached = await api("status"); assert.equal(attached.nativeParentMatches, true); assert.equal(attached.gameParentMatches, true); assert.equal(attached.gameAlive, true);
+	assert.equal(manifest.powerLifecycle, 1);
+	const powerProof = await checkPowerLifecycle(driver);
 	await api("detach"); const detached = await api("status"); assert.equal(detached.attached, false); assert.equal(detached.gameAlive, true);
 	const host = await prepareCommandHost(join(root, "artifacts/commands"), join(privateDirectory, "portable-command-cache"));
 	assert.equal(host.selfContained, true);
@@ -102,6 +105,7 @@ export async function runPortableSmoke(driver) {
 	const fullProfileBootstrap = profileCase ? await runProfileBootstrap(driver) : null;
 	const proof = { runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: result.sourceCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: !history, closedHistoryReopened: Boolean(history), history: historyProof, userProfilesUntouched: true, externalActionsRejected: true, embeddedPiRoundtrip: true, syntheticModelRequests: 2, syntheticTools: 1, uiReloadRetainsRuntimeAndResult: true, noModelReplay: true, ownNativeFixtureEmbeddedAndDetached: true, selfContainedCommandCache: true, commandExitCode: 1, commandTreeAndStreamsConfirmed: true, gameCalls: 0, realModelRequests: 0, cleanWindowsVmVerified: false, installerVerified: false };
 	if (fullProfileBootstrap) proof.fullProfileBootstrap = fullProfileBootstrap;
+	proof.powerLifecycle = powerProof;
 	Object.assign(proof, { supervisorTrayRetainedAcrossReload: true, nativeTrayMenuRestoresMinimizedUi: true, exitRequestedThroughTray: true, physicalTrayInputVerified: false, embeddedHostMinimizeVerified: false });
 	await writeFile(join(context.root, "application-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	assert.equal(await desktopTray.activate("exit"), true);

@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld(
 		status: () => ipcRenderer.invoke("deck:status"),
 		focusUi: () => ipcRenderer.invoke("deck:focus-ui"),
 		snapshot: () => ipcRenderer.invoke("deck:snapshot"),
+		resumeSystem: () => ipcRenderer.invoke("deck:resume-system"),
 		profiles: () => ipcRenderer.invoke("deck:profiles"),
 		manageProfiles: (action, args = {}) => ipcRenderer.invoke("deck:profiles-manage", { action, args }),
 		bridge: (action, args = {}) => ipcRenderer.invoke("deck:bridge", { action, args }),

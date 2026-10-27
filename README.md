@@ -198,6 +198,14 @@ Tray exit uses the same task drain and native-window restoration path as ordinar
 
 The implementation follows Electron's [Tray API](https://www.electronjs.org/docs/latest/api/tray). No task or credential content is placed in the icon, tooltip or menu.
 
+## Suspend and wake (M5)
+
+Windows power events pause new task admission, invalidate the old research catalog and confirmation nonces, and cancel/drain managed work through the normal paths. Already submitted native work retains its original intent and may still return its receipt; suspension is not a native undo or an atomic stop. Existing bounded calls may finish. Cached telemetry is marked stale, and results from before the interruption cannot become fresh data again. The UI, history, draft, Pi and an existing MCP process are retained where they remain alive.
+
+Wake waits for that drain, checks the current native-window state and resumes the workbench without starting another model task or MCP process. A short bounded read-only wait handles a known layout operation still finishing; faults, quarantine, restoration failures and unconfirmed bindings remain blocked. Failed checks show **重新检查连接**. A renderer cannot invoke that retry before an actual host-observed resume event. Original unresolved game actions still block writes after a successful wake check and require their existing explicit reconciliation.
+
+`npm run test:power` exercises the actual supervisor, UI and native NO DSP host with synthesized Electron [powerMonitor](https://www.electronjs.org/docs/latest/api/power-monitor) events, including UI reload while paused, rejection of premature resume, a failed wake check and UI-triggered retry, stale read data and the same MCP process. Focused checks also retain a receipt arriving during drain and reject an old confirmation without a second commit. The portable default/reopen flow includes the two event cycles when `powerLifecycle: 1` is declared. Actual OS sleep, physical input, DSP suspend/resume and clean-Windows behavior still need separate acceptance.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

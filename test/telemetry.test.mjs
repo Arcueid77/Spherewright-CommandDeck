@@ -1,6 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ReadOnlyTelemetry } from "../apps/desktop/telemetry.mjs";
+
+test("power interruption discards late reads and keeps old data stale until a new complete cycle", async () => {
+	let now = 0, release, entered;
+	const barrier = new Promise(resolve => { entered = resolve; }), c = fake(), telemetry = new ReadOnlyTelemetry(c, { now: () => now });
+	await telemetry.refresh(); const original = telemetry.snapshot().summary.data, read = c.read.bind(c); let hold = true;
+	c.read = async (...args) => { const value = await read(...args); if (hold) { hold = false; entered(); await new Promise(resolve => { release = resolve; }); } return value; };
+	now = 6000; const pending = telemetry.refresh(); await barrier; const before = c.calls.length;
+	telemetry.interrupt(); release(); await pending;
+	assert.equal(c.calls.length, before); assert.equal(telemetry.snapshot().summary.state, "stale");
+	assert.equal(telemetry.snapshot().summary.reason, "SYSTEM_POWER_SUSPENDED"); assert.deepEqual(telemetry.snapshot().summary.data, original);
+	await telemetry.refresh(); assert.equal(telemetry.snapshot().summary.state, "observed"); assert.ok(c.calls.length > before);
+	await telemetry.close();
+});
 import { runtimePerformanceFixture } from "./fixtures/runtime-performance.mjs";
 
 const window = { state: "ready", startGameTick: 601, endGameTick: 1200, elapsedGameTicks: 600, elapsedGameSeconds: 10, wallClockElapsedSeconds: 0, excludedNonGameSeconds: 0, crossedSessionBoundary: false };

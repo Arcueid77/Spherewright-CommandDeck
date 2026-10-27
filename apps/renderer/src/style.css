@@ -34,6 +34,7 @@ textarea {
 .file-tree button { display: block; border: 0; border-radius: 0; background: transparent; text-align: left; width: 100%; padding: 7px 3px; overflow-wrap: anywhere; font: 11px Consolas, "Microsoft YaHei", monospace; }
 .file-tree button:hover { background: #1b2a38; }
 .notice { color: #e4b277; overflow-wrap: anywhere; }
+.power-notice { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 16px; color: #f0cc96; background: #302619; border-bottom: 1px solid #6b5130; font-size: 12px; }
 .editor-panel, .output-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .editor-title { flex: 1; align-self: center; overflow-wrap: anywhere; font: 11px Consolas, "Microsoft YaHei", monospace; min-width: 130px; }
 .code-editor { flex: 1; width: 100%; resize: none; border: 0; border-radius: 0; outline: none; padding: 18px; background: #0d1620; color: #c7d6df; font: 13px / 1.75 Consolas, "Microsoft YaHei", monospace; white-space: pre; tab-size: 4; }

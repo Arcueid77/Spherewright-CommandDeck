@@ -14,13 +14,14 @@ const args = process.argv.slice(2);
 const renamedElectron = args.includes("--renamed-electron");
 if (renamedElectron) args.splice(args.indexOf("--renamed-electron"), 1);
 const runId = randomUUID();
-const traySmoke = args.includes("--smoke-tray");
+const traySmoke = args.includes("--smoke-tray"), powerSmoke = args.includes("--smoke-power");
+if (powerSmoke && args.length !== 1) throw new Error("EXPLICIT_POWER_SMOKE_REQUIRED");
 if (traySmoke && args.length !== 1) throw new Error("EXPLICIT_TRAY_SMOKE_REQUIRED");
 const runtimeLoss = args.includes("--smoke-runtime-loss");
 const mcpFlags = args.filter(arg => arg.startsWith("--smoke-mcp-loss")), mcpLoss = mcpFlags.length > 0;
 if (mcpLoss && (mcpFlags.length !== 1 || renamedElectron || !args.includes("--smoke-game") || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(mcpFlags[0]) || args.some(arg => !["--smoke-game", mcpFlags[0]].includes(arg)))) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
 const mcpScenario = mcpLoss ? mcpFlags[0].slice("--smoke-mcp-loss=".length) : null, controlledFault = runtimeLoss || mcpLoss;
-const file = traySmoke ? "desktop-smoke-tray.json" : mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
+const file = powerSmoke ? "desktop-smoke-power.json" : traySmoke ? "desktop-smoke-tray.json" : mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
 	: args.includes("--smoke-adapter")
 	? "desktop-smoke-adapter.json"
@@ -61,13 +62,14 @@ let code, signal;
 try { [code, signal] = await once(child, "exit"); }
 finally { clearTimeout(timer); }
 assert.equal(code, 0, signal ?? "Desktop smoke failed");
-const result = JSON.parse(await readFile(traySmoke ? join(root, ".local/tray-smoke", runId, "application.private.json") : join(root, ".local", ...(mcpLoss ? ["mcp-loss", runId] : []), controlledFault ? file.replace(".json", ".application.private.json") : file), "utf8"));
+const result = JSON.parse(await readFile(powerSmoke ? join(root, ".local/power-smoke", runId, "application.private.json") : traySmoke ? join(root, ".local/tray-smoke", runId, "application.private.json") : join(root, ".local", ...(mcpLoss ? ["mcp-loss", runId] : []), controlledFault ? file.replace(".json", ".application.private.json") : file), "utf8"));
 assert.equal(
 	result.runId,
 	runId,
 	"This process exited without writing its own complete proof",
 );
-if (traySmoke) { for (const key of ["nativeTrayCreated", "nativeMenuOpenRestoresMinimizedUi", "uiReloadRetainsOriginalTray", "originalUiAndRuntimeRetained", "noProbeReplay", "ownFixtureEmbeddedAndDetached", "exitRequestedThroughTray"]) assert.equal(result[key], true, key); assert.equal(result.syntheticModelRequests, 2); assert.equal(result.gameCalls, 0); assert.equal(result.realModelRequests, 0); }
+if (powerSmoke) { for (const field of ["rejectedAdmissionWhileSuspended", "reloadRetainsPowerGate", "wakeCheckFailureStaysBlockedUntilUiRetry", "noModelOrTaskReplay", "originalNativeBindingRetained", "sameMcpProcessRetained", "cachedReadsInvalidated", "ownServerExitConfirmed"]) assert.equal(result[field], true, field); assert.equal(result.cycles.length, 2); assert.equal(result.actualOsSleepVerified, false); }
+else if (traySmoke) { for (const key of ["nativeTrayCreated", "nativeMenuOpenRestoresMinimizedUi", "uiReloadRetainsOriginalTray", "originalUiAndRuntimeRetained", "noProbeReplay", "ownFixtureEmbeddedAndDetached", "exitRequestedThroughTray"]) assert.equal(result[key], true, key); assert.equal(result.syntheticModelRequests, 2); assert.equal(result.gameCalls, 0); assert.equal(result.realModelRequests, 0); }
 else if (mcpLoss) { assert.equal(result.originalMcpExitObserved, true); assert.equal(result.mcpLossScenario, mcpScenario); assert.equal(result.syntheticGameCommits, 1); assert.equal(result.replacementMcpCount, mcpScenario === "accepted" ? 1 : 0); assert.equal(result.noModelOrCommitReplay, true); assert.equal(result.ownServerExitConfirmed, true); }
 else if (runtimeLoss) { assert.equal(result.runtimeExitObserved, true); if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, args.includes("--smoke-runtime-accepted") ? 1 : 0); assert.equal(result.ownServerExitConfirmed, true); } else assert.equal(result.noProbeAllocated, true); }
 else if (args.includes("--smoke-observation")) { assert.equal(result.readOnlyEnforced,true); assert.equal(result.toolRequests,12); assert.equal(result.ownServerExitConfirmed,true); }
@@ -79,8 +81,8 @@ else if (args.includes("--smoke-adapter"))
 else if (args.includes("--smoke-host-exit"))
 	assert.equal(result.hostExit.hostNotRelaunched, true);
 else assert.equal(result.supervision.inFlightProbeCompletedAfterUiExit, true);
-if (controlledFault || traySmoke) {
-	const proofRoot = join(root, traySmoke ? ".local/tray-smoke" : mcpLoss ? ".local/mcp-loss" : ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
+if (controlledFault || traySmoke || powerSmoke) {
+	const proofRoot = join(root, powerSmoke ? ".local/power-smoke" : traySmoke ? ".local/tray-smoke" : mcpLoss ? ".local/mcp-loss" : ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
 	await writeFile(join(proofRoot, "application-proof.private.json"), JSON.stringify(result), { flag: "wx" });
 	if (mcpLoss) {
 		const base = join(mcpTemporary, "runtime-fixtures/m3-smoke", runId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));

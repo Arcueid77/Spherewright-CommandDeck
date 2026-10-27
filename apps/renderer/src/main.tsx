@@ -33,6 +33,7 @@ type ProbeResult = {
 	text?: string;
 };
 type RuntimeEvent = {
+	power?: PowerState;
 	type: string;
 	text?: string;
 	tool?: string;
@@ -42,6 +43,7 @@ type RuntimeEvent = {
 	kind?: string;
 };
 type UiSnapshot = {
+	power: PowerState;
 	layoutMode: "m0" | "development";
 	busy: boolean;
 	runtimeAvailable: boolean;
@@ -49,12 +51,14 @@ type UiSnapshot = {
 	lastProbeResult: ProbeResult | null;
 	events: RuntimeEvent[];
 };
+type PowerState = { phase: "ready" | "suspended" | "checking" | "blocked"; generation: number; draining: boolean; error: string | null; canRetry: boolean };
 declare global {
 	interface Window {
 		deck: {
 			status(): Promise<NativeState>;
 			focusUi(): Promise<unknown>;
 			snapshot(): Promise<UiSnapshot>;
+			resumeSystem(): Promise<PowerState>;
 			profiles(): Promise<Profile[]>;
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
@@ -460,6 +464,13 @@ async function ready(event: DockviewReadyEvent) {
 	});
 }
 function App() {
+	const [power, setPower] = useState<PowerState | null>(null);
+	useEffect(() => {
+		let active = true, notified = false;
+		void window.deck.snapshot().then(value => { if (active && !notified) setPower(value.power); }).catch(() => {});
+		const unsubscribe = window.deck.onEvent(event => { if (event.type === "system-power" && event.power) { notified = true; setPower(event.power); } });
+		return () => { active = false; unsubscribe(); };
+	}, []);
 	const observationOnly = Boolean(useBridge().state.observationPolicy);
 	const [settings, setSettings] = useState(false);
 	const [diagnostics, setDiagnostics] = useState(false);
@@ -492,6 +503,10 @@ function App() {
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
+			{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>
+				<span>{power.phase === "suspended" ? "系统暂停中，新的执行已关闭。" : power.phase === "checking" ? "正在检查唤醒后的连接，执行保持暂停。" : "唤醒检查未完成，执行保持暂停。"} 原任务和回执保留，不会自动重做。</span>
+				{power.canRetry && <button onClick={() => void window.deck.resumeSystem().catch(() => {})}>重新检查连接</button>}
+			</div>}
 			<div className="workspace" inert={settings || confirmation || diagnostics}>
 				<DockviewReact
 					className="dockview-theme-abyss"

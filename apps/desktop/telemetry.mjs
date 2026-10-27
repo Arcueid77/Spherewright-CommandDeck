@@ -54,6 +54,11 @@ export class ReadOnlyTelemetry {
 		const sorted = [...itemIds].sort((a, b) => a - b);
 		if (JSON.stringify(sorted) !== JSON.stringify([...this.itemIds].sort((a, b) => a - b))) { this.generation++; this.itemIds = sorted; this.production = empty("WATCH_CHANGED"); this.lastStarted = -Infinity; }
 	}
+	interrupt() {
+		this.generation++; this.lastStarted = -Infinity;
+		for (const key of ["summary", "production", "bridge", "session", "runtimePerformance"]) this[key] = { ...this[key], state: this[key].data ? "stale" : "unavailable", reason: "SYSTEM_POWER_SUSPENDED" };
+		this.#event("SYSTEM_POWER_SUSPENDED"); this.emit();
+	}
 	#event(reason) { this.events.push({ receivedAt: this.now(), reason }); this.events = this.events.slice(-40); }
 	#clearWorld(reason, state = "unavailable") { this.identity = null; this.summary = { ...empty(reason), state }; this.production = { ...empty(reason), state }; }
 	refresh(force = false) {

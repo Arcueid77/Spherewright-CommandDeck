@@ -2,6 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { BridgeMonitor } from "../apps/desktop/bridge-monitor.mjs";
 const selection = { path: "owned-fixture/Spherewright.Mcp.exe", cohortHash: "a".repeat(64), fileCount: 4 };
+
+test("power pause retains the exact client and generation while rejecting reconnect and new research", async () => {
+	const f = fixture(); await f.monitor.select(selection.path);
+	const client = f.monitor.telemetry.client, generation = f.monitor.snapshot().connectionGeneration;
+	f.monitor.setSystemPaused(true); assert.equal(f.monitor.snapshot().observation.connected, false);
+	await assert.rejects(f.monitor.connect(), /SYSTEM_POWER_PAUSED/); assert.throws(() => f.monitor.acquireResearch({}), /SYSTEM_POWER_PAUSED/);
+	f.monitor.poll(); f.monitor.refresh(); assert.equal(f.starts(), 1);
+	f.monitor.setSystemPaused(false); assert.equal(f.monitor.telemetry.client, client); assert.equal(f.monitor.snapshot().connectionGeneration, generation);
+	assert.equal(f.starts(), 1); await f.monitor.close();
+});
 function fixture() {
 	let hash = selection.cohortHash, starts = 0, failClose = false;
 	const monitor = new BridgeMonitor({ fingerprint: async () => ({ ...selection, cohortHash: hash }), launch() {

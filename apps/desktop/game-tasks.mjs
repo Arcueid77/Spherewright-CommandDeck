@@ -212,7 +212,7 @@ export class GameTasks {
 	}
 	async settled() { await this.operation?.done; return this.snapshot(); }
 	async drain() {
-		this.closing = true; this.#confirmations.clear(); this.controller?.abort();
+		this.closing = true; this.catalogue = null; this.#confirmations.clear(); this.controller?.abort();
 		if (this.ledger.storageAvailable && this.currentTaskId && !this.ledger.unresolved().length) { try { this.ledger.stop(this.currentTaskId); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; } }
 		await this.operation?.done;
 		// Durable unresolved intents remain blocked next launch. No new action is sent during shutdown.

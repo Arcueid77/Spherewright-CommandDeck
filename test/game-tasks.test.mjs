@@ -8,6 +8,32 @@ import { join, dirname, basename } from "node:path";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 
+test("power drain invalidates the old catalog and approval without replaying its model", async t => {
+	let models = 0; const f = await fixture(t, { planner: async () => { models++; return { proposedTechId: 100 }; } });
+	f.host.catalog(); const catalog = (await f.host.settled()).catalog;
+	f.start(f.host, { catalogId: catalog.id }); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1);
+	await f.host.drain(); assert.equal(f.host.snapshot().catalog, null);
+	await f.host.resumeAfterCloseFailure();
+	assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
+	assert.throws(() => f.start(f.host, { catalogId: catalog.id }), /FRESH_RESEARCH_CATALOG_REQUIRED/);
+	assert.equal(models, 1); assert.equal(f.host.snapshot().tasks.length, 1); assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("an accepted receipt arriving during power drain is retained and wake never resubmits it", async t => {
+	let models = 0, entered, release; const barrier = new Promise(resolve => { entered = resolve; });
+	const f = await fixture(t, { mode: "pending", planner: async () => { models++; return { proposedTechId: 100 }; } });
+	f.start(); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1), commit = f.host.adapter.commit.bind(f.host.adapter);
+	t.mock.method(f.host.adapter, "commit", async request => { const receipt = await commit(request); entered(); await new Promise(resolve => { release = resolve; }); return receipt; });
+	f.host.confirm(f.approval, challenge.nonce, 1); await barrier;
+	const draining = f.host.drain(); release(); await draining;
+	const original = f.host.snapshot().unresolved[0]; assert.ok(original.actionId); const calls = f.client.stats.toolCalls;
+	await f.host.resumeAfterCloseFailure(); const after = f.host.snapshot();
+	assert.deepEqual(after.unresolved[0], original); assert.equal(after.developmentFrozen, true); assert.equal(after.phase, "blocked");
+	assert.equal(f.client.stats.toolCalls, calls); assert.equal(models, 1);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
 async function fixture(t, { mode = "normal", planner = async () => ({ proposedTechId: 100 }), now = () => Date.now() } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-host-")), authority = {}, approval = {}, instances = [];
 	const client = new ReadOnlyMcpClient(spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode], { stdio: "pipe", windowsHide: true }), { researchAuthority: authority, timeoutMs: 1000 });

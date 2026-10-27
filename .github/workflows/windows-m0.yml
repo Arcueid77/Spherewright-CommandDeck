@@ -56,6 +56,7 @@ jobs:
       - run: npm run test:desktop-adapter
       - run: npm run test:workbench
       - run: npm run test:tray
+      - run: npm run test:power
       - run: npm run test:renamed-ui
       - run: npm run test:bridge
       - run: npm run test:observation
@@ -129,6 +130,7 @@ jobs:
             .local/desktop-smoke-adapter.json
             .local/desktop-smoke-workbench.json
             .local/desktop-smoke-tray.json
+            .local/desktop-smoke-power.json
             .local/desktop-smoke-renamed-ui.json
             .local/credential-vault-smoke.json
             .local/desktop-smoke-bridge.json
