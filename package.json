@@ -27,6 +27,7 @@
 		"test:diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-storage": "node scripts/packaged-storage-smoke.mjs",
+		"test:action-upgrade": "node scripts/packaged-action-upgrade-smoke.mjs",
 		"test:packaged-os-storage": "node scripts/packaged-os-storage-smoke.mjs",
 		"test:packaged-acl-storage": "node scripts/packaged-os-storage-smoke.mjs --fault acl-write-deny",
 		"test:packaged-ledger-evidence": "node scripts/packaged-ledger-evidence-smoke.mjs",

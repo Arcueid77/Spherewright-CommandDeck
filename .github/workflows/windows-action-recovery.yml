@@ -1,0 +1,70 @@
+name: Windows explicit action recovery pair
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_revision:
+        description: Exact baseline Deck commit for original-action recovery
+        required: true
+        default: a5b425f4456b45b7bacb65415402227482f57cfb
+        type: string
+permissions:
+  contents: read
+jobs:
+  recovery:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validate explicit baseline
+        shell: pwsh
+        env:
+          RECOVERY_BASELINE_REVISION: ${{ inputs.baseline_revision }}
+        run: |
+          if ($env:RECOVERY_BASELINE_REVISION -cnotmatch '^[a-f0-9]{40}$') { throw 'Exact baseline SHA required' }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline_revision }}
+          path: baseline
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build the two pinned application candidates
+        shell: pwsh
+        run: |
+          foreach ($recoveryCheckout in @('baseline', 'candidate')) {
+            Push-Location $recoveryCheckout
+            try {
+              npm ci --ignore-scripts
+              if ($LASTEXITCODE -ne 0) { throw 'Desktop dependency install failed' }
+              node node_modules/electron/install.js
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Electron install failed' }
+              npm run pi:install
+              if ($LASTEXITCODE -ne 0) { throw 'Pi dependency install failed' }
+              npm run pi:hydrate
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Pi metadata failed' }
+              npm run pi:build
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned Pi build failed' }
+              npm run package:desktop -- --output artifacts/recovery-pair
+              if ($LASTEXITCODE -ne 0) { throw 'Pinned application build failed' }
+            } finally { Pop-Location }
+          }
+      - name: Recover original action after upgrade and retain unknown outcome through rollback
+        working-directory: candidate
+        run: npm run test:action-upgrade -- --baseline ../baseline/artifacts/recovery-pair --candidate artifacts/recovery-pair
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: explicit-action-recovery-results
+          path: |
+            candidate/.local/packaged-action-upgrade-smoke.json
+            baseline/artifacts/recovery-pair/commanddeck-bundle.json
+            candidate/artifacts/recovery-pair/commanddeck-bundle.json
+          if-no-files-found: ignore
