@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { assertFullProfileWorkbench, inventoryProfilePi, profileHash } from "./portable-profile.mjs";
 
 export const portableRecoveryFile = "legacy-recovery-case.json";
 export const recoveryHash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -22,13 +23,15 @@ export async function readPortableRecovery(context) {
 	return value;
 }
 
-export async function assertPortableRecovery(api, expected) {
+export async function assertPortableRecovery(api, expected, fullProfile = null) {
 	const game = await api("game", { action: "snapshot" }), workbench = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
 	assert.equal(game.busy, false); assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.developmentFrozen, true, "LEGACY_DEVELOPMENT_GATE_RELEASED"); assert.equal(game.currentTaskId, expected.task.id); assert.equal(game.syntheticOnly, true, "LEGACY_FIXTURE_LABEL_MISSING");
 	assert.deepEqual(game.tasks, [expected.task]); assert.deepEqual(game.unresolved, [expected.intent]); assert.deepEqual(game.events, []);
-	assert.equal(workbench.executionBlocked, true, "LEGACY_WORKBENCH_GATE_RELEASED"); assert.equal(workbench.gameWriteAccess, "development_frozen"); assert.equal(workbench.activeTask, null); assert.deepEqual(workbench.roots, []); assert.deepEqual(workbench.tasks, []);
+	assert.equal(workbench.executionBlocked, true, "LEGACY_WORKBENCH_GATE_RELEASED"); assert.equal(workbench.gameWriteAccess, "development_frozen"); assert.equal(workbench.activeTask, null);
+	const profileProof = fullProfile ? await assertFullProfileWorkbench(api, fullProfile.expected.workbench) : null;
+	if (!fullProfile) { assert.deepEqual(workbench.roots, []); assert.deepEqual(workbench.tasks, []); }
 	assert.equal(bridge.selected, null); assert.equal(bridge.metadata, null); assert.equal(bridge.observation, null); assert.equal(bridge.requestPerformance, null);
-	return { originalPendingSha256: expected.sha256, unresolvedIntents: 1, developmentFrozen: true, noMcpSelected: true };
+	return { originalPendingSha256: expected.sha256, unresolvedIntents: 1, developmentFrozen: true, noMcpSelected: true, ...(profileProof ? { profile: profileProof } : {}) };
 }
 
 export function assertPendingRecoveryControls(value) {
@@ -42,6 +45,12 @@ export function assertPendingRecoveryControls(value) {
 
 export async function runPortableRecoverySmoke(driver, expected, manifest, runtimePid, settledUi) {
 	const { api, testCommand, getRuntimePid, getProbeSequence, context } = driver;
+	async function profileEvidence() {
+		if (!driver.profileCase) return null;
+		const vault = await driver.profileVaultFixture("recover"), pi = await inventoryProfilePi(context);
+		assert.deepEqual(pi, driver.profileCase.expected.pi, "FULL_PROFILE_PI_CHANGED");
+		return { expectedProfileSha256: driver.profileCase.sha256, ciphertextSha256: vault.ciphertextSha256, nativeVaultDecrypted: true, ciphertextPreserved: true, piFiles: pi.length, piInventorySha256: profileHash(pi), completePiFileSetPreserved: true };
+	}
 	async function pendingUi(phase) {
 		let value = null, completed = false, activated = false;
 		try {
@@ -63,11 +72,13 @@ export async function runPortableRecoverySmoke(driver, expected, manifest, runti
 			await writeFile(join(context.root, `legacy-recovery-ui-${process.pid}-${phase}.private.json`), JSON.stringify({ phase, completed, activatedAfterLayoutReady: activated, ui: value, renderer }), { flag: "wx" });
 		}
 	}
-	assert.equal(getProbeSequence(), 0); const original = await assertPortableRecovery(api, expected);
+	assert.equal(getProbeSequence(), 0); const original = await assertPortableRecovery(api, expected, driver.profileCase);
 	await pendingUi("before-reload");
+	const fullProfile = await profileEvidence();
 	await settledUi(); await assert.rejects(api("probe", { mode: "offline" }), /GAME_EXECUTION_OWNS_RUNTIME/);
 	assert.equal(getProbeSequence(), 0); assert.equal((await api("snapshot")).lastProbeResult, null);
 	for (const [action, args] of [["bridge-select", "C:\\not-a-server.exe"], ["game", { action: "start" }], ["game", { action: "reconcile", args: { intentId: expected.intent.intentId } }], ["workbench", { action: "check" }]]) await assert.rejects(api(action, args), /PORTABLE_SMOKE_ACTION_REJECTED/);
-	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid); await assertPortableRecovery(api, expected); assert.equal(getProbeSequence(), 0); await pendingUi("after-reload");
-	await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, legacyPendingRecovery: original, originalApprovalNotReused: true, pendingDisplayedWithNewExecutionDisabled: true, originalActionQueryEntryRetained: true, layoutReadyBeforePanelActivation: true, uiReloadRetainsRuntimeAndPending: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticTools: 0, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
+	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid); await assertPortableRecovery(api, expected, driver.profileCase); assert.equal(getProbeSequence(), 0); await pendingUi("after-reload");
+	assert.deepEqual(await profileEvidence(), fullProfile);
+	await writeFile(join(context.root, "application-proof.json"), JSON.stringify({ runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, legacyPendingRecovery: original, ...(fullProfile ? { fullProfileMigration: fullProfile } : {}), originalApprovalNotReused: true, pendingDisplayedWithNewExecutionDisabled: true, originalActionQueryEntryRetained: true, layoutReadyBeforePanelActivation: true, uiReloadRetainsRuntimeAndPending: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticTools: 0, gameCalls: 0, realModelRequests: 0 }), { flag: "wx" });
 }
