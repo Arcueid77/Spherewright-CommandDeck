@@ -41,9 +41,9 @@ export class VideoPlaybackSessions {
 			try {
 				await prior; this.scope(owner, generation); const archive = this.getArchive(); if (!archive || archive.closed || archive.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE");
 				reader = await archive.openReader(id); this.scope(owner, generation); if (this.#versions.get(owner) !== version) throw new Error("VIDEO_UI_CHANGED");
-				if (reader.readOnly !== true || reader.executionAuthority !== false || reader.recording?.id !== id || !Number.isSafeInteger(reader.recording.bytes) || reader.recording.bytes < 4 || reader.recording.bytes > 134217728) throw new Error("VIDEO_PLAYBACK_UNCONFIRMED");
+				if (reader.readOnly !== true || reader.executionAuthority !== false || reader.recording?.id !== id || !Number.isSafeInteger(reader.recording.bytes) || reader.recording.bytes < 4 || reader.recording.bytes > 134217728 || !/^[a-f0-9]{64}$/.test(reader.observedSha256 ?? "")) throw new Error("VIDEO_PLAYBACK_UNCONFIRMED");
 				const grant = randomUUID(), state = { grant, owner, generation, reader, expires: this.now() + this.ttlMs, reads: 0 }; this.#sessions.set(grant, state);
-				return { grant, recording: reader.recording, complete: reader.complete === true, readOnly: true, executionAuthority: false, expiresInMs: this.ttlMs };
+				return { grant, recording: reader.recording, mediaSha256: reader.observedSha256, complete: reader.complete === true, readOnly: true, executionAuthority: false, expiresInMs: this.ttlMs };
 			} catch (error) { await reader?.close().catch(() => { this.#failed = true; }); throw error; }
 		})();
 		entry.promise = operation; this.#pending.add(entry); void operation.finally(() => this.#pending.delete(entry)).catch(() => {}); return operation;
@@ -60,6 +60,13 @@ export class VideoPlaybackSessions {
 		finally { state.reads--; }
 	}
 	async close(owner, generation, grant) { const state = this.#sessions.get(grant); if (state?.owner === owner && state.generation === generation) await this.closeSession(state); return { closed: true }; }
+	async annotate(owner, generation, grant, operation) {
+		if (typeof operation !== "function") throw new Error("TRUSTED_VIDEO_HOST_REQUIRED");
+		const state = this.match(owner, generation, grant);
+		await this.read(owner, generation, grant, 0, 4);
+		if (this.match(owner, generation, grant) !== state) throw new Error("VIDEO_PLAYBACK_CHANGED");
+		return operation({ recording: state.reader.recording, mediaSha256: state.reader.observedSha256 }, () => this.match(owner, generation, grant) === state);
+	}
 	sweep() { for (const state of this.#sessions.values()) if (!this.current(state.owner, state.generation) || this.now() >= state.expires) void this.closeSession(state).catch(() => {}); }
 	async drain() {
 		this.#disposed = true; clearInterval(this.timer);

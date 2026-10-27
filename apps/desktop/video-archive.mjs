@@ -3,9 +3,13 @@ import { mkdirSync, readdirSync, lstatSync, realpathSync, existsSync, openSync, 
 import { open } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { bookmarkTags } from "./journal-format.mjs";
 
 export const videoArchiveLimits = Object.freeze({ recordings: 32, recordingBytes: 134217728, chunkBytes: 2097152, readBytes: 1048576 });
 export const videoMime = "video/webm;codecs=vp8";
+export const videoBookmarkLimits = Object.freeze({ perRecording: 128, timeMs: 2147483647 });
+const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const bookmarkSchema = "CREATE TABLE video_bookmarks(id TEXT PRIMARY KEY,recording_id TEXT NOT NULL REFERENCES recordings(id),media_sha256 TEXT NOT NULL,time_ms INTEGER NOT NULL,tag TEXT NOT NULL,created_at TEXT NOT NULL,journal_id TEXT,journal_sequence INTEGER,journal_point_sha256 TEXT); CREATE INDEX video_bookmark_time ON video_bookmarks(recording_id,time_ms,id);";
 const webmHeader = Buffer.from("1a45dfa3", "hex");
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const revision = value => typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
@@ -32,15 +36,17 @@ export class VideoArchive {
 		this.db = new DatabaseSync(file);
 		try {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version, tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
-			if (version > 1) throw new Error("VIDEO_ARCHIVE_SCHEMA_TOO_NEW");
-			if (![0, 1].includes(version) || version === 0 && (!created || tables.length) || version === 1 && JSON.stringify(tables) !== '["recordings"]') throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN");
-			if (version === 1) try { this.db.prepare("SELECT id,state,started_at,stopped_at,bytes,chunks,elapsed_ms,mime,width,height,frame_rate,source_revision,pi_commit,journal_id,reason,sha256 FROM recordings LIMIT 0").all(); } catch { throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN"); }
-			this.db.exec("PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-			if (version === 0) this.db.exec("BEGIN IMMEDIATE; CREATE TABLE recordings(id TEXT PRIMARY KEY,state TEXT NOT NULL,started_at TEXT NOT NULL,stopped_at TEXT,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,frame_rate INTEGER NOT NULL,source_revision TEXT,pi_commit TEXT,journal_id TEXT,reason TEXT,sha256 TEXT); CREATE UNIQUE INDEX one_recording ON recordings((1)) WHERE state='recording'; PRAGMA user_version=1; COMMIT;");
+			if (version > 2) throw new Error("VIDEO_ARCHIVE_SCHEMA_TOO_NEW");
+			if (![0, 1, 2].includes(version) || version === 0 && (!created || tables.length) || version === 1 && JSON.stringify(tables) !== '["recordings"]' || version === 2 && JSON.stringify(tables) !== '["recordings","video_bookmarks"]') throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN");
+			if (version > 0) try { this.db.prepare("SELECT id,state,started_at,stopped_at,bytes,chunks,elapsed_ms,mime,width,height,frame_rate,source_revision,pi_commit,journal_id,reason,sha256 FROM recordings LIMIT 0").all(); if (version === 2) this.db.prepare("SELECT id,recording_id,media_sha256,time_ms,tag,created_at,journal_id,journal_sequence,journal_point_sha256 FROM video_bookmarks LIMIT 0").all(); } catch { throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN"); }
+			if (version === 0) this.db.exec("BEGIN IMMEDIATE; CREATE TABLE recordings(id TEXT PRIMARY KEY,state TEXT NOT NULL,started_at TEXT NOT NULL,stopped_at TEXT,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,frame_rate INTEGER NOT NULL,source_revision TEXT,pi_commit TEXT,journal_id TEXT,reason TEXT,sha256 TEXT); CREATE UNIQUE INDEX one_recording ON recordings((1)) WHERE state='recording'; " + bookmarkSchema + " PRAGMA user_version=2; COMMIT;");
 			const rows = this.rows();
 			const allowed = new Set(["videos.sqlite", "videos.sqlite-wal", "videos.sqlite-shm", "videos.sqlite.presence", ...rows.map(row => row.id + ".webm")]);
 			if (readdirSync(directory).some(name => !allowed.has(name))) throw new Error("VIDEO_ARCHIVE_EVIDENCE_INVALID");
 			for (const row of rows) if (regular(this.path(row.id)).size !== row.bytes) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
+			if (version === 2) this.bookmarkRows();
+			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
+			if (version === 1) { this.db.exec("BEGIN IMMEDIATE"); try { this.db.exec(bookmarkSchema + " PRAGMA user_version=2; COMMIT;"); } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
 			this.db.prepare("UPDATE recordings SET state='interrupted',reason='application_interrupted' WHERE state='recording'").run();
 			if (!existsSync(marker)) { const fd = openSync(marker, "wx", 0o600); try { writeSync(fd, markerText); fsyncSync(fd); } finally { closeSync(fd); } }
 		} catch (error) { this.db.close(); throw error; }
@@ -54,9 +60,48 @@ export class VideoArchive {
 		return rows;
 	}
 	publicRow(row) { return { id: row.id, state: this.error && row.state === "recording" ? "interrupted" : row.state, startedAt: row.started_at, stoppedAt: row.stopped_at, bytes: row.bytes, chunks: row.chunks, elapsedMs: row.elapsed_ms, mime: row.mime, capture: { width: row.width, height: row.height, frameRate: row.frame_rate }, build: { sourceRevision: row.source_revision, piCommit: row.pi_commit }, journalId: row.journal_id, reason: this.error && row.state === "recording" ? "storage_unconfirmed" : row.reason, sha256: row.sha256, executionAuthority: false }; }
-	snapshot() { let recordings = []; try { recordings = this.rows().map(row => this.publicRow(row)); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; } return { available: !this.closed && !this.closing && !this.error, error: this.error, activeId: this.error ? null : this.active?.id ?? null, limits: this.limits, recordings }; }
+	bookmarkRows() {
+		const recordings = new Map(this.rows().map(row => [row.id, row])), counts = new Map(), rows = this.db.prepare("SELECT * FROM video_bookmarks ORDER BY recording_id,time_ms,id LIMIT ?").all(this.limits.recordings * videoBookmarkLimits.perRecording + 1);
+		if (rows.length > this.limits.recordings * videoBookmarkLimits.perRecording) throw new Error("VIDEO_BOOKMARK_EVIDENCE_INVALID");
+		for (const row of rows) {
+			const parent = recordings.get(row.recording_id), count = (counts.get(row.recording_id) ?? 0) + 1; counts.set(row.recording_id, count);
+			const emptyLink = row.journal_id === null && row.journal_sequence === null && row.journal_point_sha256 === null;
+			if (!uuid(row.id) || !parent || parent.state === "recording" || parent.bytes < 4 || count > videoBookmarkLimits.perRecording || !digest(row.media_sha256) || parent.sha256 !== null && parent.sha256 !== row.media_sha256 || !Number.isSafeInteger(row.time_ms) || row.time_ms < 0 || row.time_ms > videoBookmarkLimits.timeMs || !bookmarkTags.includes(row.tag) || !stamp(row.created_at) || !emptyLink && (!uuid(row.journal_id) || parent.journal_id !== row.journal_id || !Number.isSafeInteger(row.journal_sequence) || row.journal_sequence < 1 || row.journal_sequence > 4096 || !digest(row.journal_point_sha256))) throw new Error("VIDEO_BOOKMARK_EVIDENCE_INVALID");
+		} return rows;
+	}
+	annotations(id) {
+		if (!uuid(id)) throw new Error("VIDEO_RECORDING_INVALID"); if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE");
+		try {
+			this.assertDirectory(); const row = this.rows().find(row => row.id === id); if (!row) throw new Error("VIDEO_RECORDING_NOT_FOUND");
+			return { recording: this.publicRow(row), bookmarks: this.bookmarkRows().filter(row => row.recording_id === id).map(row => ({ id: row.id, timeMs: row.time_ms, tag: row.tag, createdAt: row.created_at, mediaSha256: row.media_sha256, relation: row.journal_id === null ? null : { journalId: row.journal_id, sequence: row.journal_sequence, pointSha256: row.journal_point_sha256 } })), limits: videoBookmarkLimits, executionAuthority: false };
+		} catch (error) { if (error?.message === "VIDEO_RECORDING_NOT_FOUND") throw error; this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
+	}
+	addBookmark(id, mediaSha256, timeMs, tag, relation, guard) {
+		if (!uuid(id) || !digest(mediaSha256) || !Number.isSafeInteger(timeMs) || timeMs < 0 || timeMs > videoBookmarkLimits.timeMs || !bookmarkTags.includes(tag) || typeof guard !== "function" || relation !== null && (!relation || Object.keys(relation).sort().join(",") !== "journalId,pointSha256,sequence" || !uuid(relation.journalId) || !Number.isSafeInteger(relation.sequence) || relation.sequence < 1 || relation.sequence > 4096 || !digest(relation.pointSha256))) return Promise.reject(new Error("VIDEO_BOOKMARK_INVALID"));
+		return this.queue(() => {
+			let transaction = false;
+			try {
+				this.assertWritable(); this.db.exec("BEGIN IMMEDIATE"); transaction = true;
+				if (guard() !== true) throw new Error("VIDEO_UI_CHANGED");
+				const parent = this.rows().find(row => row.id === id); this.bookmarkRows();
+				if (!parent || parent.state === "recording" || parent.bytes < 4 || parent.sha256 !== null && parent.sha256 !== mediaSha256 || relation !== null && parent.journal_id !== relation.journalId) throw new Error("VIDEO_BOOKMARK_INVALID");
+				if (regular(this.path(id)).size !== parent.bytes) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
+				const existing = this.db.prepare("SELECT 1 FROM video_bookmarks WHERE recording_id=? AND media_sha256=? AND time_ms=? AND tag=? AND journal_id IS ? AND journal_sequence IS ? AND journal_point_sha256 IS ?").get(id, mediaSha256, timeMs, tag, relation?.journalId ?? null, relation?.sequence ?? null, relation?.pointSha256 ?? null);
+				if (!existing) {
+					if (this.db.prepare("SELECT count(*) AS n FROM video_bookmarks WHERE recording_id=?").get(id).n >= videoBookmarkLimits.perRecording) throw new Error("VIDEO_BOOKMARK_LIMIT");
+					this.db.prepare("INSERT INTO video_bookmarks VALUES(?,?,?,?,?,?,?,?,?)").run(randomUUID(), id, mediaSha256, timeMs, tag, this.utc(), relation?.journalId ?? null, relation?.sequence ?? null, relation?.pointSha256 ?? null);
+				}
+				this.db.exec("COMMIT"); transaction = false; this.notice(); return this.annotations(id);
+			} catch (error) {
+				if (transaction) try { this.db.exec("ROLLBACK"); } catch {}
+				if (["VIDEO_UI_CHANGED", "VIDEO_PLAYBACK_CHANGED", "VIDEO_PLAYBACK_EXPIRED", "VIDEO_BOOKMARK_INVALID", "VIDEO_BOOKMARK_LIMIT"].includes(error?.message)) throw error;
+				this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE");
+			}
+		});
+	}
+	snapshot() { let recordings = []; try { this.bookmarkRows(); recordings = this.rows().map(row => this.publicRow(row)); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; } return { available: !this.closed && !this.closing && !this.error, error: this.error, activeId: this.error ? null : this.active?.id ?? null, limits: this.limits, recordings }; }
 	assertDirectory() { const info = lstatSync(this.directory); if (info.isSymbolicLink() || info.ino !== this.directoryIdentity.ino || info.dev !== this.directoryIdentity.dev || realpathSync(this.directory).toLowerCase() !== this.directory.toLowerCase()) throw new Error("VIDEO_ARCHIVE_PATH_UNSAFE"); }
-	assertWritable() { if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); try { this.assertDirectory(); this.rows(); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); } }
+	assertWritable() { if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); try { this.assertDirectory(); this.bookmarkRows(); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); } }
 	queue(action) {
 		if (this.closed || this.closing) return Promise.reject(new Error("VIDEO_ARCHIVE_UNAVAILABLE"));
 		if (this.pending >= 3) return Promise.reject(new Error("VIDEO_ARCHIVE_BACKPRESSURE")); this.pending++;

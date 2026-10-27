@@ -6,7 +6,7 @@ import { createVideoProtocol, videoPlaybackUrl } from "../apps/desktop/video-pro
 const deferred = () => { let resolve; return { promise: new Promise(value => { resolve = value; }), resolve: value => resolve(value) }; };
 function fixture(t, { open, read, ttlMs = 100 } = {}) {
 	const owner = {}, other = {}, id = randomUUID(), bytes = Buffer.from("owned encoded media"), calls = []; let generation = 1, now = 0;
-	const reader = () => ({ recording: { id, bytes: bytes.length }, complete: true, readOnly: true, executionAuthority: false, read: async (offset, size) => read ? read(offset, size) : bytes.subarray(offset, offset + size), close: async () => { calls.push("close"); } });
+	const reader = () => ({ recording: { id, bytes: bytes.length }, observedSha256: "a".repeat(64), complete: true, readOnly: true, executionAuthority: false, read: async (offset, size) => read ? read(offset, size) : bytes.subarray(offset, offset + size), close: async () => { calls.push("close"); } });
 	const broker = new VideoPlaybackSessions({ getArchive: () => ({ openReader: async () => open ? open(reader) : reader() }), isCurrent: (candidate, value) => candidate === owner && value === generation, now: () => now, ttlMs });
 	t.after(() => broker.drain()); return { broker, owner, other, id, bytes, calls, reader, generation: value => { generation = value; }, time: value => { now = value; } };
 }
@@ -30,6 +30,20 @@ test("a playback close cannot be performed by another document or owner", async 
 	await f.broker.close(f.other, 1, opened.grant); await f.broker.close(f.owner, 2, opened.grant);
 	assert.equal(f.calls.length, 0); assert.equal((await f.broker.read(f.owner, 1, opened.grant, 0, 1)).length, 1);
 	await f.broker.close(f.owner, 1, opened.grant); assert.equal(f.calls.length, 1);
+});
+test("annotations use the current verified reader and lose admission after document replacement", async t => {
+	const f = fixture(t), opened = await f.broker.open(f.owner, 1, f.id); let guard, calls = 0;
+	assert.equal(opened.mediaSha256, "a".repeat(64));
+	const value = await f.broker.annotate(f.owner, 1, opened.grant, (media, current) => { calls++; guard = current; assert.equal(current(), true); return media; });
+	assert.equal(value.recording.id, f.id); assert.equal(value.mediaSha256, opened.mediaSha256);
+	await assert.rejects(f.broker.annotate(f.other, 1, opened.grant, () => calls++), /VIDEO_UI_CHANGED/);
+	f.generation(2); assert.throws(guard, /VIDEO_UI_CHANGED/); assert.equal(calls, 1);
+});
+test("a reader change while checking annotation evidence cannot call the metadata writer", async t => {
+	const pending = deferred(), started = deferred(), f = fixture(t, { read: () => { started.resolve(); return pending.promise; } }), opened = await f.broker.open(f.owner, 1, f.id); let called = false;
+	const saved = f.broker.annotate(f.owner, 1, opened.grant, () => { called = true; }); await started.promise;
+	await f.broker.invalidate(f.owner); pending.resolve(f.bytes.subarray(0, 4));
+	await assert.rejects(saved, /VIDEO_PLAYBACK_CHANGED/); assert.equal(called, false);
 });
 
 test("media streaming stays bounded and discards late bytes after document invalidation", async () => {

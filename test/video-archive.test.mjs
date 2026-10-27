@@ -4,7 +4,7 @@ import { mkdtemp, realpath, rm, readFile, writeFile, rename, link } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { VideoArchive, videoArchiveLimits } from "../apps/desktop/video-archive.mjs";
 
 const metadata = { width: 1280, height: 720, frameRate: 30, sourceRevision: "a".repeat(40), piCommit: "b".repeat(40) };
@@ -78,4 +78,48 @@ test("WebM initialization may span fragments while invalid continuations and inc
 	const incomplete = (await archive.start(metadata)).activeId; await archive.append(incomplete, 1, first.subarray(0, 1)); await archive.finish(incomplete);
 	const row = archive.snapshot().recordings.find(row => row.id === incomplete); assert.equal(row.state, "interrupted"); assert.equal(row.reason, "no_data"); assert.equal(row.bytes, 1); assert.equal(row.sha256, null);
 	await assert.rejects(archive.openReader(incomplete), /VIDEO_PLAYBACK_UNAVAILABLE/);
+});
+
+function legacyCatalog(directory, { mediaBytes = first.length } = {}) {
+	const id = randomUUID(), hash = createHash("sha256").update(first).digest("hex"), db = new DatabaseSync(join(directory, "videos.sqlite"));
+	try {
+		db.exec("CREATE TABLE recordings(id TEXT PRIMARY KEY,state TEXT NOT NULL,started_at TEXT NOT NULL,stopped_at TEXT,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,frame_rate INTEGER NOT NULL,source_revision TEXT,pi_commit TEXT,journal_id TEXT,reason TEXT,sha256 TEXT); CREATE UNIQUE INDEX one_recording ON recordings((1)) WHERE state='recording'; PRAGMA user_version=1;");
+		db.prepare("INSERT INTO recordings VALUES(?,'complete',?,?,?,?,?,'video/webm;codecs=vp8',1280,720,30,?,?,NULL,'user_stopped',?)").run(id, "2026-10-28T00:00:00.000Z", "2026-10-28T00:00:01.000Z", mediaBytes, 1, 1000, metadata.sourceRevision, metadata.piCommit, hash);
+	} finally { db.close(); }
+	return { id, hash };
+}
+test("v1 catalog migration preserves every media/recording field and bookmarks survive reopen", async t => {
+	const f = await fixture(t), old = legacyCatalog(f.directory), catalog = join(f.directory, "videos.sqlite"), marker = join(f.directory, "videos.sqlite.presence");
+	await writeFile(join(f.directory, old.id + ".webm"), first); await writeFile(marker, "commanddeck-video-archive-v1\n");
+	const before = new DatabaseSync(catalog, { readOnly: true }); let original; try { original = before.prepare("SELECT * FROM recordings").all(); } finally { before.close(); }
+	const archive = f.open(); assert.equal(archive.db.prepare("PRAGMA user_version").get().user_version, 2); assert.deepEqual(archive.db.prepare("SELECT * FROM recordings").all(), original);
+	assert.deepEqual(archive.annotations(old.id).bookmarks, []); assert.deepEqual(await readFile(join(f.directory, old.id + ".webm")), first); assert.equal(await readFile(marker, "utf8"), "commanddeck-video-archive-v1\n");
+	const saved = await archive.addBookmark(old.id, old.hash, 400, "checkpoint", null, () => true); assert.equal(saved.bookmarks.length, 1); assert.equal(saved.executionAuthority, false);
+	await archive.close(); const reopened = f.open(); assert.deepEqual(reopened.annotations(old.id), saved); assert.deepEqual(reopened.db.prepare("SELECT * FROM recordings").all(), original);
+});
+test("inconsistent legacy media is rejected before schema migration without changing the catalog", async t => {
+	const f = await fixture(t), old = legacyCatalog(f.directory, { mediaBytes: first.length + 1 }), catalog = join(f.directory, "videos.sqlite"); await writeFile(join(f.directory, old.id + ".webm"), first);
+	const original = await readFile(catalog); assert.throws(() => f.open(), /VIDEO_ARCHIVE_MEDIA_UNCONFIRMED/); assert.deepEqual(await readFile(catalog), original);
+	const db = new DatabaseSync(catalog, { readOnly: true }); try { assert.equal(db.prepare("PRAGMA user_version").get().user_version, 1); assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='video_bookmarks'").get().n, 0); } finally { db.close(); }
+});
+test("bookmarks bind the media/journal, deduplicate acknowledgements, and enforce the exact per-clip bound", async t => {
+	const f = await fixture(t), archive = f.open(), journalId = randomUUID(), id = (await archive.start({ ...metadata, journalId })).activeId; await archive.append(id, 1, first); await archive.finish(id);
+	const hash = archive.snapshot().recordings[0].sha256, relation = { journalId, sequence: 1, pointSha256: "d".repeat(64) };
+	const saved = await archive.addBookmark(id, hash, 123, "verified", relation, () => true); assert.deepEqual(await archive.addBookmark(id, hash, 123, "verified", relation, () => true), saved);
+	for (const [digest, time, tag, link] of [["f".repeat(64), 0, "issue", null], [hash, -1, "issue", null], [hash, 0, "PRIVATE", null], [hash, 0, "issue", { ...relation, journalId: randomUUID() }], [hash, 0, "issue", { ...relation, path: "PRIVATE" }]]) await assert.rejects(archive.addBookmark(id, digest, time, tag, link, () => true), /VIDEO_BOOKMARK_INVALID/);
+	archive.db.exec("BEGIN IMMEDIATE"); try { for (let index = 1; index < 128; index++) archive.db.prepare("INSERT INTO video_bookmarks VALUES(?,?,?,?,?,?,NULL,NULL,NULL)").run(randomUUID(), id, hash, index + 1000, "issue", "2026-10-28T00:00:00.000Z"); archive.db.exec("COMMIT"); } catch (error) { archive.db.exec("ROLLBACK"); throw error; }
+	await assert.rejects(archive.addBookmark(id, hash, 3000, "issue", null, () => true), /VIDEO_BOOKMARK_LIMIT/); assert.equal((await archive.addBookmark(id, hash, 123, "verified", relation, () => true)).bookmarks.length, 128);
+	assert.equal(archive.snapshot().available, true); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), first);
+});
+test("late UI invalidation and SQLite denial cannot create a bookmark or change media", async t => {
+	const f = await fixture(t), archive = f.open(), id = (await archive.start(metadata)).activeId; await archive.append(id, 1, first); await archive.finish(id); const hash = archive.snapshot().recordings[0].sha256;
+	let release, current = true; const hold = archive.queue(() => new Promise(done => { release = done; })); await new Promise(resolve => setImmediate(resolve));
+	const pending = archive.addBookmark(id, hash, 0, "checkpoint", null, () => current); current = false; release(); await hold; await assert.rejects(pending, /VIDEO_UI_CHANGED/); assert.deepEqual(archive.annotations(id).bookmarks, []);
+	archive.db.exec("PRAGMA query_only=ON"); await assert.rejects(archive.addBookmark(id, hash, 0, "checkpoint", null, () => true), /VIDEO_ARCHIVE_UNAVAILABLE/); archive.db.exec("PRAGMA query_only=OFF");
+	assert.equal(archive.snapshot().available, false); assert.equal(archive.db.prepare("SELECT count(*) AS n FROM video_bookmarks").get().n, 0); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), first);
+});
+test("corrupt bookmark evidence is refused before startup writes and remains intact", async t => {
+	const f = await fixture(t), archive = f.open(), id = (await archive.start(metadata)).activeId; await archive.append(id, 1, first); await archive.finish(id); const hash = archive.snapshot().recordings[0].sha256;
+	await archive.addBookmark(id, hash, 500, "checkpoint", null, () => true); archive.db.prepare("UPDATE video_bookmarks SET media_sha256=?").run("f".repeat(64)); await archive.close();
+	const catalog = join(f.directory, "videos.sqlite"), original = await readFile(catalog); assert.throws(() => f.open(), /VIDEO_BOOKMARK_EVIDENCE_INVALID/); assert.deepEqual(await readFile(catalog), original); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), first);
 });

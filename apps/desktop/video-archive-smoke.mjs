@@ -3,6 +3,7 @@ import { lstat, readFile, writeFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { paintMaskedVideo } from "./video-frame.mjs";
 import { VideoRecording } from "./video-recording.mjs";
+import { videoRelation } from "./video-context.mjs";
 
 export const videoArchiveCaseFile = "video-archive-case.private.json";
 export async function readVideoArchiveCase(context) {
@@ -44,9 +45,10 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 	try {
 		const work = await driver.api("workbench", { action: "state" }), game = await driver.api("game", { action: "snapshot" }), bridge = await driver.api("bridge", { action: "snapshot" });
 		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.deepEqual(game.tasks, []); assert.deepEqual(game.unresolved, []); assert.equal(bridge.selected, null);
-		let recording, updates = 0;
+		let recording, recordedJournal, expected, updates = 0;
 		if (fixture.phase === "record") {
 			assert.equal(archive.snapshot().recordings.length, 0);
+			const journalId = (await driver.api("journal", { action: "start" })).activeId; assert.ok(journalId);
 			const encoded = await driver.testCommand("evaluate", { source: videoArchiveEncodeScript }); assert.equal(encoded.error, undefined); assert.equal(encoded.source, "generated-canvas-only"); assert.equal(encoded.mime, "video/webm;codecs=vp8"); assert.equal(encoded.audioTracks, 0); assert.ok(encoded.canvasUpdates >= 8);
 			await writeFile(join(driver.context.root, "video-archive-encoding.private.json"), JSON.stringify({ mime: encoded.mime, canvasUpdates: encoded.canvasUpdates, chunks: encoded.chunks.map(value => ({ bytes: value.length, header: Buffer.from(value).subarray(0, 16).toString("hex") })) }), { flag: "wx" });
 			assert.equal(encoded.maskedBeforeEncoding, true);
@@ -54,7 +56,7 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 			// Synthetic ports exercise the actual coordinator/archive with generated
 			// canvas bytes. They never invoke OS capture or the production UI grant.
 			const owner = {}, source = { version: 1, sourceId: "window:1:0", windowBinding: "f".repeat(32), width: 160, height: 90, layoutRevision: 1, gamePid: 1, gameStartedTicks: "639000000000000000", kind: "fixture", targetId: "generated-canvas-only" };
-			const coordinator = new VideoRecording({ getArchive: () => archive, getBuild: () => manifest, getSource: async () => source, isCurrent: (value, generation) => value === owner && generation === 1, isLocked: () => false });
+			const coordinator = new VideoRecording({ getArchive: () => archive, getBuild: () => manifest, getJournalId: () => journalId, getSource: async () => source, isCurrent: (value, generation) => value === owner && generation === 1, isLocked: () => false });
 			try {
 				const { permit } = await coordinator.prepare(owner, 1, { profile: "720p15", masks: [{ x: 0, y: 0, width: 2500, height: 2500 }] }); await coordinator.authorize(owner, 1, permit);
 				await coordinator.ready(owner, 1, permit, { audioTracks: 0, videoTracks: 1, displaySurface: "window", width: 160, height: 90, frameRate: 15 }); await coordinator.start(owner, 1, permit);
@@ -62,10 +64,11 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 				await coordinator.finish(owner, 1, permit); coordinator.closed(owner, 1, permit); assert.equal(coordinator.snapshot().phase, "idle");
 			} finally { await coordinator.dispose(); }
 			recording = archive.snapshot().recordings[0]; updates = encoded.canvasUpdates;
-			await writeFile(join(driver.context.root, "video-archive-expected.private.json"), JSON.stringify({ runId: driver.context.runId, sourceRevision: manifest.sourceRevision, recording }), { flag: "wx" });
+			assert.equal(recording.journalId, journalId); await driver.api("journal", { action: "stop", args: { id: journalId } }); recordedJournal = await driver.api("journal", { action: "read", args: { id: journalId } });
 		} else {
-			const expected = JSON.parse(await readFile(join(driver.context.root, "video-archive-expected.private.json"), "utf8")); assert.equal(expected.runId, driver.context.runId); assert.equal(expected.sourceRevision, manifest.sourceRevision);
+			expected = JSON.parse(await readFile(join(driver.context.root, "video-archive-expected.private.json"), "utf8")); assert.equal(expected.runId, driver.context.runId); assert.equal(expected.sourceRevision, manifest.sourceRevision);
 			assert.equal(archive.snapshot().activeId, null); assert.deepEqual(archive.snapshot().recordings, [expected.recording]); recording = expected.recording;
+			recordedJournal = await driver.api("journal", { action: "read", args: { id: recording.journalId } }); assert.deepEqual(recordedJournal, expected.journal); assert.deepEqual(archive.annotations(recording.id), expected.annotations);
 		}
 		assert.equal(recording.state, "complete"); assert.ok(recording.bytes < 32768); reader = await archive.openReader(recording.id); assert.equal(reader.readOnly, true); assert.equal(reader.executionAuthority, false); assert.equal(reader.observedSha256, recording.sha256);
 		const bytes = await reader.read(0, recording.bytes), decoded = await driver.testCommand("evaluate", { source: videoArchiveDecodeScript(bytes.toString("base64")) });
@@ -74,15 +77,18 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive) {
 		for (const pixel of [decoded.first.pixel, decoded.second.pixel]) for (let index = 0; index < 3; index++) assert.ok(pixel[index] <= 8, "DECODED_PRIVACY_MASK_UNCONFIRMED");
 		for (const pixel of [decoded.first.visiblePixel, decoded.second.visiblePixel]) for (let index = 0; index < 3; index++) assert.ok(Math.abs(pixel[index] - [64, 128, 192][index]) <= 15, "DECODED_CANVAS_PIXELS_UNCONFIRMED");
 		await reader.close(); reader = null;
-		await checkVideoPlaybackUi(driver, recording, archive);
+		const annotations = await checkVideoPlaybackUi(driver, recording, archive, recordedJournal);
+		assert.deepEqual(await driver.api("journal", { action: "read", args: { id: recording.journalId } }), recordedJournal);
+		if (fixture.phase === "record") await writeFile(join(driver.context.root, "video-archive-expected.private.json"), JSON.stringify({ runId: driver.context.runId, sourceRevision: manifest.sourceRevision, recording, journal: recordedJournal, annotations }), { flag: "wx" });
+		else assert.deepEqual(annotations, expected.annotations);
 		assert.equal(driver.getRuntimePid(), runtime); assert.equal(driver.getProbeSequence(), sequence);
-		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, privacyMaskRetainedOnDecode: true, privacyFirstDecodedFrameVerified: true, generatedCanvasCoordinatorRoundtrip: fixture.phase === "record", readerReadOnly: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, uiReloadRetainsRuntimeWithoutModel: true, modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
+		const proof = { runId: driver.context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, phase: fixture.phase, encodedMediaArchivedAndDecoded: true, originalRecordingRetained: fixture.phase === "reopen", source: "generated-canvas-only", width: 160, height: 90, canvasUpdates: updates, encodedBytes: recording.bytes, chunks: recording.chunks, sha256: recording.sha256, decodedFrameContentChanges: true, privacyMaskRetainedOnDecode: true, privacyFirstDecodedFrameVerified: true, generatedCanvasCoordinatorRoundtrip: fixture.phase === "record", readerReadOnly: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, uiReloadRetainsRuntimeWithoutModel: true, movieBookmarkCreatedThroughUi: true, manualJournalRelationVerified: true, independentVideoAndJournalClocks: true, movieBookmarkSeekVerified: true, movieBookmarkDuplicateDoesNotAppend: true, staleMovieAnnotationRefused: true, originalJournalRetained: true, bookmark: annotations.bookmarks[0], modelRequests: 0, gameCalls: 0, nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, physicalInputVerified: false };
 		await writeFile(join(driver.context.root, "video-archive-" + fixture.phase + ".json"), JSON.stringify(proof), { flag: "wx" });
 	} finally { await reader?.close(); }
 	assert.equal(await driver.getTray().activate("exit"), true);
 }
 
-async function checkVideoPlaybackUi(driver, recording, archive) {
+async function checkVideoPlaybackUi(driver, recording, archive, journal) {
 	const evaluate = source => driver.testCommand("evaluate", { source });
 	const until = async (predicate, label) => { const deadline = performance.now() + 10000; while (!await predicate()) { assert.ok(performance.now() < deadline, "VIDEO_UI_TIMEOUT_" + label); await new Promise(resolve => setTimeout(resolve, 40)); } };
 	const open = async () => {
@@ -96,11 +102,37 @@ async function checkVideoPlaybackUi(driver, recording, archive) {
 		assert.equal(played.width, 160); assert.equal(played.height, 90); assert.ok(played.frames >= 2); assert.ok(played.time >= 1.1); assert.match(played.url, /^deck-video:\/\/stream\/[a-f0-9-]{36}$/); return played.url;
 	};
 	const first = await open();
+	await until(() => evaluate("Boolean(document.querySelector('.videos-panel select[aria-label=录像关联日记事件] option[value=\"1\"]'))"), "JOURNAL_CONTEXT");
+	let annotations = archive.annotations(recording.id);
+	if (annotations.bookmarks.length === 0) {
+		const position = await evaluate("(async()=>{const video=document.querySelector('.videos-panel video[aria-label=本地录像播放器]');video.pause();await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('VIDEO_ANNOTATION_SEEK_FAILED')),4000);video.addEventListener('seeked',()=>{clearTimeout(timer);resolve()},{once:true});video.currentTime=0.4});return {timeMs:Math.floor(video.currentTime*1000),ready:video.readyState}})()");
+		assert.ok(Math.abs(position.timeMs - 400) <= 1); assert.ok(position.ready >= 2);
+		await chooseEventAndBookmark(); annotations = archive.annotations(recording.id);
+	}
+	assert.equal(annotations.bookmarks.length, 1); const bookmark = annotations.bookmarks[0]; assert.equal(bookmark.tag, "checkpoint"); assert.ok(Math.abs(bookmark.timeMs - 400) <= 1); assert.equal(bookmark.mediaSha256, recording.sha256);
+	assert.deepEqual(bookmark.relation, videoRelation(recording, 1, () => journal));
+	const context = await evaluate(`window.deck.video('context',{id:${JSON.stringify(recording.id)}})`); assert.equal(context.bookmarks[0].link.status, "matching"); assert.equal(context.bookmarks[0].link.event.elapsedMs, journal.events[0].elapsedMs);
+	assert.notEqual(bookmark.timeMs, journal.events[0].elapsedMs, "TWO_CLOCKS_NOT_INDEPENDENT_IN_FIXTURE");
 	const denied = await evaluate("(async()=>{const rows=[];for(const action of ['start','commit','replay','resume','read']){try{await window.deck.video(action);rows.push(false)}catch{rows.push(true)}}return rows})()"); assert.deepEqual(denied, [true, true, true, true, true]);
 	await driver.testCommand("reload"); await until(async () => archive.readers.size === 0, "RELOAD_CLOSE");
 	const stale = await evaluate(`(async()=>{const video=document.createElement('video');video.muted=true;video.src=${JSON.stringify(first)};try{return await new Promise(resolve=>{const timer=setTimeout(()=>resolve('timeout'),4000);video.onerror=()=>{clearTimeout(timer);resolve('refused')};video.onloadedmetadata=()=>{clearTimeout(timer);resolve('opened')};video.load()})}finally{video.removeAttribute('src');video.load()}})()`); assert.equal(stale, "refused");
+	assert.equal(await evaluate(`(async()=>{try{await window.deck.video('bookmark',{grant:${JSON.stringify(first.split("/").at(-1))},timeMs:0,tag:'issue',eventSequence:null});return false}catch{return true}})()`), true); assert.deepEqual(archive.annotations(recording.id), annotations);
 	const second = await open(); assert.notEqual(second, first);
+	await until(() => evaluate("Boolean(document.querySelector('.video-bookmarks button:not(:disabled)'))"), "BOOKMARK_RESTORED");
+	assert.equal(await evaluate("document.querySelector('.video-bookmarks [data-event-sequence]')?.getAttribute('data-event-sequence')"), "1");
+	await evaluate("document.querySelector('.video-bookmarks button').click();true");
+	await until(() => evaluate(`Boolean(document.querySelector('.videos-panel [role=status]')?.textContent.includes('已定位视频')&&Math.abs(document.querySelector('.videos-panel video[aria-label=本地录像播放器]').currentTime-${bookmark.timeMs / 1000})<0.02&&document.querySelector('.videos-panel video[aria-label=本地录像播放器]').paused)`), "BOOKMARK_SEEK");
+	await chooseEventAndBookmark(); assert.deepEqual(archive.annotations(recording.id), annotations);
 	await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='关闭播放').click();true");
 	await until(async () => archive.readers.size === 0 && !await evaluate("Boolean(document.querySelector('.videos-panel video[aria-label=本地录像播放器]'))"), "PLAYER_CLOSE");
 	assert.deepEqual(archive.snapshot().recordings, [recording]); assert.equal(archive.active, null);
+	return annotations;
+	async function chooseEventAndBookmark() {
+		await until(() => evaluate("Boolean(document.querySelector('.videos-panel select[aria-label=录像关联日记事件] option[value=\"1\"]'))"), "BOOKMARK_EVENT");
+		await evaluate("(()=>{const field=document.querySelector('.videos-panel select[aria-label=录像关联日记事件]');field.value='1';field.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
+		await until(() => evaluate("[...document.querySelectorAll('.videos-panel button')].some(button=>button.textContent==='添加画面书签'&&!button.disabled)"), "BOOKMARK_READY");
+		await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='添加画面书签').click();true");
+		await until(() => evaluate("Boolean(document.querySelector('.videos-panel [role=status]')?.textContent.includes('已保存视频'))"), "BOOKMARK_SAVED");
+		assert.equal(archive.annotations(recording.id).bookmarks.length, 1);
+	}
 }

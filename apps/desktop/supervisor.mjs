@@ -42,6 +42,7 @@ import { journalLimits } from "./journal-format.mjs";
 import { runJournalSmoke } from "./journal-smoke.mjs";
 import { VideoArchive, videoArchiveLimits } from "./video-archive.mjs";
 import { VideoPlaybackSessions } from "./video-playback.mjs";
+import { videoContext, videoRelation } from "./video-context.mjs";
 import { VideoRecording } from "./video-recording.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -122,6 +123,10 @@ const state = {
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
 const videoPlayback = new VideoPlaybackSessions({ getArchive: () => videoArchive, isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering });
 function invalidateVideo(owner) { void videoPlayback.invalidate(owner).catch(() => console.error("VIDEO_READER_CLOSE_UNCONFIRMED")); }
+function readVideoJournal(id) {
+	if (!journal || journal.error || journal.closed) throw new Error("JOURNAL_STORAGE_UNAVAILABLE");
+	try { return journal.read(id); } catch (error) { if (!["JOURNAL_RECORDING_INVALID", "JOURNAL_RECORDING_NOT_FOUND"].includes(error?.message)) journal.fail(); throw error; }
+}
 const diagnostics = new DiagnosticExports({
 	isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering,
 	protectedRoots: [privateDirectory, dirname(privateDirectory), ...(portableContext ? [join(portableContext.root, "ui-profile")] : []), ...(app.isPackaged ? [dirname(process.execPath)] : [])],
@@ -357,9 +362,14 @@ async function api(action, args, source) {
 		return recording.append(source, generation, value.permit, value.sequence, Buffer.from(value.data, "base64"));
 	}
 	if (action === "video") {
-		if (!args || !["snapshot", "open", "read", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
+		if (!args || !["snapshot", "context", "open", "bookmark", "read", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
 		if (args.action === "snapshot") return videoArchive?.snapshot() ?? { available: false, error: videoArchiveError ?? "VIDEO_ARCHIVE_NOT_READY", activeId: null, limits: videoArchiveLimits, recordings: [] };
 		if (source !== ui || !source?.registered) throw new Error("TRUSTED_UI_REQUIRED");
+		if (args.action === "context") { videoPlayback.scope(source, args.generation); if (!videoArchive) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); return videoContext(videoArchive, args.args?.id, readVideoJournal, args.args?.offset); }
+		if (args.action === "bookmark") return videoPlayback.annotate(source, args.generation, args.args?.grant, (media, guard) => {
+			const relation = videoRelation(media.recording, args.args?.eventSequence, readVideoJournal);
+			return videoArchive.addBookmark(media.recording.id, media.mediaSha256, args.args?.timeMs, args.args?.tag, relation, guard);
+		});
 		if (args.action === "open") return videoPlayback.open(source, args.generation, args.args?.id);
 		if (args.action === "close") return videoPlayback.close(source, args.generation, args.args?.grant);
 		const bytes = await videoPlayback.read(source, args.generation, args.args?.grant, args.args?.offset, args.args?.length);

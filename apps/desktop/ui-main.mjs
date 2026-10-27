@@ -223,8 +223,13 @@ if (typeof process.send !== "function") {
 			}))
 				handle(channel, (args) => request(action, args));
 			handle("deck:video", async args => {
-				if (!args || !["snapshot", "open", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
+				if (!args || !["snapshot", "context", "open", "bookmark", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
 				if (args.action === "snapshot") return request("video", { action: "snapshot" });
+				if (args.action === "context") return request("video", { action: "context", generation: documentGeneration, args: { id: args.args?.id, offset: args.args?.offset } });
+				if (args.action === "bookmark") {
+					const entry = videoEntries.get(args.args?.grant); if (!entry || entry.generation !== documentGeneration || closing) throw new Error("VIDEO_PLAYBACK_CHANGED");
+					return request("video", { action: "bookmark", generation: entry.generation, args: { grant: args.args.grant, timeMs: args.args?.timeMs, tag: args.args?.tag, eventSequence: args.args?.eventSequence } });
+				}
 				if (args.action === "close") {
 					const entry = videoEntries.get(args.args?.grant); videoEntries.delete(args.args?.grant);
 					return entry ? request("video", { action: "close", generation: entry.generation, args: { grant: args.args.grant } }) : { closed: true };

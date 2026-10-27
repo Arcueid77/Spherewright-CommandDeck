@@ -354,6 +354,9 @@ ul {
 .videos-panel { overflow: auto; }
 .videos-panel select { display: block; width: 100%; margin: 7px 0; }
 .videos-panel video { display: block; width: 100%; max-height: 55vh; min-height: 90px; margin: 12px 0; background: #000; }
+.video-annotations { border-top: 1px solid #354054; margin-top: 16px; padding-top: 12px; }
+.video-bookmarks > div { margin: 10px 0; padding: 8px; border: 1px solid #354054; border-radius: 6px; }
+.video-bookmarks p { margin-bottom: 0; overflow-wrap: anywhere; }
 .recording-controls { border-bottom: 1px solid #263444; padding-bottom: 14px; margin-bottom: 18px; }
 .recording-indicator { display: inline-flex; align-items: center; gap: 7px; color: #f6bd72; font-size: 12px; }
 .recording-preview { position: relative; width: 100%; background: #000; touch-action: none; cursor: crosshair; }
