@@ -42,6 +42,7 @@ import { journalLimits } from "./journal-format.mjs";
 import { runJournalSmoke } from "./journal-smoke.mjs";
 import { VideoArchive, videoArchiveLimits } from "./video-archive.mjs";
 import { VideoPlaybackSessions } from "./video-playback.mjs";
+import { VideoRecording } from "./video-recording.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -137,6 +138,7 @@ const diagnostics = new DiagnosticExports({
 });
 const systemPower = new PowerLifecycle({
 	quiesce: () => {
+		void recording.interrupt("VIDEO_SYSTEM_PAUSED", "power_interrupted");
 		bridge.setSystemPaused(true);
 		if (runtime && !runtimeExit?.exited) runtime.postMessage({ type: "abort" });
 		const gameDrain = game.drain(), workbenchDrain = workbenchReady ? workbenchCall("drain") : Promise.resolve();
@@ -177,6 +179,10 @@ const safeEnvironment = () =>
 			([key]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)/i.test(key),
 		),
 	);
+const recording = new VideoRecording({ getArchive: () => videoArchive, getBuild: () => journalBuild, getJournalId: () => journal?.active?.id ?? null,
+	getSource: () => { if (typeof native.captureSource !== "function") throw new Error("WINDOW_CAPTURE_UNSUPPORTED"); return native.captureSource(); },
+	isCurrent: (owner, generation) => owner === ui && owner?.registered && owner.documentGeneration === generation && !stopping && !recovering && systemPower.ready,
+	isLocked: () => !["active", "idle"].includes(powerMonitor.getSystemIdleState(30)), notify: value => send(ui, { type: "event", event: { type: "recording-changed", recording: value } }) });
 function emitPowerForSmoke(event) {
 	if (!(portableSmoke || smoke && process.argv.includes("--smoke-power")) || !["suspend", "resume"].includes(event)) throw new Error("POWER_FIXTURE_REQUIRED");
 	powerMonitor.emit(event);
@@ -320,7 +326,7 @@ async function api(action, args, source) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot";
+	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot" || action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action);
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -334,6 +340,22 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, power: systemPower.snapshot(), events: [...state.events] };
+	if (action === "recording") {
+		if (!args || !["snapshot", "prepare", "authorize", "ready", "set-masks", "start", "append", "finish", "cancel", "closed"].includes(args.action)) throw new Error("INVALID_RECORDING_ACTION");
+		if (args.action === "snapshot") return recording.snapshot();
+		if (source !== ui || !source?.registered) throw new Error("TRUSTED_UI_REQUIRED");
+		const value = args.args ?? {}, generation = args.generation;
+		if (args.action === "prepare") return recording.prepare(source, generation, value);
+		if (args.action === "authorize") return recording.authorize(source, generation, value.permit);
+		if (args.action === "ready") return recording.ready(source, generation, value.permit, value.track);
+		if (args.action === "set-masks") return recording.setMasks(source, generation, value.permit, value.masks);
+		if (args.action === "start") return recording.start(source, generation, value.permit);
+		if (args.action === "finish") return recording.finish(source, generation, value.permit);
+		if (args.action === "cancel") return recording.cancel(source, generation, value.permit);
+		if (args.action === "closed") return recording.closed(source, generation, value.permit);
+		if (typeof value.data !== "string" || value.data.length > 2796204) throw new Error("VIDEO_CHUNK_INVALID");
+		return recording.append(source, generation, value.permit, value.sequence, Buffer.from(value.data, "base64"));
+	}
 	if (action === "video") {
 		if (!args || !["snapshot", "open", "read", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
 		if (args.action === "snapshot") return videoArchive?.snapshot() ?? { available: false, error: videoArchiveError ?? "VIDEO_ARCHIVE_NOT_READY", activeId: null, limits: videoArchiveLimits, recordings: [] };
@@ -432,7 +454,7 @@ async function api(action, args, source) {
 			throw new Error("INVALID_TARGET");
 		return native.request("attach", { targetId: args });
 	}
-	if (action === "detach") return native.request("detach");
+	if (action === "detach") { await recording.interrupt("VIDEO_WINDOW_CHANGED", "window_changed"); return native.request("detach"); }
 	if (action === "focus-ui") return native.request("focus-ui");
 	if (action === "viewport") {
 		if (
@@ -561,8 +583,10 @@ function startUi() {
 		} else if (message.type === "ui-document" && record.registered && Number.isSafeInteger(message.generation) && message.generation > record.documentGeneration) {
 			diagnostics.invalidate(record);
 			invalidateVideo(record);
+			void recording.invalidate(record);
 			record.documentGeneration = message.generation;
 		} else if (message.type === "ui-loaded" && record.registered) {
+			recording.documentReady(record, record.documentGeneration);
 			record.loaded++;
 			record.lastHeartbeat = performance.now();
 			clearTimeout(record.startupTimer);
@@ -606,6 +630,7 @@ function startUi() {
 	child.on("error", () => record.rejectReady(new Error("UI_LAUNCH_FAILED")));
 	child.on("exit", () => {
 		invalidateVideo(record);
+		void recording.invalidate(record, "ui_lost", true);
 		clearTimeout(record.startupTimer);
 		clearUiTests(record);
 		if (!record.loaded) record.rejectReady(new Error("UI_EXITED_BEFORE_READY"));
@@ -631,6 +656,7 @@ async function recoverUi(reason, expected = ui) {
 	game.invalidateUi(old.epoch);
 	diagnostics.invalidate(old);
 	invalidateVideo(old);
+	void recording.invalidate(old);
 	const heartbeatAgeMs = performance.now() - old.lastHeartbeat;
 	recordUiLifecycle({ kind: "recovery", reason, epoch: old.epoch, heartbeatAgeMs, exited: old.child.exitCode !== null || old.child.signalCode !== null, nativeProbe: old.lastNativeProbe });
 	clearUiTests(old);
@@ -738,6 +764,7 @@ async function openWorkbench() {
 async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (stopping) return;
 	stopping = true;
+	void recording.interrupt("VIDEO_APPLICATION_EXIT", "application_exit");
 	clearInterval(bridgeTimer);
 	if (!runtimeExit?.exited) runtime?.postMessage({ type: "abort" });
 	try {
@@ -776,6 +803,7 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
 	try { journal?.close(); } catch { console.error("JOURNAL_CLOSE_UNCONFIRMED"); }
+	await withDeadline(recording.dispose(), 3000, "VIDEO_RECORDING_CLOSE_UNCONFIRMED").catch(() => console.error("VIDEO_RECORDING_CLOSE_UNCONFIRMED"));
 	await withDeadline(videoPlayback.drain(), 3000, "VIDEO_PLAYBACK_CLOSE_UNCONFIRMED").catch(() => console.error("VIDEO_PLAYBACK_CLOSE_UNCONFIRMED"));
 	if (videoArchive) await withDeadline(videoArchive.close(), 3000, "VIDEO_ARCHIVE_CLOSE_UNCONFIRMED").catch(() => console.error("VIDEO_ARCHIVE_CLOSE_UNCONFIRMED"));
 	disposePowerMonitor?.();
@@ -819,6 +847,9 @@ if (!app.hasSingleInstanceLock()) {
 		.whenReady()
 		.then(async () => {
 			disposePowerMonitor = bindPowerMonitor(powerMonitor, systemPower, () => !stopping);
+			const disposeLifecyclePower = disposePowerMonitor, recordingLock = () => { void recording.interrupt("VIDEO_DESKTOP_UNAVAILABLE", "power_interrupted"); };
+			powerMonitor.on("lock-screen", recordingLock);
+			disposePowerMonitor = () => { disposeLifecyclePower(); powerMonitor.removeListener("lock-screen", recordingLock); };
 			recordUiLifecycle({ kind: "supervisor-start" });
 			const env = safeEnvironment();
 			env.PI_OFFLINE = "1";

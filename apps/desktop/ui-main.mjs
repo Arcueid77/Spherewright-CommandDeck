@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { confirmResearchFromUi } from "./research-confirmation.mjs";
 import { createVideoProtocol, videoScheme, videoPlaybackUrl } from "./video-protocol.mjs";
+import { recordingPermissionGate } from "./recording-permission.mjs";
 
 protocol.registerSchemesAsPrivileged([{ scheme: videoScheme, privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
 
@@ -26,6 +27,7 @@ let window,
 let confirmingGame = false;
 let diagnosticSaving = false, documentGeneration = 0;
 const videoEntries = new Map(); let videoSelection = 0;
+let recordingGate, recordingPermit;
 const pending = new Map();
 function send(message) {
 	if (process.connected) process.send(message, () => {});
@@ -138,8 +140,10 @@ if (typeof process.send !== "function") {
 				message.ok ? message.result : message.code,
 			);
 		else if (message.type === "registered") finish("registration", true, true);
-		else if (message.type === "event" && window && !window.isDestroyed())
+		else if (message.type === "event" && window && !window.isDestroyed()) {
+			if (message.event?.type === "recording-changed" && ["idle", "stopping"].includes(message.event.recording?.phase)) recordingGate?.revoke();
 			window.webContents.send("deck:event", message.event);
+		}
 		else if (message.type === "focus" && window && !window.isDestroyed()) {
 			if (window.isMinimized()) window.restore();
 			window.show();
@@ -185,10 +189,10 @@ if (typeof process.send !== "function") {
 			if (portableSmoke) window.webContents.on("console-message", (details) => { if (details.level === "error") { portableRendererErrors.push(String(details.message).slice(0, 400)); if (portableRendererErrors.length > 4) portableRendererErrors.shift(); } });
 			window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 			window.webContents.on("will-navigate", (event) => event.preventDefault());
-			window.webContents.session.setPermissionRequestHandler(
-				(_contents, _permission, callback) => callback(false),
-			);
-			window.webContents.session.setPermissionCheckHandler(() => false);
+			recordingGate = recordingPermissionGate({ owner: window.webContents, url: rendererUrl, generation: () => documentGeneration, authorize: (permit, generation) => request("recording", { action: "authorize", generation, args: { permit } }) });
+			window.webContents.session.setPermissionRequestHandler((contents, permission, callback) => callback(recordingGate.permission(contents, permission)));
+			window.webContents.session.setPermissionCheckHandler((contents, permission) => recordingGate.permission(contents, permission));
+			window.webContents.session.setDisplayMediaRequestHandler((request, callback) => { void recordingGate.display(request, callback); });
 			await window.webContents.session.protocol.handle(videoScheme, createVideoProtocol({ entries: videoEntries, generation: () => documentGeneration, read: (grant, generation, offset, length) => request("video", { action: "read", generation, args: { grant, offset, length } }) }));
 			const handle = (channel, action) =>
 				ipcMain.handle(channel, async (event, args) => {
@@ -229,6 +233,19 @@ if (typeof process.send !== "function") {
 				const opened = await request("video", { action: "open", generation, args: { id: args.args?.id } });
 				if (generation !== documentGeneration || selection !== videoSelection || closing) { await request("video", { action: "close", generation, args: { grant: opened.grant } }); throw new Error("VIDEO_UI_CHANGED"); }
 				videoEntries.set(opened.grant, { ...opened, generation }); return { ...opened, url: videoPlaybackUrl(opened.grant) };
+			});
+			handle("deck:recording", async args => {
+				if (!args || !["snapshot", "prepare", "ready", "set-masks", "start", "append", "finish", "cancel", "closed"].includes(args.action)) throw new Error("INVALID_RECORDING_ACTION");
+				const generation = documentGeneration, value = { ...args.args };
+				if (args.action === "prepare") {
+					const prepared = await request("recording", { action: "prepare", generation, args: value });
+					if (generation !== documentGeneration || closing) { await request("recording", { action: "cancel", generation, args: { permit: prepared.permit } }); throw new Error("VIDEO_UI_CHANGED"); }
+					recordingPermit = { permit: prepared.permit, generation }; recordingGate.arm(prepared.permit); return prepared;
+				}
+				if (["cancel", "closed", "finish"].includes(args.action) && value.permit === recordingPermit?.permit) recordingGate.revoke();
+				if (args.action === "closed" && value.permit === recordingPermit?.permit) recordingPermit = null;
+				if (args.action === "append") { if (!(value.bytes instanceof Uint8Array) || value.bytes.length < 1 || value.bytes.length > 2097152) throw new Error("VIDEO_CHUNK_INVALID"); value.data = Buffer.from(value.bytes).toString("base64"); delete value.bytes; }
+				return request("recording", { action: args.action, generation, args: value });
 			});
 			handle("deck:game", (args) => {
 				if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
@@ -289,7 +306,7 @@ if (typeof process.send !== "function") {
 				window.focus();
 				return result;
 			});
-			window.webContents.on("did-start-loading", () => { videoSelection++; videoEntries.clear(); send({ type: "ui-document", generation: ++documentGeneration }); });
+			window.webContents.on("did-start-loading", () => { recordingGate.revoke(); recordingPermit = null; videoSelection++; videoEntries.clear(); send({ type: "ui-document", generation: ++documentGeneration }); });
 			window.webContents.on("did-finish-load", () =>
 				send({ type: "ui-loaded" }),
 			);

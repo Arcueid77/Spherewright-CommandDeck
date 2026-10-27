@@ -16,6 +16,7 @@ export function portableCommandCase(argv) {
 }
 
 export function assertPortableCommandAction(action, args, { rootId } = {}) {
+	if (action === "recording" && args?.action === "snapshot") return;
 	if (["resume-system", "snapshot", "status", "viewport", "focus-ui", "close", "profiles", "targets"].includes(action)) return;
 	if (["game", "bridge"].includes(action) && args?.action === "snapshot") return;
 	if (action === "profiles-manage" && args?.action === "list") return;
@@ -78,6 +79,7 @@ export function assertPortableRuntimeAction(action, args, { scenario, internal =
 }
 
 export function assertPortableAction(action, args) {
+	if (action === "recording" && args?.action === "snapshot") return;
 	if (action === "video" && ["snapshot", "open", "read", "close"].includes(args?.action)) return;
 	if (action === "journal" && ["snapshot", "read", "start", "stop", "bookmark"].includes(args?.action)) return;
 	if (["resume-system", "snapshot", "status", "targets", "viewport", "focus-ui", "start-fixture", "detach", "abort", "close", "profiles"].includes(action)) return;

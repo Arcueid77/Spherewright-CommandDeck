@@ -39,7 +39,7 @@ export async function runPortableSmoke(driver, videoArchive) {
 		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
 		await runJournalInterruptionSmoke(driver, journalInterruption, manifest); return;
 	}
-	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.equal(manifest.videoPlaybackUi, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest, videoArchive); return; }
+	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.equal(manifest.videoPlaybackUi, 1); assert.equal(manifest.encodedPrivacyFixture, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest, videoArchive); return; }
 	if (driver.commandCase) {
 		assert.equal(manifest.portableCommandFaults, 2); assert.equal(manifest.nativeCommandProcessObserver, 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);

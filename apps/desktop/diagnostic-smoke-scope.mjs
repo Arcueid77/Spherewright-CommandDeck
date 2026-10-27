@@ -26,6 +26,7 @@ export async function prepareSourceDiagnosticMode(app, argv, env = process.env) 
 }
 
 export function assertDiagnosticSmokeAction(action, args) {
+	if (action === "recording" && args?.action === "snapshot") return;
 	if (["snapshot", "status", "targets", "viewport", "focus-ui", "abort", "close", "profiles", "diagnostics-preview", "diagnostics-begin-save", "diagnostics-write", "diagnostics-cancel-save", "diagnostics-discard"].includes(action)) return;
 	if (["bridge", "game"].includes(action) && args?.action === "snapshot") return;
 	if (action === "profiles-manage" && args?.action === "list") return;

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { RecordingControls } from "./recording";
 
 type Recording = { id: string; state: string; startedAt: string; stoppedAt: string | null; bytes: number; chunks: number; capture: { width: number; height: number; frameRate: number }; build: { sourceRevision: string | null; piCommit: string | null }; reason: string | null; sha256: string | null };
 type VideoState = { available: boolean; activeId: string | null; error: string | null; limits: { recordings: number; recordingBytes: number }; recordings: Recording[] };
@@ -37,7 +38,8 @@ export function VideosPanel() {
 		finally { if (alive.current && expected === generation.current) setBusy(false); }
 	}
 	const row = state?.recordings.find(row => row.id === selected);
-	return <div className="panel videos-panel" data-video-mode="read-only">
+	return <div className="panel videos-panel" data-video-mode="archive">
+		<RecordingControls />
 		<div className="eyebrow">LOCAL VIDEO ARCHIVE</div><h2>本地录像 / 只读播放</h2>
 		<p className="muted">浏览已经归档的录像。播放不会运行 Agent 或执行游戏操作。</p>
 		{state && !state.available && <p className="notice">录像归档暂不可用，原文件会保留。</p>}{notice && <p className="notice" role="status">{notice}</p>}

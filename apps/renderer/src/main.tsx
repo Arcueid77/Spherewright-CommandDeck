@@ -63,6 +63,7 @@ declare global {
 			resumeSystem(): Promise<PowerState>;
 			journal<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			video<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			recording<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			profiles(): Promise<Profile[]>;
 			manageProfiles<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			bridge<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
