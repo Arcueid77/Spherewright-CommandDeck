@@ -14,6 +14,7 @@ import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 import { JournalPanel } from "./journal";
 import { VideosPanel } from "./videos";
+import { RecordingIndicator } from "./recording";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -35,6 +36,7 @@ type ProbeResult = {
 	text?: string;
 };
 type RuntimeEvent = {
+	recording?: { phase: string; bytes: number };
 	power?: PowerState;
 	type: string;
 	text?: string;
@@ -510,6 +512,7 @@ function App() {
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("journal")) api.addPanel({ id: "journal", component: "journal", title: "运行日记 / 回放", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("journal")?.api.setActive(); }}>运行日记</button>
 				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("videos")) api.addPanel({ id: "videos", component: "videos", title: "本地录像", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("videos")?.api.setActive(); }}>录像</button>
+				<RecordingIndicator />
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>
 			{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>

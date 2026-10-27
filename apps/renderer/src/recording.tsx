@@ -2,6 +2,12 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { recordingClient } from "./recording-client";
 
 const labels: Record<string, string> = { idle: "未录制", preparing: "正在准备", armed: "已准备，等待预览", acquiring: "正在取得画面", preview: "预览中", starting: "正在开始录制", recording: "正在录制", finishing: "正在保存", stopping: "正在停止捕获" };
+export function RecordingIndicator() {
+	const [state, setState] = useState<{ phase: string; bytes: number }>({ phase: "idle", bytes: 0 });
+	useEffect(() => { let alive = true; void window.deck.recording<{ phase: string; bytes: number }>("snapshot").then(value => { if (alive) setState(value); }).catch(() => {}); const unsubscribe = window.deck.onEvent(event => { if (event.type === "recording-changed" && event.recording) setState(event.recording); }); return () => { alive = false; unsubscribe(); }; }, []);
+	if (state.phase === "idle") return null;
+	return <span className="recording-indicator" role="status" data-recording-active={state.phase}>{labels[state.phase] ?? "捕获状态待确认"}{state.phase === "recording" && ` · ${(state.bytes / 1048576).toFixed(1)} MiB`}<button onClick={() => { if (state.phase === "recording") void recordingClient.stop(); else void recordingClient.cancel(); }}>{state.phase === "recording" ? "停止并保存录像" : "关闭捕获"}</button></span>;
+}
 export function RecordingControls() {
 	const state = useSyncExternalStore(recordingClient.subscribe, recordingClient.getSnapshot), [profile, setProfile] = useState("720p15"), [origin, setOrigin] = useState<{ x: number; y: number } | null>(null), video = useRef<HTMLVideoElement | null>(null);
 	useEffect(() => { const element = video.current; if (!element) return; element.srcObject = state.preview; if (state.preview) void element.play().catch(() => {}); return () => { element.pause(); element.srcObject = null; }; }, [state.preview]);
