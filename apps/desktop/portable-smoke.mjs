@@ -14,6 +14,7 @@ import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
 import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile.mjs";
 import { checkPowerLifecycle } from "./power-smoke.mjs";
 import { beginJournalSmoke, finishJournalSmoke } from "./journal-smoke.mjs";
+import { readJournalInterruptionCase, runJournalInterruptionSmoke } from "./journal-interruption-smoke.mjs";
 
 export async function runPortableSmoke(driver) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -31,6 +32,11 @@ export async function runPortableSmoke(driver) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	const journalInterruption = await readJournalInterruptionCase(context);
+	if (journalInterruption) {
+		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
+		await runJournalInterruptionSmoke(driver, journalInterruption, manifest); return;
+	}
 	if (driver.commandCase) {
 		assert.equal(manifest.portableCommandFaults, 2); assert.equal(manifest.nativeCommandProcessObserver, 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
