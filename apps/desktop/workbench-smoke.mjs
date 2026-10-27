@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 export async function runWorkbenchSmoke(driver) {
+	const originalTray = driver.getTray(); assert.ok(originalTray);
 	const base = join(driver.root, ".local", "m1-smoke", driver.runId), source = join(base, "source");
 	await mkdir(source, { recursive: true });
 	const git = (...args) => execFileSync("git", ["-c", `core.hooksPath=${devNull}`, "-c", "user.name=CommandDeck fixture", "-c", "user.email=fixture@invalid.example", ...args], { cwd: source, windowsHide: true, stdio: "pipe" });
@@ -103,6 +104,7 @@ export async function runWorkbenchSmoke(driver) {
 	try { await Promise.race([recovered, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("M1_UI_REPLACEMENT_TIMEOUT")), 15000); })]); } finally { clearTimeout(timer); }
 	assert.equal(driver.getUi().epoch, previousUi + 1);
 	assert.equal(driver.getRuntimePid(), runtimePid);
+	assert.equal(driver.getTray(), originalTray); assert.equal(originalTray.nativeTray.isDestroyed(), false);
 	const hydrationDeadline = Date.now() + 8000;
 	while ((await evaluate("document.querySelector('[aria-label=开发任务]')?.value")) !== "M1 draft survives reload") { assert.ok(Date.now() < hydrationDeadline, "M1_REPLACEMENT_HYDRATION_FAILED"); await delay(100); }
 	assert.equal((await request("task", { taskId: check.id })).state, "succeeded");
@@ -153,5 +155,6 @@ export async function runWorkbenchSmoke(driver) {
 	assert.equal(native.attached, false);
 	const proof = { runId: driver.runId, edited: true, checkExitCode: 0, checkStarts: 1, uiReloadDuringCheck: true, uiProcessReplaced: true, replacementHydrated: true, sameRuntime: true, draftRestored: true, editorRestored: true, historicalResultRestored: true, ipcWhitelistRejectsControlActions: true, protectedProfileRoundtrip: true, rendererCannotResolveCredential: true, profileMutationBlockedDuringTask: true, splitEchoRedacted: true, providerSettingsRenderAndDismiss: true, syntheticCredentialOnly: true, externalModelRequests: 0, noNodeInRenderer: true, visualCapture: capture.captured ? "captured" : "unavailable", gameCalls: 0, realDsp: "not_attached", physicalInput: "not_tested" };
 	Object.assign(proof, { originalDiffAfterCommit: true, crossRepositoryReference: true, referencePinsOldCommit: true, referenceSurvivesReload: true, historyPreservesUnsavedDraft: true, taskClickNavigatesToLog: true, navigationDoesNotRepeatCommand: true });
+	proof.supervisorTrayRetainedAcrossUiReplacement = true;
 	await writeFile(join(driver.root, ".local/desktop-smoke-workbench.json"), JSON.stringify(proof, null, 2));
 }

@@ -188,6 +188,16 @@ npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
 
 The source check uses an isolated temporary profile. The packaged check requires `portableDiagnostics: 1`, verifies/copies the full bundle outside the checkout, hides developer tools/shared runtimes and uses a fresh profile without user provider configuration. Both operate the actual renderer and trusted host, compare preview/file bytes, cancel saving, refuse overwrite, invalidate stale previews and generate a report after the test's own utility runtime exits. Native picker responses are mocked and explicitly recorded as such; no physical input or clean-Windows VM result is claimed. A native process observer independently checks exit. Private reports and raw evidence remain local; CI uploads only anonymous summaries.
 
+## Tray and application exit (M5)
+
+The Windows supervisor owns one system tray icon. Its menu provides **打开 CommandDeck** and **退出 CommandDeck**; double-clicking the icon opens the workbench. Opening a minimized standalone workbench restores its existing window and Pi runtime. UI reload/replacement retains the supervisor's original tray. Closing the main window still exits the application; there is no close-to-tray setting or promise that tasks keep running after application exit.
+
+Tray exit uses the same task drain and native-window restoration path as ordinary exit. If that path fails, the workbench and tray remain available with a notice; no automatic second exit or task replay is scheduled. The tray is destroyed after successful cleanup. Tray creation failure leaves ordinary window controls usable.
+
+`npm run test:tray` runs the actual source supervisor/UI, minimizes and reopens the existing UI through its native menu callback, reloads it without repeating an offline probe, embeds/detaches the owned NO DSP fixture and requests normal exit through the tray handler. An external native observer checks the application's process group after exit. `test:workbench` additionally checks that UI-process replacement retains the original tray. The portable default/reopen check now requires the `desktopTray: 1` capability and equivalent host-driven restore/exit evidence; its new full-bundle run is pending. These tests do not establish physical taskbar input, restoring a minimized embedded game host, background rendering or sleep/wake behavior. A computer-use attempt on 2026-10-28 encountered the locked desktop and stopped before input.
+
+The implementation follows Electron's [Tray API](https://www.electronjs.org/docs/latest/api/tray). No task or credential content is placed in the icon, tooltip or menu.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

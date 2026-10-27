@@ -1,4 +1,4 @@
-import { app, utilityProcess, safeStorage } from "electron";
+import { app, utilityProcess, safeStorage, Tray, Menu, nativeImage } from "electron";
 import { EventEmitter, once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,8 @@ import { diagnosticCode } from "./diagnostic-snapshot.mjs";
 import { assertDiagnosticSmokeAction } from "./diagnostic-smoke-scope.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 import { ledgerPresenceConfiguration, prepareLedgerPresence } from "./ledger-presence.mjs";
+import { createDesktopTray } from "./desktop-tray.mjs";
+import { runTraySmoke } from "./tray-smoke.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -96,7 +98,7 @@ let runtime,
 	probeSequence = 0,
 	testSequence = 0,
 	restarts = 0;
-let runtimeExit, blockedWindow, initializingRuntime = true;
+let runtimeExit, blockedWindow, desktopTray, initializingRuntime = true;
 let recovering = false,
 	stopping = false,
 	allowQuit = false;
@@ -642,6 +644,13 @@ function testCommand(name, extra = {}) {
 		send(record, { type: "test", id, name, ...extra });
 	});
 }
+async function openWorkbench() {
+	if (stopping) return;
+	if (recovering && restarts > 1 && ui && (ui.child.exitCode !== null || ui.child.signalCode !== null)) {
+		await startUi(); recovering = false;
+		emit({ type: "notice", text: "已按重新打开工作台的操作创建界面，未重启宿主或重放任务。" });
+	} else send(ui, { type: "focus" });
+}
 async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (stopping) return;
 	stopping = true;
@@ -681,6 +690,7 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	game.close();
 	if (workbenchReady) { await workbenchCall("close-store"); workbenchReady = false; }
 	await lifecycleWrite;
+	desktopTray?.destroy();
 	if (preserveApplication && runtime) await runtimeExit.stop();
 	else if (!runtimeExit?.exited) runtime?.kill();
 	allowQuit = true;
@@ -708,21 +718,7 @@ if (!app.hasSingleInstanceLock()) {
 			void attachFromCommandLine(args).catch(() => emit({ type: "notice", text: "本次窗口连接未通过，原状态保留，未自动重试。" }));
 			return;
 		}
-		if (
-			recovering &&
-			restarts > 1 &&
-			(ui.child.exitCode !== null || ui.child.signalCode !== null)
-		) {
-			void startUi()
-				.then(() => {
-					recovering = false;
-					emit({
-						type: "notice",
-						text: "已按重新打开工作台的操作创建界面，未重启宿主或重放任务。",
-					});
-				})
-				.catch(recoveryFailed);
-		} else send(ui, { type: "focus" });
+		void openWorkbench().catch(recoveryFailed);
 	});
 	app.on("before-quit", (event) => {
 		if (!allowQuit) {
@@ -815,10 +811,16 @@ if (!app.hasSingleInstanceLock()) {
 				notice: (facts) => { recordUiLifecycle({ kind: "probe", epoch: ui?.epoch, ...facts }); emit({ type: "ui-health", text: facts.blocked ? "窗口响应检查未确认，自动替换已停止；任务未重放。" : "正在核对本机窗口响应；任务未重放。", ...facts }); }, thresholdMs: watchdogMs });
 			watchdog = setInterval(() => { void checkUi().catch(recoveryFailed); }, 100);
 			await startUi();
+			try {
+				desktopTray = createDesktopTray({ Tray, Menu, nativeImage, open: openWorkbench, exit: () => shutdown(), notice: code => {
+					send(ui, { type: "focus" });
+					emit({ type: "notice", text: code === "TRAY_EXIT_BLOCKED" ? "退出未完成：任务收尾或窗口还原尚未确认，工作台保持打开。" : "工作台尚未打开，请检查当前窗口连接状态。" });
+				} });
+			} catch { emit({ type: "notice", text: "系统托盘不可用；仍可从主窗口正常退出。" }); }
 			await attachFromCommandLine(process.argv);
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
-				await runPortableSmoke({ root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss || storageCase ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, registerCommandWorkspace, profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); }, stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); }, tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); }, getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; }, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
+				await runPortableSmoke({ getTray: () => desktopTray, root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss || storageCase ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, registerCommandWorkspace, profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); }, stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); }, tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); }, getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; }, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } });
 				await shutdown(); return;
 			}
 			if (process.argv.includes("--demo-fixture")) {
@@ -827,7 +829,7 @@ if (!app.hasSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = process.argv.includes("--smoke-tray") ? runTraySmoke : diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
@@ -837,6 +839,7 @@ if (!app.hasSingleInstanceLock()) {
 					testCommand,
 					events,
 					getUi: () => ui,
+					getTray: () => desktopTray,
 					getRuntimePid: () => runtime.pid,
 					mcpLossScenario, context: diagnosticSmoke ? { root: process.env.COMMANDDECK_DIAGNOSTIC_FIXTURE_ROOT, runId: process.env.COMMANDDECK_SMOKE_RUN_ID } : mcpLossScenario ? gameFixtureContext : undefined,
 					getBridgeClient: () => bridge.telemetry?.client,

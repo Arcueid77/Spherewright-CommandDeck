@@ -62,6 +62,8 @@ async function testCommand(message) {
 			window.restore(); window.show(); window.focus();
 			result = { visible: window.isVisible(), minimized: window.isMinimized() };
 		}
+		else if (message.name === "minimize-ui") { window.minimize(); result = true; }
+		else if (message.name === "window-state") result = { visible: window.isVisible(), minimized: window.isMinimized() };
 		else if (message.name === "reload") {
 			const loaded = once(window.webContents, "did-finish-load");
 			window.webContents.reload();
@@ -135,6 +137,7 @@ if (typeof process.send !== "function") {
 		else if (message.type === "event" && window && !window.isDestroyed())
 			window.webContents.send("deck:event", message.event);
 		else if (message.type === "focus" && window && !window.isDestroyed()) {
+			if (window.isMinimized()) window.restore();
 			window.show();
 			window.focus();
 		} else if (message.type === "allow-close") {

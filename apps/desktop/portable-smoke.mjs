@@ -69,6 +69,8 @@ export async function runPortableSmoke(driver) {
 	if (recovery) { if (profileCase) assert.equal(profileCase.phase, "recover"); await runPortableRecoverySmoke({ ...driver, profileCase }, recovery, manifest, runtimePid, settledUi); return; }
 	if (profileCase) assert.equal(profileCase.phase, "bootstrap");
 	const history = await readPortableHistory(context);
+	assert.equal(manifest.desktopTray, 1);
+	const desktopTray = driver.getTray(); assert.ok(desktopTray); assert.equal(desktopTray.nativeTray.isDestroyed(), false);
 	let historyProof = null;
 	if (history) historyProof = await assertPortableHistory(api, history);
 	else { const state = await api("workbench", { action: "state" }); assert.equal(state.roots.length, 0); assert.equal(state.tasks.length, 0); }
@@ -78,6 +80,14 @@ export async function runPortableSmoke(driver) {
 	await settledUi(); const result = await api("probe", { mode: "offline" });
 	assert.equal(result.requestCount, 2); assert.equal(result.executed, 1); assert.equal(result.gameCalls, 0); assert.equal(result.sourceCommit, manifest.piCommit);
 	await testCommand("reload"); assert.equal(getRuntimePid(), runtimePid);
+	assert.equal(driver.getTray(), desktopTray);
+	await testCommand("minimize-ui"); assert.equal((await testCommand("window-state")).minimized, true);
+	desktopTray.menu.getMenuItemById("open").click();
+	const restoreDeadline = performance.now() + 5000;
+	while (true) {
+		const state = await testCommand("window-state"); if (state.visible && !state.minimized) break;
+		assert.ok(performance.now() < restoreDeadline, "PORTABLE_TRAY_RESTORE_TIMEOUT"); await new Promise(resolve => setTimeout(resolve, 30));
+	}
 	const after = await api("snapshot"); assert.equal(after.lastProbeResult.requestCount, 2); assert.equal(after.lastProbeResult.executed, 1);
 	assert.equal(getProbeSequence(), 1);
 	if (history) await assertPortableHistory(api, history);
@@ -92,5 +102,7 @@ export async function runPortableSmoke(driver) {
 	const fullProfileBootstrap = profileCase ? await runProfileBootstrap(driver) : null;
 	const proof = { runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: result.sourceCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, emptyIsolatedWorkspace: !history, closedHistoryReopened: Boolean(history), history: historyProof, userProfilesUntouched: true, externalActionsRejected: true, embeddedPiRoundtrip: true, syntheticModelRequests: 2, syntheticTools: 1, uiReloadRetainsRuntimeAndResult: true, noModelReplay: true, ownNativeFixtureEmbeddedAndDetached: true, selfContainedCommandCache: true, commandExitCode: 1, commandTreeAndStreamsConfirmed: true, gameCalls: 0, realModelRequests: 0, cleanWindowsVmVerified: false, installerVerified: false };
 	if (fullProfileBootstrap) proof.fullProfileBootstrap = fullProfileBootstrap;
+	Object.assign(proof, { supervisorTrayRetainedAcrossReload: true, nativeTrayMenuRestoresMinimizedUi: true, exitRequestedThroughTray: true, physicalTrayInputVerified: false, embeddedHostMinimizeVerified: false });
 	await writeFile(join(context.root, "application-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
+	assert.equal(await desktopTray.activate("exit"), true);
 }

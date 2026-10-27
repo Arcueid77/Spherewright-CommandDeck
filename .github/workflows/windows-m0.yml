@@ -55,6 +55,7 @@ jobs:
       - run: node scripts/run-desktop-smoke.mjs --smoke-recovery-limit
       - run: npm run test:desktop-adapter
       - run: npm run test:workbench
+      - run: npm run test:tray
       - run: npm run test:renamed-ui
       - run: npm run test:bridge
       - run: npm run test:observation
@@ -127,6 +128,7 @@ jobs:
             .local/adapter-route-smoke.json
             .local/desktop-smoke-adapter.json
             .local/desktop-smoke-workbench.json
+            .local/desktop-smoke-tray.json
             .local/desktop-smoke-renamed-ui.json
             .local/credential-vault-smoke.json
             .local/desktop-smoke-bridge.json

@@ -69,6 +69,7 @@ try {
 	assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
 	assert.ok(application, "Packaged application did not write its completion proof");
 	assert.equal(application.runId, runId); assert.equal(application.sourceRevision, manifest.sourceRevision); assert.equal(application.piCommit, manifest.piCommit);
+	if (manifest.desktopTray === 1) for (const field of ["supervisorTrayRetainedAcrossReload", "nativeTrayMenuRestoresMinimizedUi", "exitRequestedThroughTray"]) assert.equal(application[field], true, field);
 	if (phase === "reopen" || resumed) { assert.equal(application.closedHistoryReopened, true); assert.equal(application.emptyIsolatedWorkspace, false); assert.equal(application.history?.closedHistorySha256, history.sha256); assert.equal((await readPortableHistory({ root: directory, runId })).sha256, history.sha256); }
 	const trace = await readFile(join(directory, "runtime.trace.private.log")), text = trace.toString().toLowerCase();
 	for (const file of ["hostfxr.dll", "coreclr.dll", "System.Windows.Forms.dll"]) assert.ok(text.includes(join(copy, "resources/app/artifacts/native", file).toLowerCase()), "App-local native runtime missing: " + file);
