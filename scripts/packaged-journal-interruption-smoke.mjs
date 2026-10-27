@@ -9,22 +9,26 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { bundleExecutable, copyBundleTree, verifyBundle } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
+import { readGit } from "../apps/desktop/workspace.mjs";
 import { journalInterruptionCaseFile, journalInterruptionStartedFile, journalInterruptionFrozenFile } from "../apps/desktop/journal-interruption-smoke.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_JOURNAL_INTERRUPTION_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
 assert.equal(manifest.portableJournalInterruption, 1, "PACKAGED_JOURNAL_INTERRUPTION_REBUILD_REQUIRED"); assert.equal(manifest.eventJournal, 1); assert.equal(manifest.nativeProcessObserver, 1);
+const driverRevision = (await readGit(root, ["rev-parse", "HEAD"])).trim();
+async function driverUnchanged() { assert.equal((await readGit(root, ["rev-parse", "HEAD"])).trim(), driverRevision); assert.equal((await readGit(root, ["status", "--porcelain=v1", "--untracked-files=normal"])).trim(), "", "JOURNAL_INTERRUPTION_REQUIRES_CLEAN_DRIVER"); }
+await driverUnchanged();
 const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))), copy = join(directory, "bundle"), profile = join(directory, "supervisor-profile/supervisor");
 const proofRoot = join(root, ".local/packaged-journal-interruption", runId); await mkdir(proofRoot, { recursive: true });
-await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, directory, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
+await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, directory, sourceRevision: manifest.sourceRevision, driverRevision }), { flag: "wx" });
 const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 const env = { ...inherited, PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: runId };
 const observer = () => observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory], env });
 const pause = () => new Promise(resolve => setTimeout(resolve, 50));
 function rows(file, tables) {
 	const db = new DatabaseSync(file, { readOnly: true });
-	try { return Object.fromEntries(tables.map(table => [table, db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all()])); } finally { db.close(); }
+	try { return Object.fromEntries(tables.map(table => [table, db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all().map(row => ({ ...row }))])); } finally { db.close(); }
 }
 function execution() {
 	return { work: rows(join(profile, "m1-smoke-" + runId, "workbench.sqlite"), ["roots", "tasks", "events", "changes", "invocations"]), game: rows(join(profile, "game-smoke-" + runId, "game-tasks.sqlite"), ["game_tasks", "game_intents", "game_gate", "game_task_details", "game_task_events"]) };
@@ -99,8 +103,8 @@ try {
 		phases.push({ phase, forcedTermination: forced, normalExit: code === 0 && !signal, noOwnedPackagedImagesRemain: true });
 		await rename(join(directory, journalInterruptionCaseFile), join(directory, "journal-interruption-case-" + phase + ".private.json"));
 	}
-	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { packagedJournalInterruption: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, applicationRuns: 3, phases, actualPackagedApplication: true, exactSpawnHandleTerminatedAfterIndependentObservation: true, originalEventsAndBookmarksRetained: true, interruptionChangesOnlyRecordingStateAndReason: true, interruptedRecordSurvivesNormalReopen: true, automaticRecordingNotResumed: true, originalExecutionRowsAndPiFilesRetained: true, noModelOrTaskReplay: true, syntheticModelRequests: 2, realModelRequests: 0, gameCalls: 0, bundleUnchanged: true, cleanWindowsVmVerified: false, videoRecordingVerified: false };
+	await verifyBundle(copy); await verifyBundle(source); await driverUnchanged();
+	const proof = { packagedJournalInterruption: "passed", runId, sourceRevision: manifest.sourceRevision, driverRevision, piCommit: manifest.piCommit, applicationRuns: 3, phases, actualPackagedApplication: true, exactSpawnHandleTerminatedAfterIndependentObservation: true, originalEventsAndBookmarksRetained: true, interruptionChangesOnlyRecordingStateAndReason: true, interruptedRecordSurvivesNormalReopen: true, automaticRecordingNotResumed: true, originalExecutionRowsAndPiFilesRetained: true, noModelOrTaskReplay: true, syntheticModelRequests: 2, realModelRequests: 0, gameCalls: 0, bundleUnchanged: true, cleanWindowsVmVerified: false, videoRecordingVerified: false };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-journal-interruption-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
 	console.log(JSON.stringify({ packagedJournalInterruption: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: 3, gameCalls: 0, realModelRequests: 0 }));
 } finally {

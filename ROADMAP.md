@@ -573,6 +573,8 @@ M5新增系统暂停/唤醒软件处理：监听监督进程的suspend/resume，
 
 日记新增`test:packaged-journal-interruption`有限实包入口：仅在原有隔离portable模式接受绑定runId的固定record/resume/reopen数据；先显式录制离线probe/书签，包外用原spawn handle终止独立核明身份的自有应用，再要求两次无模型启动保持完整历史、interrupted标记、未续录/零任务重放及原执行行/Pi字节。终止后先核指定映像全部退出，再读原SQLite/WAL；原记录不在验证器中修写，期望数据不能授权执行。7项日记/控制数据定向回归及模块语法检查通过；新增实包分支、准确提交/构建与三次应用运行仍待，不提前计整应用异常通过。
 
+中断首轮run `542ab62b-81dc-4de8-b305-c434ce7a8b1f`已通过实际录制、独立观察后SIGKILL、指定映像0残留及首次恢复应用正常exit0，但包外全量比对因Node SQLite行的null prototype与structuredClone期望的普通prototype不同而失败，未记三阶段通过。保留该run、原SQL及失败日志；独立只读复核完整原字段仅有预期state/reason变化。控制器现把所有SQL行的全部自有字段保留为普通数据对象后比较，并增加控制器提交/干净源码身份，与候选提交分别记录；候选应用字节不变。修正后的完整三阶段仍待。
+
 ## 11. 实施与证据规则
 
 ### 开发协作模式
