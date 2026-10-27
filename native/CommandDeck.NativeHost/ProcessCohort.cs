@@ -9,7 +9,7 @@ internal static class ProcessCohort
 {
     private sealed record Member(int Pid, string StartedUtcTicks, int RootIndex, string RelativeImage);
 
-    internal static int Inspect(string[] arguments)
+    internal static int Inspect(string[] arguments, bool includeNode = false)
     {
         try
         {
@@ -20,7 +20,10 @@ internal static class ProcessCohort
             string[] prefixes = roots.Select(path => Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar).ToArray();
             var members = new List<Member>();
             int inspected = 0;
-            foreach (string name in new[] { "Spherewright-CommandDeck", "CommandDeck.NativeHost", "CommandDeck.CommandHost" })
+            string[] names = includeNode
+                ? new[] { "Spherewright-CommandDeck", "CommandDeck.NativeHost", "CommandDeck.CommandHost", "node" }
+                : new[] { "Spherewright-CommandDeck", "CommandDeck.NativeHost", "CommandDeck.CommandHost" };
+            foreach (string name in names)
             {
                 foreach (Process process in Process.GetProcessesByName(name))
                 {
@@ -47,7 +50,7 @@ internal static class ProcessCohort
                     }
                 }
             }
-            Console.WriteLine(JsonSerializer.Serialize(new { version = 1, observerPid = Environment.ProcessId, roots, count = members.Count, members }, Program.Json));
+            Console.WriteLine(JsonSerializer.Serialize(new { version = 1, observerPid = Environment.ProcessId, roots, nodeImagesIncluded = includeNode, count = members.Count, members }, Program.Json));
             return 0;
         }
         catch

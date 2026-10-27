@@ -17,9 +17,9 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--inspect-process-cohort")
+        if (args.Length > 0 && (args[0] is "--inspect-process-cohort" or "--inspect-command-cohort"))
         {
-            Environment.ExitCode = ProcessCohort.Inspect(args.Skip(1).ToArray());
+            Environment.ExitCode = ProcessCohort.Inspect(args.Skip(1).ToArray(), includeNode: args[0] == "--inspect-command-cohort");
             return;
         }
         if (args.Length == 4 && args[0] == "--inspect-adapter-process")

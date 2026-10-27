@@ -21,5 +21,21 @@ test("missing births, duplicate processes, observer self-counts and unsafe image
 
 test("an invalid request or failed observer never returns an invented zero process count", async () => {
 	await assert.rejects(observePackagedProcesses({ executable: "relative.exe", roots }), /REQUEST_INVALID/);
+	await assert.rejects(observePackagedProcesses({ executable: roots[0] + "/observer.exe", roots, includeNode: "true" }), /REQUEST_INVALID/);
 	await assert.rejects(observePackagedProcesses({ executable: roots[0] + "/not-a-program.exe", roots, timeoutMs: 1000 }), /OBSERVATION_UNAVAILABLE/);
+});
+
+test("command observation requires explicit Node scope and a matching native acknowledgement", () => {
+	const nodeReply = { ...reply, nodeImagesIncluded: true, members: [{ ...reply.members[0], relativeImage: "toolchain/node.exe" }] };
+	assert.deepEqual(parseProcessObservation(JSON.stringify(nodeReply), { ...options, includeNode: true }), nodeReply);
+	assert.throws(() => parseProcessObservation(JSON.stringify(nodeReply), options));
+	for (const acknowledgement of [undefined, false, "true", 1]) {
+		assert.throws(() => parseProcessObservation(JSON.stringify({ ...nodeReply, nodeImagesIncluded: acknowledgement }), { ...options, includeNode: true }));
+	}
+	assert.throws(() => parseProcessObservation(JSON.stringify({ ...nodeReply, nodeImagesIncluded: false }), options));
+	assert.throws(() => parseProcessObservation(JSON.stringify({ ...reply, nodeImagesIncluded: true }), options));
+	assert.equal(parseProcessObservation(JSON.stringify({ ...reply, nodeImagesIncluded: false }), options).count, 1);
+	for (const changed of [{ startedUtcTicks: null }, { pid: 10 }, { rootIndex: 2 }, { relativeImage: "../node.exe" }, { relativeImage: "other.exe" }]) {
+		assert.throws(() => parseProcessObservation(JSON.stringify({ ...nodeReply, members: [{ ...nodeReply.members[0], ...changed }] }), { ...options, includeNode: true }));
+	}
 });
