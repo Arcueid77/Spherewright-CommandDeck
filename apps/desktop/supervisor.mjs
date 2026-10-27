@@ -31,6 +31,7 @@ import { DiagnosticExports, readDiagnosticBuild } from "./diagnostic-export.mjs"
 import { diagnosticCode } from "./diagnostic-snapshot.mjs";
 import { assertDiagnosticSmokeAction } from "./diagnostic-smoke-scope.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
+import { ledgerPresenceConfiguration, prepareLedgerPresence } from "./ledger-presence.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -53,6 +54,9 @@ const observationPolicy = observationArguments(process.argv);
 const watchdogMs = 1000;
 if (!app.hasSingleInstanceLock()) throw new Error("SUPERVISOR_PROFILE_OWNER_REQUIRED");
 const privateDirectory = app.getPath("userData");
+const ledgerConfiguration = ledgerPresenceConfiguration(smoke ? (process.env.COMMANDDECK_SMOKE_RUN_ID ?? "") : null);
+const ledgerPresence = await prepareLedgerPresence(privateDirectory, smoke ? (process.env.COMMANDDECK_SMOKE_RUN_ID ?? "") : null);
+const workbenchDirectory = dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "workbench").file));
 const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID] : []), "profiles.vault.json"), {
 	available: () => process.platform === "win32" && safeStorage.isEncryptionAvailable(),
 	encrypt: (text) => safeStorage.encryptStringAsync(text), decrypt: async (bytes) => (await safeStorage.decryptStringAsync(bytes)).result,
@@ -66,7 +70,7 @@ const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(por
 const fixtureProvider = gameSmoke ? syntheticProviderScope() : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
-const game = new GameTasks({ directory: join(privateDirectory, smoke ? "game-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game"), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
+const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
 	releaseDevelopment: () => workbenchCall("game-end"), planner: runGamePlanner, emit: () => emit({ type: "game-changed" }),
@@ -796,9 +800,10 @@ if (!app.hasSingleInstanceLock()) {
 				if (!path || !isAbsolute(path) || workspaceRoots.length >= 8) throw new Error("INVALID_WORKSPACE_ARGUMENT");
 				workspaceRoots.push({ path, label: basename(path), canWrite: false, canExecute: false });
 			}
-			await workbenchCall("initialize", { directory: join(privateDirectory, smoke ? "m1-smoke-" + (process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID()) : "workbench"), helperSource: join(root, "artifacts/commands"), roots: workspaceRoots, ...(commandCase?.scenario === "helper" && !commandCase.resume ? { commandFixture: { ...portableContext, ...commandCase } } : {}) });
+			await workbenchCall("initialize", { directory: workbenchDirectory, helperSource: join(root, "artifacts/commands"), roots: workspaceRoots, ...(commandCase?.scenario === "helper" && !commandCase.resume ? { commandFixture: { ...portableContext, ...commandCase } } : {}) });
 			workbenchReady = true;
 			await game.initialize();
+			await ledgerPresence.seal();
 			initializingRuntime = false;
 			bridgeTimer = setInterval(() => bridge.poll(), 1000);
 			native.on("stopped", () => void nativeStopped().catch(recoveryFailed));
