@@ -10,12 +10,13 @@ import { DatabaseSync } from "node:sqlite";
 import { bundleExecutable, copyBundleTree, verifyBundle } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { readGit } from "../apps/desktop/workspace.mjs";
-import { journalInterruptionCaseFile, journalInterruptionStartedFile, journalInterruptionFrozenFile } from "../apps/desktop/journal-interruption-smoke.mjs";
+import { journalInterruptionCaseFile, journalInterruptionStartedFile, journalInterruptionFrozenFile, journalInterruptionFailure, journalInterruptionProgress } from "../apps/desktop/journal-interruption-smoke.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_JOURNAL_INTERRUPTION_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
 assert.equal(manifest.portableJournalInterruption, 1, "PACKAGED_JOURNAL_INTERRUPTION_REBUILD_REQUIRED"); assert.equal(manifest.eventJournal, 1); assert.equal(manifest.nativeProcessObserver, 1);
+assert.equal(manifest.portableJournalInterruptionProgress, 1, "PACKAGED_JOURNAL_INTERRUPTION_PROGRESS_REBUILD_REQUIRED");
 const driverRevision = (await readGit(root, ["rev-parse", "HEAD"])).trim();
 async function driverUnchanged() { assert.equal((await readGit(root, ["rev-parse", "HEAD"])).trim(), driverRevision); assert.equal((await readGit(root, ["status", "--porcelain=v1", "--untracked-files=normal"])).trim(), "", "JOURNAL_INTERRUPTION_REQUIRES_CLEAN_DRIVER"); }
 await driverUnchanged();
@@ -50,10 +51,11 @@ async function piFiles() {
 	}
 	files.sort((a, b) => a.path.localeCompare(b.path)); assert.ok(files.some(file => file.path.endsWith(".jsonl"))); return files;
 }
-let passed = false, original, originalExecution, originalPi; const phases = [];
+let passed = false, original, originalExecution, originalPi, status = { phase: "preparing", remaining: null }; const phases = [];
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
 	for (const phase of ["record", "resume", "reopen"]) {
+		status = { phase, remaining: null };
 		const before = await observer(); assert.equal(before.count, 0, "PREVIOUS_PACKAGED_IMAGES_REMAIN");
 		await writeFile(join(directory, journalInterruptionCaseFile), JSON.stringify({ version: 1, runId, phase }), { flag: "wx" });
 		const child = spawn(join(copy, bundleExecutable), ["--portable-smoke"], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
@@ -64,7 +66,8 @@ try {
 			if (phase === "record") {
 				const deadline = performance.now() + 40000; let started;
 				while (!started) {
-					assert.ok(child.exitCode === null && child.signalCode === null && performance.now() < deadline, "JOURNAL_RECORDING_NOT_OBSERVED");
+					assert.ok(child.exitCode === null && child.signalCode === null, "JOURNAL_RECORDING_APPLICATION_EXITED");
+					assert.ok(performance.now() < deadline, "JOURNAL_RECORDING_READY_TIMEOUT");
 					try { started = JSON.parse(await readFile(join(directory, journalInterruptionStartedFile), "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
 					if (!started) await pause();
 				}
@@ -76,10 +79,14 @@ try {
 			[code, signal] = await exited;
 		} catch (error) { phaseError = error; if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); [code, signal] = await exited; }
 		finally { clearTimeout(timer); }
+		Object.assign(status, { exitCode: code, timedOut, forced, output, controllerCode: phaseError?.message });
 		await writeFile(join(proofRoot, phase + "-exit.private.json"), JSON.stringify({ runId, phase, code, signal, timedOut, forced, output, error: phaseError?.message }), { flag: "wx" });
 		let remaining; const deadline = performance.now() + 25000;
 		do { const observed = await observer(); remaining = observed.count; await writeFile(join(proofRoot, phase + "-process-observation.private.json"), JSON.stringify(observed)); if (!remaining) break; await pause(); } while (performance.now() < deadline);
+		status.remaining = remaining; status.output = output;
 		assert.equal(remaining, 0, "PACKAGED_JOURNAL_CHILDREN_REMAIN"); if (phaseError) throw phaseError; assert.equal(timedOut, false);
+		const stagesReached = journalInterruptionProgress(output);
+		assert.deepEqual(stagesReached, phase === "record" ? ["entered", "empty-state", "recording-active", "probe-start", "probe-complete", "bookmark-added", "archive-verified", "marker-write"] : ["entered", "empty-state", "frozen-read", "interrupted-state", "replay-verified", "proof-written", "exit-requested"], "JOURNAL_INTERRUPTION_PROGRESS_INCOMPLETE");
 		const actual = journal();
 		if (phase === "record") {
 			assert.equal(forced, true); assert.ok(code !== 0 || signal); original = actual; assert.equal(original.recordings[0].state, "recording"); assert.equal(original.recordings[0].stopped_at, null);
@@ -100,13 +107,16 @@ try {
 			await writeFile(join(proofRoot, phase + "-application.json"), JSON.stringify(proof), { flag: "wx" });
 		}
 		await writeFile(join(proofRoot, phase + "-sql.private.json"), JSON.stringify({ journal: actual, execution: execution(), pi: await piFiles() }), { flag: "wx" });
-		phases.push({ phase, forcedTermination: forced, normalExit: code === 0 && !signal, noOwnedPackagedImagesRemain: true });
+		phases.push({ phase, forcedTermination: forced, normalExit: code === 0 && !signal, noOwnedPackagedImagesRemain: true, stagesReached });
 		await rename(join(directory, journalInterruptionCaseFile), join(directory, "journal-interruption-case-" + phase + ".private.json"));
 	}
 	await verifyBundle(copy); await verifyBundle(source); await driverUnchanged();
 	const proof = { packagedJournalInterruption: "passed", runId, sourceRevision: manifest.sourceRevision, driverRevision, piCommit: manifest.piCommit, applicationRuns: 3, phases, actualPackagedApplication: true, exactSpawnHandleTerminatedAfterIndependentObservation: true, originalEventsAndBookmarksRetained: true, interruptionChangesOnlyRecordingStateAndReason: true, interruptedRecordSurvivesNormalReopen: true, automaticRecordingNotResumed: true, originalExecutionRowsAndPiFilesRetained: true, noModelOrTaskReplay: true, syntheticModelRequests: 2, realModelRequests: 0, gameCalls: 0, bundleUnchanged: true, cleanWindowsVmVerified: false, videoRecordingVerified: false };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-journal-interruption-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
 	console.log(JSON.stringify({ packagedJournalInterruption: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: 3, gameCalls: 0, realModelRequests: 0 }));
+} catch (error) {
+	const failure = journalInterruptionFailure(status);
+	await writeFile(join(proofRoot, "failure.json"), JSON.stringify(failure), { flag: "wx" }); console.error("JOURNAL_INTERRUPTION_FAILURE", JSON.stringify(failure)); throw error;
 } finally {
 	if (passed) { const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-desktop-smoke-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 }

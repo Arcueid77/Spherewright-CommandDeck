@@ -134,6 +134,7 @@ jobs:
             .local/packaged-development-context-providers-smoke.json
             .local/packaged-development-context-failures-smoke.json
             .local/packaged-journal-interruption-smoke.json
+            .local/packaged-journal-interruption/*/failure.json
             .local/packaged-video-archive-smoke.json
             .local/packaged-video-archive-coarse-smoke.json
             .local/packaged-gateway-smoke.json
