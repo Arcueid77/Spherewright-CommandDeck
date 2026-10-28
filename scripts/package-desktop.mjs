@@ -9,6 +9,7 @@ import { materializePiRuntime } from "./pi-runtime-tree.mjs";
 import { bundleExecutable, bundleManifestName, bundleHash, copyBundleTree, inventoryBundle, ridLockedCopy, verifyBundle, desktopPackageMetadata } from "./desktop-bundle-files.mjs";
 import { verifyRendererNotices } from "./renderer-notices.mjs";
 import { copyFrameworkNotices } from "./framework-notices.mjs";
+import { videoTimelineFixtureVersion } from "../apps/desktop/video-archive-smoke.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), pin = "71023aec1546d6d677a65669c5665c0927ce0dd0";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--output") throw new Error("EXPLICIT_WINDOWS_BUNDLE_OUTPUT_REQUIRED");
@@ -89,7 +90,7 @@ await mkdir(join(app, "vendor")); const pi = await materializePiRuntime(join(roo
 await sourceCheck();
 if (bundleHash(await readFile(join(root, "package-lock.json"))) !== bundleHash(lock) || bundleHash(await readFile(join(root, "vendor/pi/package-lock.json"))) !== bundleHash(piLock)) throw new Error("BUNDLE_DEPENDENCY_LOCK_CHANGED");
 const inventory = await inventoryBundle(output);
-const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, nativeCommandProcessObserver: 1, portableRuntimeFaults: 1, portableMcpFaults: 1, portableDiagnostics: 1, portableStorageFaults: 1, portableCommandFaults: 2, writableLedgerStartup: 1, profileLedgerPresence: 1, portableFullProfile: 1, desktopTray: 1, powerLifecycle: 1, eventJournal: 1, portableJournalInterruption: 1, portableVideoArchive: 1, videoPlaybackUi: 1, videoRecordingControls: 1, encodedPrivacyFixture: 2, videoAnnotations: 1, videoEventTimeline: 3, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, frameworkNotices, rendererNotices, piPackages: pi.packages, ...inventory };
+const manifest = { version: 1, kind: "commanddeck-windows-portable", runtimeIdentifier: "win-x64", executable: bundleExecutable, selfContained: true, nativeProcessObserver: 1, nativeCommandProcessObserver: 1, portableRuntimeFaults: 1, portableMcpFaults: 1, portableDiagnostics: 1, portableStorageFaults: 1, portableCommandFaults: 2, writableLedgerStartup: 1, profileLedgerPresence: 1, portableFullProfile: 1, desktopTray: 1, powerLifecycle: 1, eventJournal: 1, portableJournalInterruption: 1, portableVideoArchive: 1, videoPlaybackUi: 1, videoRecordingControls: 1, encodedPrivacyFixture: 2, videoAnnotations: 1, videoEventTimeline: videoTimelineFixtureVersion, sourceRevision: revision, piCommit: pin, appVersion: packageFile.version, electronVersion, sdkVersion, rootDependencyLockSha256: bundleHash(lock), piDependencyLockSha256: bundleHash(piLock), nativeInputs: inputs, nativeFrameworks: nativeConfig.runtimeOptions.includedFrameworks, frameworkNotices, rendererNotices, piPackages: pi.packages, ...inventory };
 manifest.modelUsage = 1;
 manifest.modelUsageRecovery = 1;
 manifest.modelUsageSummary = 1;

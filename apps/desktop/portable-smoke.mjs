@@ -15,7 +15,7 @@ import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile
 import { checkPowerLifecycle } from "./power-smoke.mjs";
 import { beginJournalSmoke, finishJournalSmoke } from "./journal-smoke.mjs";
 import { readJournalInterruptionCase, runJournalInterruptionSmoke } from "./journal-interruption-smoke.mjs";
-import { readVideoArchiveCase, runVideoArchiveSmoke } from "./video-archive-smoke.mjs";
+import { readVideoArchiveCase, runVideoArchiveSmoke, videoTimelineFixtureVersion } from "./video-archive-smoke.mjs";
 import { readModelUsageRecovery, runModelUsageRecovery } from "./model-usage-recovery.mjs";
 import { runDevelopmentUsageSmoke } from "./development-usage-smoke.mjs";
 import { runDevelopmentContextRecovery } from "./development-context-recovery.mjs";
@@ -59,7 +59,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 		assert.equal(manifest.portableJournalInterruption, 1); assert.ok(!videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "JOURNAL_INTERRUPTION_FIXTURE_MODE_CONFLICT");
 		await runJournalInterruptionSmoke(driver, journalInterruption, manifest); return;
 	}
-	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.equal(manifest.videoPlaybackUi, 1); assert.equal(manifest.encodedPrivacyFixture, 2); assert.equal(manifest.videoAnnotations, 1); assert.equal(manifest.videoEventTimeline, 2); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest, videoArchive, journal); return; }
+	if (videoArchiveCase) { assert.equal(manifest.portableVideoArchive, 1); assert.equal(manifest.videoPlaybackUi, 1); assert.equal(manifest.encodedPrivacyFixture, 2); assert.equal(manifest.videoAnnotations, 1); assert.equal(manifest.videoEventTimeline, videoTimelineFixtureVersion); assert.ok(!profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "VIDEO_ARCHIVE_FIXTURE_MODE_CONFLICT"); await runVideoArchiveSmoke(driver, videoArchiveCase, manifest, videoArchive, journal); return; }
 	if (driver.commandCase) {
 		assert.equal(manifest.portableCommandFaults, 2); assert.equal(manifest.nativeCommandProcessObserver, 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);

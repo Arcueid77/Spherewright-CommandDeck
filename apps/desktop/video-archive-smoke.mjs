@@ -6,6 +6,7 @@ import { VideoRecording } from "./video-recording.mjs";
 import { videoRelation } from "./video-context.mjs";
 
 export const videoArchiveCaseFile = "video-archive-case.private.json";
+export const videoTimelineFixtureVersion = 3;
 export async function readVideoArchiveCase(context) {
 	const file = join(context.root, videoArchiveCaseFile); let info;
 	try { info = await lstat(file); } catch (error) { if (error.code === "ENOENT") return null; throw error; }
