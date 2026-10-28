@@ -3,6 +3,7 @@ import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { modelUsageSnapshot } from "./model-usage.mjs";
+import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 
 export const modelUsageRecoveryFile = "model-usage-recovery.private.json";
 export const modelUsageRecoveryHash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -49,7 +50,9 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 	await compare(); await showUsage();
 	const denied = await testCommand("evaluate", { source: "(async()=>{let count=0;for(const call of [()=>window.deck.game('start',{}),()=>window.deck.game('reconcile',{}),()=>window.deck.manageProfiles('save',{}),()=>window.deck.workbench('agent',{}),()=>window.deck.workbench('check',{}),()=>window.deck.probe({mode:'live'})])try{await call()}catch{count++}return count})()" }); assert.equal(denied, 6);
 	await testCommand("reload"); await showUsage(); await compare();
+	const summary = manifest.modelUsageSummary === 1 ? await verifyUsageSummary(driver, { domain: "game", usage: value.expected.tasks[0].details.usage, context: value.expected.tasks[0].details.context }) : null;
 	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !accepted, modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
+	if (summary) proof.summary = summary;
 	await writeFile(join(driver.context.root, "model-usage-recovery-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	return proof;
 }

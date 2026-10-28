@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "./bridge";
 import { profileToken, type Profile } from "./providers";
-import { ModelUsage, type Usage } from "./model-usage";
+import { ModelUsage, type Usage, type ModelContext } from "./model-usage";
 
 type Intent = { intentId: string; taskId: string; state: string; actionId: string | null; terminal: { beforeQueue: number[]; afterQueue: number[]; freshQueue: number[]; completedAtGameTick: number } | null };
-type Task = { id: string; state: string; expiresAt: number | null; scope: { techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; provider?: string; model?: string; usage?: Usage }; intent: Intent | null };
+type Task = { id: string; state: string; expiresAt: number | null; scope: { techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; provider?: string; model?: string; usage?: Usage; context?: ModelContext }; intent: Intent | null };
 type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
 type Context = { state: GameState; profiles: Profile[]; healthy: boolean; busy: boolean; notice: string; act: (action: string, args?: Record<string, unknown>) => Promise<void>; confirm: (taskId: string) => Promise<void> };
 const Context = createContext<Context>(null!);
@@ -68,12 +68,12 @@ export function GameTasksPanel() {
 			{task.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前：{task.intent.terminal.beforeQueue.map((id) => `#${id}`).join(" → ") || "空"}<br />之后：{task.intent.terminal.afterQueue.map((id) => `#${id}`).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">这证明正常入队与读回，科技研究完成需继续观察。</p></div>}
 		</>}
 		{state.unresolved.map((intent) => <div className="game-task-receipt" key={intent.intentId}><b>未决动作：{intent.actionId || "尚无编号"}</b><p>{intent.actionId ? "后续写入保持冻结。核销会核对原版本及世界，只查询原动作。" : "提交可能已生效；没有原动作编号时不能再次提交。"}</p><button disabled={!c.healthy || state.systemPaused || !state.storageAvailable || c.busy || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
-		{task && <ModelUsage value={task.details.usage} />}
+		{task && <ModelUsage value={task.details.usage} context={task.details.context} />}
 		{state.events.length > 0 && <section className="game-task-transcript" aria-label="Agent 与执行记录"><h3>Agent 与执行记录</h3>{state.events.filter(event => event.kind !== "usage").map((event) => {
 			const Entry = event.kind === "assistant" ? "span" : "div";
 			return <Entry key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</Entry>;
 		})}</section>}
 		<p className="muted">游戏输入互斥尚未验收。“停止后续”会冻结新提交，已受理的动作继续核销；窗口焦点变化不表示动作已取消。</p>
-		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <details key={value.id}><summary>#{value.scope.techId} · {phases[value.state] ?? value.state}</summary><ModelUsage value={value.details.usage} /></details>)}</details>}
+		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <details key={value.id}><summary>#{value.scope.techId} · {phases[value.state] ?? value.state}</summary><ModelUsage value={value.details.usage} context={value.details.context} /></details>)}</details>}
 	</div>;
 }

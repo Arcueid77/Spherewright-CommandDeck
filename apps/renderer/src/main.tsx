@@ -15,6 +15,7 @@ import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type 
 import { JournalPanel } from "./journal";
 import { VideosPanel } from "./videos";
 import { RecordingIndicator } from "./recording";
+import { UsageSummaryPanel } from "./usage-summary";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -64,6 +65,7 @@ declare global {
 			snapshot(): Promise<UiSnapshot>;
 			resumeSystem(): Promise<PowerState>;
 			journal<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
+			modelUsage<T = unknown>(): Promise<T>;
 			video<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			recording<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			profiles(): Promise<Profile[]>;
@@ -414,6 +416,7 @@ const components = {
 	evidence: EvidencePanel,
 	events: EventPanel,
 	journal: JournalPanel,
+	"model-usage": UsageSummaryPanel,
 	videos: VideosPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
@@ -512,6 +515,7 @@ function App() {
 				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
 				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("journal")) api.addPanel({ id: "journal", component: "journal", title: "运行日记 / 回放", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("journal")?.api.setActive(); }}>运行日记</button>
 				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("videos")) api.addPanel({ id: "videos", component: "videos", title: "本地录像", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("videos")?.api.setActive(); }}>录像</button>
+				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("model-usage")) api.addPanel({ id: "model-usage", component: "model-usage", title: "用量汇总", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("model-usage")?.api.setActive(); }}>用量汇总</button>
 				<RecordingIndicator />
 				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
 			</header>

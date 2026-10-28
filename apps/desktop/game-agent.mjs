@@ -5,6 +5,7 @@ import { readProfiles, readModelPricing } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
 import { ModelUsage } from "./model-usage.mjs";
+import { sampleModelContext } from "./model-context.mjs";
 
 const maximumOutputTokens = 4096;
 
@@ -83,5 +84,5 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		if (stopReason === "length") throw new Error("GAME_MODEL_OUTPUT_LIMIT");
 		if (stopReason !== "stop") throw new Error("GAME_MODEL_DID_NOT_FINISH");
 		return { proposedTechId, requestCount: requests, toolCalls: calls, tools: names, usage: usage.snapshot(), cost: "unknown", gameCommits: 0 };
-	} finally { signal.removeEventListener("abort", abort); session?.dispose(); event("result", { text: `模型请求 ${requests} 次；工具 ${calls} 次；费用未知。模型没有提交游戏动作。` }); }
+	} finally { signal.removeEventListener("abort", abort); try { if (session) event("context", sampleModelContext(session)); } finally { session?.dispose(); } event("result", { text: `模型请求 ${requests} 次；工具 ${calls} 次；账单费用未知。模型没有提交游戏动作。` }); }
 }

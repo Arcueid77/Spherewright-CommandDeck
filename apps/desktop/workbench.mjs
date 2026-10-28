@@ -7,6 +7,7 @@ import { prepareCommandHost, runManagedCommand } from "./command-host.mjs";
 import { createHash } from "node:crypto";
 import { captureWorkbenchDiagnostics } from "./diagnostic-snapshot.mjs";
 import { journalFacts } from "./journal-format.mjs";
+import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_OPERATION_FAILED";
 const record = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -162,6 +163,7 @@ export class Workbench {
 		if (!record(args)) throw new Error("INVALID_WORKBENCH_REQUEST");
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
 		if (action === "state") return this.state();
+		if (action === "usage-data") return usageSample(this.store.usageRows().map(row => ({ ...row, usage: decodeUsageJson(row.usage), context: decodeUsageJson(row.context) })));
 		if (action === "diagnostics") return captureWorkbenchDiagnostics(this.store, { active: Boolean(this.operation || this.store.activeTask()), executionBlocked: !this.gameWritesFrozen || Boolean(this.store.ui("execution-blocked")), configurationBlocked: this.configurationBlocked });
 		if (action === "add") return this.add(args);
 		if (action === "refresh") { await this.workspace.refresh(args.rootId); return this.state(); }
@@ -221,7 +223,8 @@ export class Workbench {
 		if (action === "check") return this.start({ rootId: args.rootId, kind: "check", prompt: args.checkId }, (task, signal) => this.invokeCheck(task, args.checkId, signal));
 		if (action === "task") {
 			const task = this.store.task(args.taskId);
-			return { ...task, usage: this.store.usage(task.id), invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), references: this.store.references(task.id), events: this.store.events(task.id, args.after ?? 0) };
+			const context = this.store.context(task.id);
+			return { ...task, usage: this.store.usage(task.id), ...(context ? { context } : {}), invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), references: this.store.references(task.id), events: this.store.events(task.id, args.after ?? 0) };
 		}
 		if (action === "cancel") {
 			if (this.operation?.id !== args.taskId) throw new Error("TASK_NOT_RUNNING");

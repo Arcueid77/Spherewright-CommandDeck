@@ -5,6 +5,7 @@ import { readProfiles, readModelPricing } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
 import { ModelUsage } from "./model-usage.mjs";
+import { sampleModelContext } from "./model-context.mjs";
 
 const errorCode = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_TOOL_FAILED";
 const schema = (properties, required = Object.keys(properties)) => ({ type: "object", properties, required, additionalProperties: false });
@@ -120,5 +121,5 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 		const last = session.messages.filter((message) => message.role === "assistant").at(-1);
 		if (!signal.aborted && last?.stopReason !== "stop") throw new Error("DEVELOPMENT_MODEL_DID_NOT_FINISH");
 		return { requestCount: requests, toolCalls: calls, tools: names, changedFiles: store.changes(task.id).filter((change) => change.state === "applied").map(({ path, afterHash }) => ({ path, sha256: afterHash })), usage: usage.snapshot(), cost: "unknown", gameCalls: 0 };
-	} finally { signal.removeEventListener("abort", abort); session?.dispose(); }
+	} finally { signal.removeEventListener("abort", abort); try { if (session) workbench.notify(task.id, "context", sampleModelContext(session)); } finally { session?.dispose(); } }
 }

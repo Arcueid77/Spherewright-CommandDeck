@@ -44,6 +44,7 @@ import { VideoArchive, videoArchiveLimits } from "./video-archive.mjs";
 import { VideoPlaybackSessions } from "./video-playback.mjs";
 import { videoContext, videoRelation } from "./video-context.mjs";
 import { VideoRecording } from "./video-recording.mjs";
+import { readModelUsageSummary } from "./usage-summary.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const portableSmoke = process.argv.includes("--portable-smoke");
@@ -355,7 +356,7 @@ async function api(action, args, source) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot" || action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action);
+	const recoveryRead = action === "model-usage" || action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot" || action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action);
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -369,6 +370,10 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, power: systemPower.snapshot(), events: [...state.events] };
+	if (action === "model-usage") return readModelUsageSummary({
+		development: () => { if (!workbenchReady || runtimeExit?.exited) throw new Error("USAGE_SOURCE_UNAVAILABLE"); return workbenchCall("usage-data", {}, 12000); },
+		game: () => { if (!game.ledger.storageAvailable) throw new Error("USAGE_SOURCE_UNAVAILABLE"); return game.ledger.usageSample(); },
+	});
 	if (action === "recording") {
 		if (!args || !["snapshot", "prepare", "authorize", "ready", "set-masks", "start", "append", "finish", "cancel", "closed"].includes(args.action)) throw new Error("INVALID_RECORDING_ACTION");
 		if (args.action === "snapshot") return recording.snapshot();

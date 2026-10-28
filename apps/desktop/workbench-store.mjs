@@ -209,6 +209,13 @@ export class WorkbenchStore {
 		return this.db.prepare("SELECT * FROM events WHERE task_id=? AND sequence>? ORDER BY sequence LIMIT 500").all(taskId, after).map((row) => ({ sequence: row.sequence, kind: row.kind, value: parse(row.value), createdAt: row.created_at }));
 	}
 	usage(taskId) { return parse(this.db.prepare("SELECT value FROM events WHERE task_id=? AND kind='usage' ORDER BY sequence DESC LIMIT 1").get(taskId)?.value); }
+	context(taskId) { return parse(this.db.prepare("SELECT value FROM events WHERE task_id=? AND kind='context' ORDER BY sequence DESC LIMIT 1").get(taskId)?.value); }
+	usageRows() {
+		return this.db.prepare(`SELECT t.provider,t.model,
+			(SELECT CASE WHEN length(value)<=65536 THEN value ELSE 'false' END FROM events WHERE task_id=t.id AND kind='usage' ORDER BY sequence DESC LIMIT 1) AS usage,
+			(SELECT CASE WHEN length(value)<=65536 THEN value ELSE 'false' END FROM events WHERE task_id=t.id AND kind='context' ORDER BY sequence DESC LIMIT 1) AS context
+			FROM tasks t WHERE t.kind='agent' ORDER BY t.rowid DESC LIMIT 257`).all();
+	}
 	ui(key) { return parse(this.db.prepare("SELECT value FROM ui_state WHERE key=?").get(key)?.value); }
 	saveUi(key, value) {
 		if (typeof key !== "string" || key.length > 160 || json(value).length > 262144) throw new Error("UI_STATE_TOO_LARGE");

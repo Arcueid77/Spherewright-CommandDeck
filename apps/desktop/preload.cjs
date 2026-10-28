@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld(
 		snapshot: () => ipcRenderer.invoke("deck:snapshot"),
 		resumeSystem: () => ipcRenderer.invoke("deck:resume-system"),
 		journal: (action, args = {}) => ipcRenderer.invoke("deck:journal", { action, args }),
+		modelUsage: () => ipcRenderer.invoke("deck:model-usage"),
 		video: (action, args = {}) => ipcRenderer.invoke("deck:video", { action, args }),
 		recording: (action, args = {}) => ipcRenderer.invoke("deck:recording", { action, args }),
 		profiles: () => ipcRenderer.invoke("deck:profiles"),

@@ -222,6 +222,7 @@ if (typeof process.send !== "function") {
 				"deck:resume-system": "resume-system",
 			}))
 				handle(channel, (args) => request(action, args));
+			handle("deck:model-usage", () => request("model-usage"));
 			handle("deck:video", async args => {
 				if (!args || !["snapshot", "context", "open", "bookmark", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
 				if (args.action === "snapshot") return request("video", { action: "snapshot" });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -176,5 +177,7 @@ export async function runWorkbenchSmoke(driver) {
 	assert.ok(journal.events.some(event => event.domain === "development" && event.facts.state === "succeeded"));
 	assert.ok(!JSON.stringify(journal).includes(syntheticKey)); assert.ok(!JSON.stringify(journal).includes(JSON.stringify(source).slice(1, -1)));
 	proof.developmentJournalPreservesStagesWithoutPrivateContent = true;
+	const accounted = await request("task", { taskId: accountedTask });
+	proof.usageSummary = await verifyUsageSummary(driver, { domain: "development", usage: accounted.usage, context: accounted.context });
 	await writeFile(join(driver.root, ".local/desktop-smoke-workbench.json"), JSON.stringify(proof, null, 2));
 }

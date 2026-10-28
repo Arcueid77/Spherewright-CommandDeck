@@ -23,6 +23,7 @@ const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScen
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
 assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
+if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAGE_SUMMARY_REBUILD_REQUIRED");
 assert.ok(manifest.files.some(file => file.path === "resources/app/test/fixtures/research-mcp-server.mjs"));
 const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
@@ -65,6 +66,7 @@ try {
 				assert.equal(proof.runId, caseId); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.expectedSha256, original.sha256);
 				for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "priceSnapshotSurvivesReconfiguration", "uiReloadRetainsUsage", "originalTaskRetained", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
 				assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? 2 : 0); assert.equal(proof.toolInvocations, 1); assert.equal(proof.normalizedTokens, 240); assert.equal(proof.reportedResponses, 2); assert.ok(Math.abs(proof.estimatedUsd - 0.00077) < 1e-12); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
+				assert.equal(proof.summary.readOnlySummaryVerified, true); assert.equal(proof.summary.normalizedTokens, 240); assert.equal(proof.summary.estimatedUsd, proof.estimatedUsd); assert.deepEqual(proof.summary.taskEndContext, original.expected.task.context);
 				await writeFile(join(caseProof, phase + "-application-proof.json"), JSON.stringify(proof), { flag: "wx" }); phases.push(proof);
 			}
 			const after = await usageRecoveryState(directory, caseId, { role: "development" }); assert.deepEqual(after, before, "DEVELOPMENT_USAGE_ORIGINAL_ROWS_OR_PI_CHANGED");
@@ -105,6 +107,7 @@ try {
 			assert.equal(modelUsageRecovery.runId, caseId); assert.equal(modelUsageRecovery.scenario, scenario); assert.equal(modelUsageRecovery.sourceRevision, manifest.sourceRevision); assert.equal(modelUsageRecovery.piCommit, manifest.piCommit); assert.equal(modelUsageRecovery.expectedSha256, marker.sha256);
 			for (const key of ["packaged", "syntheticOnly", "wholeApplicationRestartVerified", "originalTaskAndUsageRetained", "usageVisibleAfterRestartAndUiReload", "noMcpSelected", "noProbeAllocated", "newExecutionRejected"]) assert.equal(modelUsageRecovery[key], true);
 			assert.equal(modelUsageRecovery.unknownCommitRemainsBlocked, scenario === "lost-ack"); assert.equal(modelUsageRecovery.modelUsage.normalizedTokens, 360); assert.equal(modelUsageRecovery.modelUsage.reportedResponses, 3); assert.ok(Math.abs(modelUsageRecovery.modelUsage.estimatedUsd - 0.001155) < 1e-12);
+			if (manifest.modelUsageSummary === 1) { assert.equal(modelUsageRecovery.summary.readOnlySummaryVerified, true); assert.equal(modelUsageRecovery.summary.normalizedTokens, 360); assert.equal(modelUsageRecovery.summary.estimatedUsd, modelUsageRecovery.modelUsage.estimatedUsd); assert.deepEqual(modelUsageRecovery.summary.taskEndContext, marker.expected.tasks[0].details.context); }
 			assert.equal(modelUsageRecovery.gameCalls, 0); assert.equal(modelUsageRecovery.realModelRequests, 0);
 			const after = await usageRecoveryState(directory, caseId); assert.deepEqual(after, before, "MODEL_USAGE_RESTART_CHANGED_ORIGINAL_ROWS_OR_PI");
 			await writeFile(join(caseProof, "after-reopen.private.json"), JSON.stringify(after), { flag: "wx" }); await writeFile(join(caseProof, "model-usage-recovery.json"), JSON.stringify(modelUsageRecovery), { flag: "wx" });

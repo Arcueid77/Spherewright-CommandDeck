@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { matchResearchBudget, nativeResearchStateHash, researchId } from "./research-preview.mjs";
 import { modelUsageSnapshot } from "./model-usage.mjs";
+import { modelContextSnapshot } from "./model-context.mjs";
+import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -161,20 +163,27 @@ export class GameIntentLedger {
 	intent(id) { const value = this.#intent(id); return { intentId: value.id, taskId: value.task_id, state: value.state, idempotencyKey: value.idempotency_key, actionId: value.action_id, acceptance: value.acceptance ? JSON.parse(value.acceptance) : null, terminal: value.terminal ? JSON.parse(value.terminal) : null }; }
 	unresolved() { return this.db.prepare(`SELECT id FROM game_intents WHERE state IN (${pendingStates})`).all().map(({ id }) => this.intent(id)); }
 	tasks() { return this.db.prepare("SELECT id FROM game_tasks ORDER BY rowid DESC LIMIT 32").all().map(({ id }) => ({ ...this.task(id), details: JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"), intent: (() => { const value = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id); return value ? this.intent(value.id) : null; })() })); }
+	usageSample() {
+		const rows = this.db.prepare("SELECT CASE WHEN d.body IS NULL THEN NULL WHEN length(d.body)<=65536 THEN d.body ELSE 'false' END AS body FROM game_tasks t LEFT JOIN game_task_details d ON d.task_id=t.id ORDER BY t.rowid DESC LIMIT 257").all();
+		return usageSample(rows.map(({ body }) => {
+			const value = decodeUsageJson(body);
+			return value === null ? {} : value && typeof value === "object" && !Array.isArray(value) ? { provider: value.provider, model: value.model, usage: value.usage, context: value.context } : { usage: false, context: false };
+		}));
+	}
 	details(id, value) {
 		this.#task(id);
 		const body = { mode: value.mode === "observe" ? "observe" : "assist", techName: String(value.techName ?? "").slice(0, 160), prompt: String(value.prompt ?? "").slice(0, 2000), provider: String(value.provider ?? "").slice(0, 256), model: String(value.model ?? "").slice(0, 256), cohortHash: String(value.cohortHash ?? "").slice(0, 64), schemaHash: String(value.schemaHash ?? "").slice(0, 64), playbookHash: String(value.playbookHash ?? "").slice(0, 64), createdAt: this.now() };
 		this.#transaction(() => this.db.prepare("INSERT INTO game_task_details(task_id,body) VALUES(?,?)").run(id, JSON.stringify(body)));
 	}
 	note(id, kind, value = {}) {
-		if (!["stage", "assistant", "tool", "error", "result", "usage"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
-		const body = kind === "usage" ? { at: this.now(), usage: modelUsageSnapshot(value) } : { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
+		if (!["stage", "assistant", "tool", "error", "result", "usage", "context"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
+		const body = kind === "usage" ? { at: this.now(), usage: modelUsageSnapshot(value) } : kind === "context" ? { at: this.now(), context: modelContextSnapshot(value) } : { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
 		this.#transaction(() => {
 			this.#task(id);
 			this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,?,?)").run(id, kind, JSON.stringify(body));
-			if (kind === "usage") {
+			if (kind === "usage" || kind === "context") {
 				const row = this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id);
-				if (row) this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify({ ...JSON.parse(row.body), usage: body.usage }), id);
+				if (row) this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify({ ...JSON.parse(row.body), [kind]: body[kind] }), id);
 			}
 			this.db.prepare("DELETE FROM game_task_events WHERE task_id=? AND sequence NOT IN (SELECT sequence FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 200)").run(id, id);
 		});

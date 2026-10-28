@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, realpath } from "node:fs/promises";
@@ -100,6 +101,7 @@ export async function runGameSmoke(driver) {
 		assert.deepEqual((await state()).tasks[0].details.usage, usage);
 		const profiles = await driver.api("profiles-manage", { action: "list" }); await driver.api("profiles-manage", { action: "remove", args: { id: profileId, expectedRevision: profiles.revision } });
 		await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);
+		await verifyUsageSummary(driver, { domain: "game", usage, context: current.tasks[0].details.context });
 		if (physical) await writeFile(join(driver.root, ".local/m3-physical-stage.private.json"), JSON.stringify({ runId: driver.runId, stage: "completed", syntheticOnly: true }));
 		await writeFile(join(driver.root, ".local/desktop-smoke-game.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, gameCalls: 0, gameWrites: 0, realProviderRequests: 0, syntheticModelRequests: requests, syntheticGameCommits: 1, pinnedPiTools: ["observe_research", "propose_research"], hostCredentialBinding: true, approval: physical ? "actual-native-dialog-return" : "mocked-native-dialog-return", physicalInput: "not_tested", nativeDialogPhysicalInput: physical ? "external-operator-not-identified" : "not_tested", rendererCannotApprove: true, cancelSendsNothing: true, reloadKeepsSameMcp: true, reloadDoesNotReplay: true, taskReceiptRetained: true, developerGateReleased: true, ownServerExitConfirmed: true, visualCapture: capture.captured ? "captured" : "unavailable" }, null, 2));
 	} finally { server.closeAllConnections(); server.close(); }

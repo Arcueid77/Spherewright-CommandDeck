@@ -138,7 +138,10 @@ test("late usage after cancellation is retained while a late proposal still cann
 	const id = f.host.currentTaskId; f.host.stop();
 	const usage = new ModelUsage({ publish: value => f.host.plannerEvent(id, "usage", value) });
 	usage.finish(usage.start(), { usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120 } });
+	const context = { version: 1, method: "pi-estimate", stage: "task_end", contextWindow: 8192, estimatedTokens: 1024, percent: 12.5 };
+	f.host.plannerEvent(id, "context", context);
 	release(); const done = await f.host.settled();
+	assert.deepEqual(done.tasks[0].details.context, context);
 	assert.equal(done.phase, "cancelled"); assert.deepEqual(done.tasks[0].details.usage, usage.snapshot()); assert.equal(done.tasks[0].intent, null); assert.deepEqual(done.unresolved, []);
 });
 

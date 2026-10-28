@@ -39,6 +39,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 	const videoArchiveCase = await readVideoArchiveCase(context);
 	const usageRecovery = await readModelUsageRecovery(context);
 	if (driver.developmentUsageCase) {
+		assert.equal(manifest.modelUsageSummary, 1);
 		assert.equal(manifest.portableDevelopmentUsage, 1); assert.ok(!usageRecovery && !journalInterruption && !videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "DEVELOPMENT_USAGE_MODE_CONFLICT");
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		await runDevelopmentUsageSmoke(driver, manifest); return;

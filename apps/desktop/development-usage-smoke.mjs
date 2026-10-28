@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { developmentUsagePrompt } from "./portable-mode.mjs";
 import { profileHash } from "./portable-profile.mjs";
 import { modelUsageSnapshot } from "./model-usage.mjs";
+import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 
 export const developmentUsageText = "DEVELOPMENT_USAGE_FIXTURE\n";
 export const developmentUsageOriginalFile = "development-usage-original.private.json";
@@ -84,8 +85,11 @@ export async function runDevelopmentUsageSmoke(driver, manifest) {
 	original = await readDevelopmentUsageOriginal(context);
 	const described = await api("profiles-manage", { action: "describe", args: { id: original.expected.task.provider } }); assert.deepEqual(described.pricing, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }); assert.equal(described.key, undefined);
 	const denied = await evaluate("(async()=>{let count=0;for(const call of [()=>window.deck.workbench('agent'," + JSON.stringify({ rootId: root.id, providerId: original.expected.task.provider, modelId: "fixture", prompt: developmentUsagePrompt }) + "),()=>window.deck.workbench('check'," + JSON.stringify({ rootId: root.id, checkId: "npm:test" }) + "),()=>window.deck.game('start',{}),()=>window.deck.manageProfiles('save',{}),()=>window.deck.probe({mode:'offline'})])try{await call()}catch{count++}return count})()"); assert.equal(denied, 5);
+	const summary = await verifyUsageSummary(driver, { domain: "development", usage: original.expected.task.usage, context: original.expected.task.context });
 	await testCommand("reload"); await visible(); assert.deepEqual(await expectedState(original.expected.task.id), original.expected); assert.equal(driver.getRuntimePid(), runtimePid); assert.equal(driver.getProbeSequence(), 0);
+	assert.deepEqual(await verifyUsageSummary(driver, { domain: "development", usage: original.expected.task.usage, context: original.expected.task.context }), summary);
 	const game = await api("game", { action: "snapshot" }), bridge = await api("bridge", { action: "snapshot" }); assert.deepEqual(game.tasks, []); assert.deepEqual(game.unresolved, []); assert.equal(bridge.selected, null); assert.equal(bridge.observation, null);
 	const proof = { version: 1, runId: context.runId, phase, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: original.sha256, syntheticOnly: true, packaged: true, syntheticModelRequests: requests, toolInvocations: 1, normalizedTokens: 240, reportedResponses: 2, estimatedUsd: original.expected.task.usage.estimate.usd, readOnlyWorkspace: true, priceSnapshotSurvivesReconfiguration: true, uiReloadRetainsUsage: true, originalTaskRetained: true, wholeApplicationRestartVerified: phase === "reopen", newExecutionRejected: true, noMcpSelected: true, noProbeAllocated: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false };
+	proof.summary = summary;
 	await writeFile(join(context.root, "development-usage-" + phase + "-proof.json"), JSON.stringify(proof), { flag: "wx" }); return proof;
 }
