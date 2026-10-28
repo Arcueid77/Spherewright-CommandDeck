@@ -244,7 +244,7 @@ Open **用量汇总** in the header for a read-only sample of the latest 256 dev
 
 Development and game task panels also retain Pi's task-end context estimate and the configured context window. This is an estimate for that task, not guaranteed headroom for the next request. Contexts from different tasks are not added. Unknown estimates remain unknown, and no prompt or message body is added to the context record. This slice does not enable compaction or automatic retries.
 
-Source tests cover bounded reads, latest cumulative snapshots, original pricing, unknown/invalid distinctions, read-only storage and cancellation. Existing development/game desktop checks exercise the summary through the actual renderer. The development and game usage restart fixtures additionally check the new panel and stored context in bundles declaring `modelUsageSummary: 1`; their exact packaged results remain recorded in the roadmap.
+Source tests cover bounded reads, latest cumulative snapshots, original pricing, unknown/invalid distinctions, read-only storage and cancellation. Existing development/game desktop checks exercise the summary through the actual renderer. Candidate `3a33f1d37787175379c95ea20b0a44e37556cf55` passed the development double-start and four game fault/reopen starts, with the summary and original context retained; a further two starts preserved ordinary closed history. These fixtures use synthetic providers/services, bind `modelUsageSummary: 1`, preserve original business rows and Pi files, and make zero real model/game calls. The roadmap records the exact evidence and pending CI separately.
 
 ## M1 development workspace
 
