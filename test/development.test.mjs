@@ -9,6 +9,8 @@ import { devNull, tmpdir } from "node:os";
 import { Workbench } from "../apps/desktop/workbench.mjs";
 import { runDevelopmentAgent } from "../apps/desktop/development-agent.mjs";
 import { developmentContextInfo } from "../apps/desktop/development-context.mjs";
+import { createProviderContextFixture, assertProviderContextResult } from "../apps/desktop/development-provider-context-fixture.mjs";
+import { providerContextSteps } from "../apps/desktop/development-provider-context-case.mjs";
 
 const helperSource = fileURLToPath(new URL("../artifacts/commands", import.meta.url));
 const windows = { skip: process.platform !== "win32" };
@@ -289,4 +291,22 @@ test("Pi continuation and compaction fork original history, renew grants and sto
 	await f.workbench.request("cancel", { taskId: cancelled.id }); releaseSummary?.(); const stopped = await finish(cancelled); assert.equal(stopped.state, "cancelled"); assert.deepEqual(stopped.invocations, []); assert.equal(stopped.usage.requests, 1);
 	assert.deepEqual(await readFile(seedFile), seedBytes); assert.deepEqual(await readFile(continuedFile), continuedBytes); assert.deepEqual(await f.workbench.request("task", { taskId: seed.id }), seed); assert.deepEqual(await f.workbench.request("task", { taskId: continued.id }), continued);
 	assert.deepEqual(errors, []); assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 1;\n"); await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
+});
+
+test("protected OpenAI and Anthropic context crosses both directions with current credentials, tools, prices and compaction", { ...windows, timeout: 60000 }, async t => {
+	const f = await fixture(t), providerFixture = await createProviderContextFixture("code.mjs"), records = [], infos = [], bytes = [];
+	t.after(() => providerFixture.close());
+	await f.workbench.request("grants", { rootId: f.rootId, canWrite: false, canExecute: false });
+	f.workbench.resolveProfile = async task => { const profile = providerFixture.profiles.find(profile => profile.id === task.provider); assert.ok(profile); return profile; };
+	for (const [index, step] of providerContextSteps.entries()) {
+		providerFixture.begin(index); const profile = providerFixture.profiles[step.provider];
+		const source = step.source === null ? {} : { contextMode: step.mode, sourceTaskId: records[step.source].id, sourceSha256: infos[step.source].sourceSha256 };
+		const task = await f.workbench.request("agent", { rootId: f.rootId, providerId: profile.id, modelId: profile.modelId, prompt: step.prompt, ...source });
+		await f.workbench.operation.done; const record = await f.workbench.request("task", { taskId: task.id }); assertProviderContextResult(record, index, providerFixture);
+		assert.equal(record.parentId, step.source === null ? null : records[step.source].id); records.push(record); infos.push(await developmentContextInfo(f.workbench, f.rootId, task.id));
+		bytes.push(await readFile(f.workbench.store.task(task.id, { privateFields: true }).sessionFile));
+		for (let previous = 0; previous <= index; previous++) { assert.deepEqual(await f.workbench.request("task", { taskId: records[previous].id }), records[previous]); assert.deepEqual(await readFile(f.workbench.store.task(records[previous].id, { privateFields: true }).sessionFile), bytes[previous]); }
+	}
+	assert.equal(providerFixture.calls.filter(call => call.summary).length, 2); assert.equal(providerFixture.calls.length, 12); assert.deepEqual(providerFixture.errors, []);
+	assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 1;\n"); await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
 });

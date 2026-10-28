@@ -254,6 +254,10 @@ Contributors can run `npm run test:packaged-development-context -- --source arti
 
 `npm run test:packaged-development-context-interruption -- --source artifacts/portable-desktop` requires `portableDevelopmentContextInterruption: 1`. It holds the third task's synthetic compaction response, independently observes the exact packaged app, and terminates only its owned spawn handle. Two subsequent launches check normal interrupted-task recovery and its persistence. The original completed tasks, all Pi files, encrypted configuration and workspace must stay unchanged; the pending model request remains unreported with unknown cost. Only the unfinished task's terminal state and one recovery event may change. The controller keeps failure evidence and does not rewrite task storage or replay the pending request. This synthetic check does not establish real endpoint or physical desktop acceptance.
 
+The model form shows the base-address convention for the selected API: Chat Completions appends `/chat/completions` (the base usually includes `/v1`), while Anthropic Messages appends `/v1/messages` (the base usually does not include `/v1`). Custom proxy paths still follow the provider's instructions; changing the API does not rewrite an existing address.
+
+`npm run test:packaged-development-context-providers -- --source artifacts/portable-desktop` requires `portableDevelopmentProviderContext: 1`. Two separately bound loopback listeners exercise the protected Chat Completions and Anthropic Messages profiles in both directions. Five fixed read-only tasks cover continuation, compaction and branching from an earlier task, with four renderer model switches. It checks historical tool-call/result pairing, current tools and model limits, per-task price/cache-usage snapshots, and original rows/Pi/vault/workspace bytes after a full application restart. It grants no real-provider or game authority; hosted endpoints and real capacity still need separate acceptance.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

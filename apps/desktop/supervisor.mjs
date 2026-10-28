@@ -55,7 +55,7 @@ const storageCase = portableSmoke ? portableStorageCase(process.argv) : null;
 const commandCase = portableSmoke ? portableCommandCase(process.argv) : null;
 const developmentUsageCase = portableSmoke ? portableDevelopmentUsageCase(process.argv) : null;
 let developmentUsageRootId, developmentUsageProfileId, developmentUsageStarted = false;
-let developmentContextTasks = [], developmentContextPending = false;
+let developmentContextTasks = [], developmentContextProfiles = [], developmentContextPending = false;
 let commandFixtureRootId;
 const smoke = process.argv.includes("--smoke") || portableSmoke;
 const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
@@ -84,7 +84,7 @@ const native = portableSmoke || diagnosticSmoke ? new OwnedFixtureHost() : new W
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle") || Boolean(portableMcpLoss) || Boolean(storageCase));
-const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope() : null;
+const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope({ multipleApis: developmentUsageCase?.multipleProviders === true }) : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
@@ -253,10 +253,15 @@ async function registerDevelopmentUsageWorkspace() {
 		if (current.roots.length || current.tasks.length) throw new Error("DEVELOPMENT_USAGE_REQUIRES_EMPTY_WORKSPACE");
 		registered = await workbenchCall("add", { path, label: "Synthetic development usage", canWrite: false, canExecute: false });
 	} else {
-		if (current.roots.length !== 1 || current.tasks.length !== (developmentUsageCase.context ? 3 : 1) || current.roots[0].path !== path || current.roots[0].canWrite || current.roots[0].canExecute) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
+		if (current.roots.length !== 1 || current.tasks.length !== (developmentUsageCase.multipleProviders ? 5 : developmentUsageCase.context ? 3 : 1) || current.roots[0].path !== path || current.roots[0].canWrite || current.roots[0].canExecute) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
 		registered = current;
 		developmentUsageProfileId = current.tasks[0].provider;
 		if (developmentUsageCase.context) developmentContextTasks = current.tasks.map(task => task.id);
+		if (developmentUsageCase.multipleProviders) {
+			const seed = current.tasks.find(task => task.parentId === null), continued = current.tasks.find(task => task.parentId === seed?.id && task.scope.context?.mode === "continue");
+			if (!seed || !continued || seed.provider === continued.provider) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
+			developmentContextProfiles = [seed.provider, continued.provider];
+		}
 	}
 	developmentUsageRootId = registered.roots[0].id; return registered;
 }
@@ -264,6 +269,7 @@ function registerFixtureProvider(...args) {
 	if (developmentUsageCase && developmentUsageCase.phase !== "record") throw new Error("DEVELOPMENT_USAGE_REOPEN_IS_READ_ONLY");
 	fixtureProvider.register(...args);
 	if (developmentUsageCase) developmentUsageProfileId = args[1];
+	if (developmentUsageCase?.multipleProviders) developmentContextProfiles.push(args[1]);
 }
 function runGamePlanner(command) {
 	if (!workbenchReady || runtimeExit?.exited) return Promise.reject(new Error("GAME_RUNTIME_UNAVAILABLE"));
@@ -342,7 +348,7 @@ async function api(action, args, source) {
 	systemPower.assertAction(action, args);
 	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
 	if (portableSmoke && !diagnosticSmoke) {
-		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending, interruption: developmentUsageCase.interruption === true });
+		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending, interruption: developmentUsageCase.interruption === true, multipleProviders: developmentUsageCase.multipleProviders === true, contextProfiles: developmentContextProfiles });
 		else if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
 		else if (storageCase) assertPortableStorageAction(action, args, { internal: source === fixtureAuthority });
 		else if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });

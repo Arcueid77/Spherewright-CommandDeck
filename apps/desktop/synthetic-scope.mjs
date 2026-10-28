@@ -16,26 +16,28 @@ export function syntheticMcpEnvironment(source = process.env) {
 
 // Test-only binding to this process's listening HTTP server. Never accept a
 // provider from a renderer, pre-existing vault, external config or MCP data.
-export function syntheticProviderScope() {
-	let binding;
-	function requireLive() {
+export function syntheticProviderScope({ multipleApis = false } = {}) {
+	const bindings = new Map(), apis = multipleApis === true ? ["openai-completions", "anthropic-messages"] : ["openai-completions"];
+	function requireLive(id) {
+		const binding = bindings.get(id);
 		if (!binding || !binding.server.listening || binding.server.address()?.port !== binding.port) throw new Error("SYNTHETIC_PROVIDER_NOT_BOUND");
 		return binding;
 	}
 	function fields(value, key) {
-		const expected = requireLive();
-		if (value?.id !== expected.id || value.api !== "openai-completions" || value.modelId !== "fixture" || value.baseUrl !== expected.url || key !== expected.key) throw new Error("SYNTHETIC_PROVIDER_REQUIRED");
+		if (!bindings.has(value?.id)) throw new Error("SYNTHETIC_PROVIDER_REQUIRED");
+		const expected = requireLive(value.id);
+		if (value.api !== expected.api || value.modelId !== "fixture" || value.baseUrl !== expected.url || key !== expected.key) throw new Error("SYNTHETIC_PROVIDER_REQUIRED");
 	}
 	return Object.freeze({
-		register(server, id, key) {
-			if (binding || !(server instanceof Server) || !server.listening || !/^deckvault-[0-9a-f-]{36}$/.test(id ?? "") || !/^synthetic-(?:game|development)-smoke-[0-9a-f-]{36}$/.test(key ?? "")) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
+		register(server, id, key, api = "openai-completions") {
+			if (!apis.includes(api) || bindings.size >= apis.length || bindings.has(id) || [...bindings.values()].some(value => value.api === api || value.server === server || value.key === key) || !(server instanceof Server) || !server.listening || !/^deckvault-[0-9a-f-]{36}$/.test(id ?? "") || !/^synthetic-(?:game|development)-smoke-[0-9a-f-]{36}$/.test(key ?? "")) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
 			const address = server.address();
 			if (!address || address.address !== "127.0.0.1" || !Number.isSafeInteger(address.port) || address.port <= 0) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
-			binding = { server, id, key, port: address.port, url: `http://127.0.0.1:${address.port}/v1` };
+			bindings.set(id, { server, id, key, api, port: address.port, url: `http://127.0.0.1:${address.port}` + (api === "openai-completions" ? "/v1" : "") });
 		},
 		assertDraft(value) { fields(value, value?.apiKey); },
 		assertResolved(value) { fields(value, value?.key); },
-		assertReference(providerId, modelId) { const expected = requireLive(); if (providerId !== expected.id || modelId !== "fixture") throw new Error("SYNTHETIC_PROVIDER_REQUIRED"); },
+		assertReference(providerId, modelId) { if (!bindings.has(providerId) && bindings.size) throw new Error("SYNTHETIC_PROVIDER_REQUIRED"); requireLive(providerId); if (modelId !== "fixture") throw new Error("SYNTHETIC_PROVIDER_REQUIRED"); },
 	});
 }
 

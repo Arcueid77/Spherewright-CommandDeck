@@ -85,6 +85,7 @@ jobs:
       - run: npm run test:packaged-development-usage -- --source artifacts/portable-desktop
       - run: npm run test:packaged-development-context -- --source artifacts/portable-desktop
       - run: npm run test:packaged-development-context-interruption -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-development-context-providers -- --source artifacts/portable-desktop
       - run: npm run test:packaged-diagnostics -- --source artifacts/portable-desktop
       - run: npm run test:packaged-storage -- --source artifacts/portable-desktop
       - run: npm run test:packaged-command -- --source artifacts/portable-desktop
@@ -121,6 +122,7 @@ jobs:
             .local/packaged-development-usage-smoke.json
             .local/packaged-development-context-smoke.json
             .local/packaged-development-context-interruption-smoke.json
+            .local/packaged-development-context-providers-smoke.json
             .local/packaged-journal-interruption-smoke.json
             .local/packaged-video-archive-smoke.json
             .local/desktop-smoke-game-mcp-accepted.json
