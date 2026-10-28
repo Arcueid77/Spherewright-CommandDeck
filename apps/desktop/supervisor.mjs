@@ -29,6 +29,7 @@ import { OwnedFixtureHost } from "./owned-fixture.mjs";
 import { assertPortableAction, assertPortableRuntimeAction, assertPortableStorageAction, assertPortableCommandAction, assertPortableDevelopmentUsageAction, assertPortableGatewayAction, portableGatewayCase, portableDevelopmentUsageCase, portableRuntimeScenario, portableMcpScenario, portableDiagnosticMode, portableStorageCase, portableCommandCase } from "./portable-mode.mjs";
 import { syntheticProviderScope } from "./synthetic-scope.mjs";
 import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
+import { runtimeStorageScenarios } from "./portable-mode.mjs";
 import { startupFailureCode } from "./startup-failure.mjs";
 import { runRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
 import { mcpLossCase, portableMcpScenarios } from "./mcp-loss-case.mjs";
@@ -238,7 +239,8 @@ function workbenchCall(action, args = {}, timeoutMs = 25000) {
 	});
 }
 async function stopRuntimeForSmoke() {
-	if (!smoke || !runtimeScenario && !diagnosticSmoke && !commandCase || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
+	const runtimeStorageFixture = portableSmoke && storageCase && !storageCase.resume && runtimeStorageScenarios.includes(storageCase.scenario);
+	if (!smoke || !runtimeScenario && !diagnosticSmoke && !commandCase && !runtimeStorageFixture || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
 	const pid = runtime.pid; await runtimeExit.stop(); return { pid, exitObserved: runtimeExit.exited };
 }
 async function registerCommandWorkspace() {

@@ -629,6 +629,8 @@ M5新增`lost-ack-storage`固定组合场景（fixture声明`portableMcpFaults:8
 
 本片包验后再次只读核原用户M4三任务/两命令/固定引用与M3原key/action/接受/终态、全部Pi会话，均未变且无新增Pi会话；pending0/gate0、accepted5/remaining0。核验UTC `2026-10-28T10:20:41.954Z`，M3证明SHA256 `1421CCB1F12DF3A30357FCE2BD44354EA236C5B95BA534D7EE60E15B31A4AFB6`；原stash与Pi gitlink保留，无新DSP保存tick。
 
+M5新增两项固定Runtime/存储组合：`receipt-runtime`在实际commit接受回执返回、尚未交给账本时停止原自有utility；`terminal-runtime`在同一原action的终态及fresh读回返回、尚未交给账本终态事务时停止utility。两者都必须确认原Runtime真实exit、原意图仍为`recorded`或`accepted`且存储尚健康，才将该合成连接设为`query_only`；拒写后恢复可写、停止及UI重载仍保留存储失败、Runtime不可用与开发冻结，不重启Runtime或重发commit。健康整应用重开只可保留无action的原recorded阻断，或只读核销原accepted action。注入仅对显式隔离合成模式及这两个固定时点开放，不扩展生产IPC；终态观察钩子仅在所属合成host匹配时生效并于finally还原。包声明新增`portableRuntimeStorageFaults:1`，旧三类能力编号保持；包外入口复用完整五张游戏SQL表/Pi/保险库/world取证，保留原三例并要求五场景/10次实际启动。新增3项协调器/准入测试、36项相关回归、完整Node22测试491/491（0skip）、类型检查和普通科研源码桌面回归通过；Node测试的Runtime退出由协调器状态回调模拟，不冒作utility实测。旧指定便携包已在新入口能力门拒绝，未创建新fixture/profile。实际新包、真实utility退出及整应用恢复、准确CI仍待，0真实游戏/模型调用。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

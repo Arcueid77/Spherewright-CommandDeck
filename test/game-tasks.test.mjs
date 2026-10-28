@@ -8,6 +8,7 @@ import { join, dirname, basename } from "node:path";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { ModelUsage } from "../apps/desktop/model-usage.mjs";
+import { armRuntimeStorageFault } from "../apps/desktop/storage-fault-smoke.mjs";
 
 test("power drain invalidates the old catalog and approval without replaying its model", async t => {
 	let models = 0; const f = await fixture(t, { planner: async () => { models++; return { proposedTechId: 100 }; } });
@@ -35,12 +36,12 @@ test("an accepted receipt arriving during power drain is retained and wake never
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
 });
 
-async function fixture(t, { mode = "normal", planner = async () => ({ proposedTechId: 100 }), now = () => Date.now() } = {}) {
+async function fixture(t, { mode = "normal", planner = async () => ({ proposedTechId: 100 }), now = () => Date.now(), syntheticOnly = false } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-host-")), authority = {}, approval = {}, instances = [];
 	const client = new ReadOnlyMcpClient(spawn(process.execPath, [fileURLToPath(new URL("./fixtures/research-mcp-server.mjs", import.meta.url)), mode], { stdio: "pipe", windowsHide: true }), { researchAuthority: authority, timeoutMs: 1000 });
 	await client.discover(); let developmentFrozen = false, lease = null;
 	const bridge = { acquireResearch(identity) { assert.equal(identity, authority); assert.equal(lease, null); return lease = { client, selection: { cohortHash: "fixture-cohort" } }; }, releaseResearch(value) { assert.equal(value, lease); lease = null; } };
-	const open = () => { const host = new GameTasks({ directory, researchAuthority: authority, approvalAuthority: approval, bridge, planner, now, freezeDevelopment: async () => { developmentFrozen = true; }, releaseDevelopment: async () => { developmentFrozen = false; }, pollMilliseconds: mode === "pending" ? 0 : 1000 }); instances.push(host); return host; };
+	const open = () => { const host = new GameTasks({ directory, researchAuthority: authority, approvalAuthority: approval, bridge, planner, now, syntheticOnly, freezeDevelopment: async () => { developmentFrozen = true; }, releaseDevelopment: async () => { developmentFrozen = false; }, pollMilliseconds: mode === "pending" ? 0 : 1000 }); instances.push(host); return host; };
 	const host = open(), start = (target = host, extra = {}) => target.start({ mode: "assist", techId: 100, providerId: "synthetic-provider", modelId: "synthetic-model", prompt: "Normally enqueue only the selected technology", ...extra });
 	t.after(async () => { for (const instance of instances) { if (!instance.ledger.closed) { await instance.drain(); instance.close(); } } await client.close(); const absolute = await realpath(directory); assert.equal(dirname(absolute).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(absolute).startsWith("commanddeck-game-host-")); await rm(absolute, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 }); });
 	return { host, open, start, client, approval, directory, frozen: () => developmentFrozen, hasLease: () => Boolean(lease) };
@@ -210,6 +211,36 @@ test("terminal-storage failure preserves the accepted action and allows only its
 	reopened.reconcile(original.intentId); const completed = await reopened.settled(); assert.equal(completed.phase, "completed"); assert.equal(completed.storageAvailable, true); assert.equal(completed.unresolved.length, 0); assert.equal(completed.developmentFrozen, false);
 	assert.equal(completed.tasks[0].id, preview.currentTaskId); assert.equal(completed.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.equal(completed.tasks[0].intent.actionId, original.actionId); assert.deepEqual(completed.tasks[0].intent.acceptance, original.acceptance); assert.equal(modelRuns, 1);
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+for (const boundary of ["receipt", "terminal"]) test("runtime loss before " + boundary + " persistence cannot release a refused ledger or replay its accepted action", async t => {
+	let models = 0, exits = 0;
+	const f = await fixture(t, { syntheticOnly: true, planner: async () => { models++; return { proposedTechId: 100 }; } });
+	f.start(); const preview = await f.host.settled(), challenge = f.host.confirmation(preview.currentTaskId, 1);
+	const fault = armRuntimeStorageFault(f.host, { boundary, stopRuntime: async () => { exits++; f.host.runtimeUnavailable(); return { pid: 1, exitObserved: true }; } });
+	t.after(() => fault.restore());
+	try { f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled(); } finally { fault.restore(); }
+	const blocked = f.host.snapshot(), original = fault.original;
+	assert.equal(exits, 1); assert.equal(models, 1); assert.equal(blocked.runtimeAvailable, false); assert.equal(blocked.storageAvailable, false);
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(blocked.developmentFrozen, true); assert.equal(f.frozen(), true);
+	assert.deepEqual(blocked.unresolved, [original]); assert.deepEqual(blocked.tasks[0].intent, original); assert.equal(original.state, boundary === "receipt" ? "recorded" : "accepted"); assert.equal(original.terminal, null);
+	const calls = f.client.stats.toolCalls;
+	for (const operation of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare(), () => f.host.confirmation(preview.currentTaskId, 1)]) assert.throws(operation, /GAME_RUNTIME_UNAVAILABLE/);
+	assert.throws(() => f.host.reconcile(original.intentId), /GAME_LEDGER_STORAGE_UNAVAILABLE/); f.host.stop();
+	assert.deepEqual(f.host.snapshot().tasks, blocked.tasks); assert.deepEqual(f.host.snapshot().events, blocked.events); assert.equal(f.client.stats.toolCalls, calls);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const initial = reopened.snapshot();
+	assert.equal(initial.storageAvailable, true); assert.equal(initial.runtimeAvailable, true); assert.equal(initial.phase, "blocked"); assert.equal(initial.developmentFrozen, true); assert.deepEqual(initial.unresolved, [original]); assert.deepEqual(initial.tasks, blocked.tasks); assert.deepEqual(initial.events, blocked.events);
+	assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/);
+	if (boundary === "receipt") { assert.equal(original.actionId, null); assert.equal(original.acceptance, null); assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.equal(f.client.stats.toolCalls, calls); }
+	else {
+		assert.ok(original.actionId); assert.equal(original.acceptance.actionId, original.actionId); reopened.reconcile(original.intentId); const completed = await reopened.settled();
+		assert.equal(completed.phase, "completed"); assert.equal(completed.unresolved.length, 0); assert.equal(completed.developmentFrozen, false); assert.equal(completed.tasks[0].intent.actionId, original.actionId); assert.equal(completed.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.deepEqual(completed.tasks[0].intent.acceptance, original.acceptance);
+	}
+	assert.equal(models, 1); assert.equal(exits, 1); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("runtime and storage fault injection cannot attach to a non-synthetic game host", () => {
+	assert.throws(() => armRuntimeStorageFault({ syntheticOnly: false }, { boundary: "receipt", stopRuntime: () => assert.fail("Unowned runtime must not be stopped") }), { code: "ERR_ASSERTION" });
 });
 
 test("storage failure in an asynchronous planner event aborts the turn without escaping the host callback or preparing", async t => {
