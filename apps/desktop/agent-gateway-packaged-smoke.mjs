@@ -5,7 +5,7 @@ import { gatewaySmokeUi, runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
 import { gatewayConnection } from "./agent-gateway-wire.mjs";
 
-export const packagedGatewayVersion = 2;
+export const packagedGatewayVersion = 3;
 export function assertGatewayFixtureConfig(config, command, script) {
 	assert.deepEqual(Object.keys(config).sort(), ["args", "command", "env"]); assert.equal(config.command, command); assert.deepEqual(config.args, [script]);
 	assert.deepEqual(Object.keys(config.env).sort(), ["COMMANDDECK_GATEWAY_KEY", "COMMANDDECK_GATEWAY_PIPE", "ELECTRON_RUN_AS_NODE"]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1");

@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { officialGatewayClientVersion, gatewaySdkStages, gatewaySdkFile, readGatewaySdkFile } from "../apps/desktop/agent-gateway-sdk-case.mjs";
+import { officialGatewayClientVersion, gatewaySdkStages, publishGatewaySdkFile, readGatewaySdkFile } from "../apps/desktop/agent-gateway-sdk-case.mjs";
 import { assertGatewayFixtureConfig } from "../apps/desktop/agent-gateway-packaged-smoke.mjs";
 
 export async function runGatewaySdkStages(context, command, script, hasExited) {
@@ -16,9 +16,9 @@ export async function runGatewaySdkStages(context, command, script, hasExited) {
 			while (!(request = await readGatewaySdkFile(context, stage))) { assert.equal(hasExited(), false, "GATEWAY_APP_EXITED_BEFORE_SDK"); assert.ok(performance.now() < deadline, "GATEWAY_SDK_READY_TIMEOUT"); await new Promise(resolve => setTimeout(resolve, 50)); }
 			const config = assertGatewayFixtureConfig(request.config, command, script);
 			for (const mode of ["legacy", "auto"]) results.push(await runOfficialGatewayClient(config, context.root, { stage, mode }));
-			await writeFile(gatewaySdkFile(context, stage, true), JSON.stringify({ version: 1, runId: context.runId, stage, ok: true }), { flag: "wx" });
+			await publishGatewaySdkFile(context, stage, { version: 1, runId: context.runId, stage, ok: true }, true);
 		} catch (error) {
-			if (request) await writeFile(gatewaySdkFile(context, stage, true), JSON.stringify({ version: 1, runId: context.runId, stage, ok: false }), { flag: "wx" }).catch(() => {});
+			if (request) await publishGatewaySdkFile(context, stage, { version: 1, runId: context.runId, stage, ok: false }, true).catch(() => {});
 			await writeFile(join(context.root, "gateway-sdk-failure.private.json"), JSON.stringify({ stage, message: String(error?.message).slice(0, 1000), completed: results }), { flag: "wx" }).catch(() => {}); throw error;
 		}
 	}
