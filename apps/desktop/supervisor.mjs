@@ -20,7 +20,7 @@ import { BridgeMonitor } from "./bridge-monitor.mjs";
 import { AgentGateway } from "./agent-gateway.mjs";
 import { runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
-import { settleShutdown } from "./shutdown-drain.mjs";
+import { settleShutdown, closeUiAndWait } from "./shutdown-drain.mjs";
 import { GameTasks } from "./game-tasks.mjs";
 import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
@@ -835,8 +835,19 @@ async function openWorkbench() {
 		emit({ type: "notice", text: "已按重新打开工作台的操作创建界面，未重启宿主或重放任务。" });
 	} else send(ui, { type: "focus" });
 }
-async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
-	if (stopping) return;
+let shutdownOperation;
+function shutdown(exitCode = 0, options = {}) {
+	if (shutdownOperation) return shutdownOperation;
+	const operation = performShutdown(exitCode, options);
+	shutdownOperation = operation;
+	void operation.catch(() => {
+		// A rejected close may be retried only after the drain failure restored
+		// the application. Otherwise later callers must observe that rejection.
+		if (!stopping && shutdownOperation === operation) shutdownOperation = undefined;
+	});
+	return operation;
+}
+async function performShutdown(exitCode, { preserveApplication = false }) {
 	stopping = true;
 	const gatewayDrain = agentGateway.stop();
 	void recording.interrupt("VIDEO_APPLICATION_EXIT", "application_exit");
@@ -862,15 +873,18 @@ async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 			native.fixture.child.kill();
 	}
 	clearInterval(watchdog);
-	if (ui?.child.exitCode === null && ui?.child.signalCode === null) {
-		const exited = once(ui.child, "exit");
-		send(ui, { type: "allow-close" });
-		try {
-			await withDeadline(exited, 3000, "UI_CLOSE_TIMEOUT");
-		} catch {
-			ui.lease.terminate();
-			await withDeadline(exited, 3000, "UI_EXIT_TIMEOUT");
-		}
+	const closingUi = ui;
+	if (closingUi?.child.exitCode === null && closingUi?.child.signalCode === null) {
+		// Keep this creation handle and its non-rejecting exit observation even
+		// if a signal reports an error or its observation window elapses.
+		const exited = new Promise(resolve => closingUi.child.once("exit", (code, signal) => resolve({ code, signal })));
+		await closeUiAndWait({ exited, requestClose: () => send(closingUi, { type: "allow-close" }), terminate: () => closingUi.lease.terminate(),
+			report: facts => {
+				recordUiLifecycle({ kind: "shutdown-ui", epoch: closingUi.epoch, ...facts });
+				if (smoke) console.log("UI_SHUTDOWN", JSON.stringify(facts));
+				if (facts.phase === "exit-pending") console.error("OWNED_UI_EXIT_STILL_PENDING");
+			},
+		});
 	}
 	await vault.tail;
 	try { if (journal?.active) journal.stop("application_exit"); } catch { console.error("JOURNAL_EXIT_RECORD_UNCONFIRMED"); }
