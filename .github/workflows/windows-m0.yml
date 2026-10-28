@@ -119,6 +119,8 @@ jobs:
             .local/packaged-mcp-loss-smoke.json
             .local/desktop-smoke-diagnostics.json
             .local/packaged-diagnostics-smoke.json
+            .local/diagnostic-smoke/*/failure.json
+            .local/packaged-diagnostics/*/failure.json
             .local/packaged-storage-smoke.json
             .local/packaged-os-storage-smoke.json
             .local/packaged-acl-storage-smoke.json

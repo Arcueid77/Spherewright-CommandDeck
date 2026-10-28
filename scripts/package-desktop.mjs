@@ -107,5 +107,6 @@ manifest.portableDevelopmentProviderContext = 1;
 manifest.portableDevelopmentContextFailures = 1;
 manifest.portableDevelopmentUsage = 1;
 manifest.portableUsageUiRecovery = 1;
+manifest.portableDiagnosticProgress = 1;
 await writeFile(join(output, bundleManifestName), JSON.stringify(manifest, null, 2), { flag: "wx" }); await verifyBundle(output);
 console.log(JSON.stringify({ desktopBundle: "created", sourceRevision: revision, piCommit: pin, files: inventory.files.length, bytes: inventory.bytes, selfContained: true, installerBuilt: false, cleanWindowsVmVerified: false, gameCalls: 0 }));
