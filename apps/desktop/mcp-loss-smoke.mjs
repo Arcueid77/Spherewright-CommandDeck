@@ -21,7 +21,8 @@ export async function assertBlockedMcpExecution(driver, until) {
 }
 
 export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requests, base }) {
-	const accepted = driver.mcpLossScenario === "accepted", expected = mcpLossCase(driver.mcpLossScenario), originalClient = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), taskId = (await state()).currentTaskId;
+	const expected = mcpLossCase(driver.mcpLossScenario), accepted = expected.taskState === "completed", commits = expected.commits ?? 1, originalClient = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), taskId = (await state()).currentTaskId;
+	let duplicateReplies = 0;
 	const usage = (await state()).tasks[0].details.usage;
 	const world = async () => { const value = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(value.runId, driver.runId); return value; };
 	async function reloadGame() {
@@ -34,7 +35,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 	await until(async () => { const value = await state(); return !value.busy && value.phase === "blocked" && value.unresolved.length === 1 && originalClient.exitConfirmed; }, "ORIGINAL_MCP_EXITED");
 	const blocked = await state(), original = structuredClone(blocked.unresolved[0]), before = await world();
 	assert.equal(original.state, expected.hasActionId ? "accepted" : "unknown"); assert.equal(original.actionId, expected.hasActionId ? "synthetic-action" : null);
-	assert.equal(blocked.developmentFrozen, true); assert.equal(before.commits, 1); assert.equal(before.prepares, 1); assert.equal(before.launches, 1); assert.equal(requests(), 3);
+	assert.equal(blocked.developmentFrozen, true); assert.equal(before.commits, commits); assert.equal(before.commitRequests, 1); assert.equal(before.lastCommitRequestKey, original.idempotencyKey); assert.equal(before.prepares, 1); assert.equal(before.launches, 1); assert.equal(requests(), 3);
 	await assert.rejects(driver.api("probe", { mode: "offline" })); assert.equal(driver.getProbeSequence(), 0);
 	await reloadGame(); await until(disabledExecution, "MCP_LOSS_EXECUTION_DISABLED");
 	assert.deepEqual((await state()).tasks, blocked.tasks); assert.equal(driver.getBridgeClient(), originalClient); assert.equal(driver.getRuntimePid(), runtimePid); assert.deepEqual(await world(), before);
@@ -46,6 +47,8 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		const done = await state(), current = done.tasks[0].intent; assert.equal(done.unresolved.length, 0);
 		assert.notEqual(driver.getBridgeClient(), originalClient); assert.equal(current.actionId, original.actionId); assert.equal(current.idempotencyKey, original.idempotencyKey); assert.deepEqual(current.acceptance, original.acceptance); assert.deepEqual(current.terminal.afterQueue, [99, 100]);
 		await reloadGame(); await until(() => evaluate("document.body.innerText.includes('队列变化已核对')"), "MCP_RECOVERED_RECEIPT_RELOADED"); assert.deepEqual((await state()).tasks, done.tasks);
+		duplicateReplies = driver.getBridgeClient().stats.duplicateReplies;
+		assert.equal(duplicateReplies, expected.duplicateReplies ?? 0);
 		await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);
 	} else if (expected.error) {
 		await evaluate("[...document.querySelectorAll('.game-task-receipt button')].find(button=>button.textContent==='核销原动作').click()");
@@ -70,7 +73,9 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		await reloadGame(); await until(disabledExecution, "UNKNOWN_COMMIT_STILL_DISABLED");
 		assert.deepEqual((await state()).unresolved, [original]); assert.equal((await state()).developmentFrozen, true); assert.equal(driver.getBridgeClient(), originalClient); assert.equal(driver.bridgeExitConfirmed(), true);
 	}
-	const after = await world(); assert.equal(after.commits, 1); assert.equal(after.prepares, 1); assert.equal(after.launches, expected.hasActionId ? 2 : 1); assert.equal(after.resultReads, expected.resultReads); assert.equal(requests(), 3); assert.equal(driver.getRuntimePid(), runtimePid);
+	const after = await world(); assert.equal(after.commits, commits); assert.equal(after.commitRequests, 1); assert.equal(after.lastCommitRequestKey, original.idempotencyKey); assert.equal(after.prepares, 1); assert.equal(after.launches, expected.hasActionId ? 2 : 1); assert.equal(after.resultReads, expected.resultReads); assert.equal(requests(), 3); assert.equal(driver.getRuntimePid(), runtimePid);
+	assert.equal(after.duplicateRepliesSent ?? 0, duplicateReplies);
+	assert.equal(after.duplicateDelivery ?? null, expected.duplicateDelivery ?? null);
 	assert.deepEqual(after.nativeOutcome ?? null, expected.nativeOutcome ?? null);
 	assert.deepEqual((await state()).tasks[0].details.usage, usage);
 	await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens') && document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('0.001155')"), "MCP_LOSS_USAGE_RETAINED");
@@ -82,7 +87,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		nativeOutcomeRemainsBlocked: Boolean(expected.nativeOutcome), nativeOutcome: after.nativeOutcome ?? null, recoveryError: expected.error,
 		repeatedIsolatedReconciliationMakesNoRequests: Boolean(expected.auditReason), originalIdentityRetained: true, newExecutionDisabledDuringLoss: true,
 		explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: expected.hasActionId ? 1 : 0,
-		syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true,
+		syntheticModelRequests: requests(), syntheticGameCommits: commits, syntheticCommitRequests: 1, syntheticPrepareCalls: 1, duplicateRepliesIgnored: duplicateReplies, duplicateDelivery: after.duplicateDelivery ?? null, ownServerExitConfirmed: true,
 		modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true },
 		gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false,
 	}), { flag: "wx" });

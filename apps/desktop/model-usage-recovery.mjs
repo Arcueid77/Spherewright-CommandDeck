@@ -31,7 +31,7 @@ export async function readModelUsageRecovery(context) {
 }
 
 export async function runModelUsageRecovery(driver, value, manifest) {
-	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), accepted = value.scenario === "accepted", expected = mcpLossCase(value.scenario);
+	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), expected = mcpLossCase(value.scenario), accepted = expected.taskState === "completed";
 	async function compare() {
 		const game = await api("game", { action: "snapshot" }), work = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual({ tasks: game.tasks, events: game.events }, value.expected, "MODEL_USAGE_TASK_CHANGED_AFTER_RESTART");

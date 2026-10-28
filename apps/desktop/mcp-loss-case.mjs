@@ -1,8 +1,11 @@
-export const packagedMcpLossVersion = 3;
+export const packagedMcpLossVersion = 4;
 const nativeOutcome = (mode, state, recoveryRequired, succeeded = false) => Object.freeze({ mode, hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "NATIVE_OUTCOME_REQUIRES_AUDIT", nativeOutcome: Object.freeze({ state, terminal: true, succeeded, recoveryRequired }) });
 const cases = Object.freeze({
 	accepted: Object.freeze({ mode: "mcp-drop-after-accept", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null }),
+	"duplicate-receipt": Object.freeze({ mode: "mcp-drop-after-accept-duplicate", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null, duplicateReplies: 1, duplicateDelivery: "same-result" }),
+	"late-receipt": Object.freeze({ mode: "mcp-drop-after-accept-late", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null, duplicateReplies: 1, duplicateDelivery: "next-status" }),
 	"lost-ack": Object.freeze({ mode: "mcp-lost-ack", hasActionId: false, taskState: "blocked", intentState: "unknown", resultReads: 0, error: null }),
+	"unaccepted-disconnect": Object.freeze({ mode: "mcp-drop-before-accept", hasActionId: false, taskState: "blocked", intentState: "unknown", resultReads: 0, error: null, commits: 0 }),
 	"world-change": Object.freeze({ mode: "mcp-drop-after-accept-world", hasActionId: true, taskState: "accepted", intentState: "accepted", resultReads: 1, error: "GAME_CONTEXT_CHANGED" }),
 	"schema-change": Object.freeze({ mode: "mcp-drop-after-accept-schema", hasActionId: true, taskState: "accepted", intentState: "accepted", resultReads: 1, error: "ORIGINAL_MCP_COHORT_REQUIRED" }),
 	"receipt-mismatch": Object.freeze({ mode: "mcp-drop-after-accept-key", hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "ORIGINAL_ACTION_BINDING_MISMATCH" }),

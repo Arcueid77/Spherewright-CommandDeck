@@ -35,7 +35,7 @@ async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } 
 	});
 	try { await bridge.select(marker); } catch (error) { throw new Error(diagnostics.at(-1) ?? error.message); } const host = open();
 	const start = target => (target ?? host).start({ mode: "assist", techId: 100, providerId: "synthetic-provider", modelId: "fixture", prompt: "One normal enqueue only" });
-	async function submitted() { start(); const before = await host.settled(), challenge = host.confirmation(before.currentTaskId, 1); host.confirm(approval, challenge.nonce, 1); const value = await host.settled(); await clients[0].exited; assert.equal(clients[0].exitConfirmed, true); assert.equal(value.phase, "blocked"); assert.equal(value.developmentFrozen, true); const world = JSON.parse(await readFile(worldPath, "utf8")); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); return value.unresolved[0]; }
+	async function submitted(expectedCommits = 1) { start(); const before = await host.settled(), challenge = host.confirmation(before.currentTaskId, 1); host.confirm(approval, challenge.nonce, 1); const value = await host.settled(); await clients[0].exited; assert.equal(clients[0].exitConfirmed, true); assert.equal(value.phase, "blocked"); assert.equal(value.developmentFrozen, true); const world = JSON.parse(await readFile(worldPath, "utf8")); assert.equal(world.commits, expectedCommits); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, value.unresolved[0].idempotencyKey); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); return value.unresolved[0]; }
 	return { host, open, start, submitted, bridge, authority, approval, clients, world: async () => JSON.parse(await readFile(worldPath, "utf8")), frozen: () => frozen, modelRequests: () => modelRequests, changeCohort: () => { cohortChanged = true; } };
 }
 
@@ -57,12 +57,23 @@ test("accepted MCP exit can explicitly reconnect and reconcile only the original
 	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 2); assert.equal(world.launches, 2);
 });
 
-test("a lost acknowledgement remains blocked without allocating a replacement MCP or inventing an action ID, including restart", async t => {
-	const f = await fixture(t, "mcp-lost-ack"), original = await f.submitted(); assert.equal(original.state, "unknown"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null);
+for (const [mode, commits] of [["mcp-lost-ack", 1], ["mcp-drop-before-accept", 0]]) test(mode + " remains blocked without allocating a replacement MCP or inventing an action ID, including restart", async t => {
+	const f = await fixture(t, mode), original = await f.submitted(commits); assert.equal(original.state, "unknown"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null);
 	assert.throws(() => f.host.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);
 	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize();
 	assert.deepEqual(reopened.snapshot().unresolved, [original]); assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/);
-	assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1); assert.equal(f.frozen(), true); const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1);
+	assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1); assert.equal(f.frozen(), true); const world = await f.world(); assert.equal(world.commits, commits); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, original.idempotencyKey); assert.equal(world.prepares, 1); assert.equal(world.launches, 1);
+});
+
+for (const [suffix, delivery] of [["duplicate", "same-result"], ["late", "next-status"]]) test("a conflicting " + suffix + " receipt cannot overwrite the original result or satisfy a later RPC", async t => {
+	const f = await fixture(t, "mcp-drop-after-accept-" + suffix), original = await f.submitted();
+	f.host.reconcile(original.intentId); const done = await f.host.settled(), current = done.tasks[0].intent;
+	assert.equal(done.phase, "completed"); assert.equal(done.error, null); assert.equal(done.unresolved.length, 0); assert.equal(done.developmentFrozen, false);
+	assert.equal(current.actionId, original.actionId); assert.equal(current.idempotencyKey, original.idempotencyKey); assert.deepEqual(current.acceptance, original.acceptance);
+	assert.equal(current.terminal.actionId, original.actionId); assert.deepEqual(current.terminal.afterQueue, [99, 100]);
+	assert.equal(f.clients[1].stats.duplicateReplies, 1);
+	const world = await f.world(); assert.equal(world.duplicateRepliesSent, 1); assert.equal(world.duplicateDelivery, delivery);
+	assert.equal(world.commitRequests, 1); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 2); assert.equal(world.launches, 2);
 });
 
 test("recovery refuses changed MCP source, changed schema or changed world while retaining the accepted identity", async t => {
