@@ -41,7 +41,17 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	await until(async () => (await request("ui-get", { key: "layout" }))?.popoutGroups?.length === 3, "PACKAGED_POPOUT_LAYOUT_PERSISTED");
 	if (popoutCase.phase === "reopen") {
 		await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='收回全部浮窗').click()");
-		await until(async () => (await windows()).length === 0 && (await request("ui-get", { key: "layout" }))?.popoutGroups?.length === 0, "PACKAGED_POPOUTS_RECLAIMED");
+		await until(async () => {
+			if ((await windows()).length !== 0) return false;
+			const layout = await request("ui-get", { key: "layout" });
+			// Dockview omits empty popoutGroups. Require the persisted main grid
+			// and each returned panel exactly once, rather than treating null as empty.
+			if (!layout?.grid?.root || (layout.popoutGroups ?? []).length !== 0) return false;
+			const views = node => node.type === "leaf" ? node.data.views : node.data.flatMap(views);
+			const ids = views(layout.grid.root);
+			return panels.every(([id]) => ids.filter(value => value === id).length === 1);
+		}, "PACKAGED_POPOUTS_RECLAIMED");
+		assert.equal(await evaluate(`[${panels.map(([, title]) => JSON.stringify(title)).join(",")}].every(title=>[...document.querySelectorAll('.dv-tab')].filter(tab=>tab.textContent.trim()===title).length===1)`), true);
 		assert.deepEqual(await request("ui-get", { key: "editor" }), expected);
 	}
 	for (const action of ["probe", "start-fixture", "bridge-select"]) await assert.rejects(api(action, {}), /PORTABLE_SMOKE_ACTION_REJECTED/);
