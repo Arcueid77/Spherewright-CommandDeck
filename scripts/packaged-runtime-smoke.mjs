@@ -10,6 +10,8 @@ import { verifyBundle, copyBundleTree, bundleExecutable } from "./desktop-bundle
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { portableRuntimeScenarios, portableMcpScenarios } from "../apps/desktop/portable-mode.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
+import { modelUsageRecoveryFile, modelUsageRecoveryHash } from "../apps/desktop/model-usage-recovery.mjs";
+import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
@@ -22,6 +24,21 @@ const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoo
 const directories = [], cases = []; let passed = false;
 async function temporary() { const path = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))); directories.push(path); return path; }
 const copyRoot = await temporary(), copy = join(copyRoot, "bundle");
+async function launch(directory, environment, evidence, argv, prefix = "") {
+	const child = spawn(join(copy, bundleExecutable), argv, { cwd: directory, env: environment, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
+	let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
+	const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000);
+	let code, signal; try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
+	await writeFile(join(evidence, prefix + "exit.private.json"), JSON.stringify({ code, signal, timedOut, output }), { flag: "wx" });
+	let remaining; const until = performance.now() + 25000;
+	do {
+		const budget = Math.floor(until - performance.now()); if (budget <= 0) break;
+		const observation = await observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory, copyRoot], env: environment, timeoutMs: Math.min(20000, budget) });
+		await writeFile(join(evidence, prefix + "process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count;
+		if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
+	} while (performance.now() < until);
+	assert.equal(remaining, 0); assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
+}
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
 	for (const scenario of scenarios) {
@@ -30,19 +47,7 @@ try {
 		const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 		Object.assign(env, { PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: caseId });
 		const caseEnvironment = mcpLoss ? syntheticMcpEnvironment(env) : env;
-		const child = spawn(join(copy, bundleExecutable), ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario], { cwd: directory, env: caseEnvironment, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
-		let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
-		const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000);
-		let code, signal; try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
-		await writeFile(join(caseProof, "exit.private.json"), JSON.stringify({ code, signal, timedOut, output }), { flag: "wx" });
-		let remaining; const until = performance.now() + 25000;
-		do {
-			const budget = Math.floor(until - performance.now()); if (budget <= 0) break;
-			const observation = await observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory, copyRoot], env: caseEnvironment, timeoutMs: Math.min(20000, budget) });
-			await writeFile(join(caseProof, "process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count;
-			if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
-		} while (performance.now() < until);
-		assert.equal(remaining, 0); assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
+		await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario]);
 		const proof = JSON.parse(await readFile(join(directory, "application-proof.json"), "utf8"));
 		assert.equal(proof.runId, caseId); assert.equal(proof[mcpLoss ? "mcpLossScenario" : "runtimeScenario"], scenario); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit);
 		for (const key of ["packaged", "visibleRenderer", "rendererNodeDisabled", "externalProviderAndDevelopmentRejected", "syntheticFactoryOnly"]) assert.equal(proof[key], true, key);
@@ -62,10 +67,26 @@ try {
 		if (scenario === "planning") assert.equal(proof.inFlightPlannerEnded, true);
 		}
 		await writeFile(join(caseProof, "application-proof.json"), JSON.stringify(proof), { flag: "wx" });
-		cases.push({ ...proof, noPackagedChildrenRemain: true });
+		let modelUsageRecovery = null;
+		if (mcpLoss && manifest.modelUsageRecovery === 1) {
+			assert.equal(manifest.modelUsage, 1);
+			const before = await usageRecoveryState(directory, caseId), state = JSON.parse(await readFile(join(caseProof, "mcp-loss.private.json"), "utf8")).state;
+			const expected = { tasks: state.tasks, events: state.events }, marker = { version: 1, kind: "synthetic-model-usage-recovery", runId: caseId, scenario, expected, sha256: modelUsageRecoveryHash(expected) };
+			await writeFile(join(caseProof, "before-reopen.private.json"), JSON.stringify(before), { flag: "wx" });
+			await writeFile(join(directory, modelUsageRecoveryFile), JSON.stringify(marker), { flag: "wx" });
+			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke"], "reopen-");
+			modelUsageRecovery = JSON.parse(await readFile(join(directory, "model-usage-recovery-proof.json"), "utf8"));
+			assert.equal(modelUsageRecovery.runId, caseId); assert.equal(modelUsageRecovery.scenario, scenario); assert.equal(modelUsageRecovery.sourceRevision, manifest.sourceRevision); assert.equal(modelUsageRecovery.piCommit, manifest.piCommit); assert.equal(modelUsageRecovery.expectedSha256, marker.sha256);
+			for (const key of ["packaged", "syntheticOnly", "wholeApplicationRestartVerified", "originalTaskAndUsageRetained", "usageVisibleAfterRestartAndUiReload", "noMcpSelected", "noProbeAllocated", "newExecutionRejected"]) assert.equal(modelUsageRecovery[key], true);
+			assert.equal(modelUsageRecovery.unknownCommitRemainsBlocked, scenario === "lost-ack"); assert.equal(modelUsageRecovery.modelUsage.normalizedTokens, 360); assert.equal(modelUsageRecovery.modelUsage.reportedResponses, 3); assert.ok(Math.abs(modelUsageRecovery.modelUsage.estimatedUsd - 0.001155) < 1e-12);
+			assert.equal(modelUsageRecovery.gameCalls, 0); assert.equal(modelUsageRecovery.realModelRequests, 0);
+			const after = await usageRecoveryState(directory, caseId); assert.deepEqual(after, before, "MODEL_USAGE_RESTART_CHANGED_ORIGINAL_ROWS_OR_PI");
+			await writeFile(join(caseProof, "after-reopen.private.json"), JSON.stringify(after), { flag: "wx" }); await writeFile(join(caseProof, "model-usage-recovery.json"), JSON.stringify(modelUsageRecovery), { flag: "wx" });
+		}
+		cases.push({ ...proof, noPackagedChildrenRemain: true, ...(modelUsageRecovery ? { modelUsageRecovery } : {}) });
 	}
 	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.length, cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
+	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.length + cases.filter(value => value.modelUsageRecovery).length, cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local", proofFolder + "-smoke.json"), JSON.stringify(proof, null, 2));
 	passed = true; console.log(JSON.stringify({ [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, cases: cases.map(value => value[mcpLoss ? "mcpLossScenario" : "runtimeScenario"]), gameCalls: 0, realModelRequests: 0 }));
 } finally {
