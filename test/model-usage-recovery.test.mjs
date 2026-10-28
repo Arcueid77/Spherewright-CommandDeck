@@ -25,8 +25,8 @@ function marker(context, scenario = "accepted") {
 test("usage recovery expectations preserve the original completed, accepted or isolated task", async t => {
 	const f = await fixture(t), file = join(f.root, modelUsageRecoveryFile);
 	assert.equal(await readModelUsageRecovery(f), null);
-	for (const scenario of ["accepted", "lost-ack", "world-change", "schema-change", "receipt-mismatch"]) { const value = marker(f, scenario); await writeFile(file, JSON.stringify(value)); assert.deepEqual(await readModelUsageRecovery(f), value); }
-	for (const scenario of ["world-change", "schema-change", "receipt-mismatch"]) { const value = marker(f, scenario); value.expected.tasks[0].intent.actionId = null; value.sha256 = modelUsageRecoveryHash(value.expected); await writeFile(file, JSON.stringify(value)); await assert.rejects(readModelUsageRecovery(f)); }
+	for (const scenario of ["accepted", "lost-ack", "world-change", "schema-change", "receipt-mismatch", "native-unknown", "native-recovery", "native-failed", "recovery-flag"]) { const value = marker(f, scenario); await writeFile(file, JSON.stringify(value)); assert.deepEqual(await readModelUsageRecovery(f), value); }
+	for (const scenario of ["world-change", "schema-change", "receipt-mismatch", "native-unknown", "native-recovery", "native-failed", "recovery-flag"]) { const value = marker(f, scenario); value.expected.tasks[0].intent.actionId = null; value.sha256 = modelUsageRecoveryHash(value.expected); await writeFile(file, JSON.stringify(value)); await assert.rejects(readModelUsageRecovery(f)); }
 	const original = marker(f);
 	for (const patch of [{ version: 2 }, { kind: "execute" }, { runId: randomUUID() }, { scenario: "other" }, { sha256: "0".repeat(64) }, { command: "PRIVATE_TEXT_MUST_NOT_RUN" }, { expected: { tasks: [], events: [] } }]) {
 		const bytes = JSON.stringify({ ...original, ...patch }); await writeFile(file, bytes); await assert.rejects(readModelUsageRecovery(f)); assert.equal(await readFile(file, "utf8"), bytes);

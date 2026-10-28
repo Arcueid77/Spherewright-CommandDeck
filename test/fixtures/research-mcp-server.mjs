@@ -5,7 +5,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
-const persistent = ["mcp-drop-after-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-lost-ack", "storage-normal"].includes(mode);
+const persistent = ["mcp-drop-after-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
 let world, worldPath;
 if (persistent) {
 	let stage = "ARGUMENTS";
@@ -69,6 +69,21 @@ input.on("line", (line) => {
 		commits++; tick = 1201; key = args.idempotencyKey; persist(); if (mode === "lost-ack" || mode === "mcp-lost-ack") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
 	}
 	if (name === "spherewright_get_action_result") { resultReads++; if (world && !world.lossInjected && mode.startsWith("mcp-drop-after-accept")) { world.lossInjected = true; persist(); process.exit(0); return; } persist(); const pending = mode === "pending" && resultReads < 2, unknown = mode === "native-unknown" || mode === "native-unknown-context-failure" && resultReads === 1; value = { ...scope, actionId: "synthetic-action", actionKind: "select-research", idempotencyKey: mode === "mcp-drop-after-accept-key" && world.launches > 1 ? "different-native-key" : key, state: unknown ? "outcome_unknown" : pending ? "executing" : "completed", terminal: !pending, succeeded: !unknown && !pending, completedAtGameTick: 1201, recoveryRequired: unknown, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: mode === "wrong-queue" ? [99, 101] : [99, preparedTech], inventoryPreserved: true, researchProgressPreserved: true }, flightCheckpointReloadToken: "PRIVATE_FLIGHT_MUST_NOT_ESCAPE", syntheticCommitCount: commits }; }
+	if (name === "spherewright_get_action_result" && resultReads === 2 && world?.launches > 1) {
+		const outcome = {
+			"mcp-drop-after-accept-unknown": { state: "outcome_unknown", succeeded: false, recoveryRequired: false },
+			"mcp-drop-after-accept-recovery": { state: "recovery_required", succeeded: false, recoveryRequired: false },
+			"mcp-drop-after-accept-failed": { state: "action_failed", succeeded: false, recoveryRequired: false },
+			"mcp-drop-after-accept-recovery-flag": { state: "completed", succeeded: true, recoveryRequired: true },
+		}[mode];
+		if (outcome) {
+			Object.assign(value, outcome);
+			world.nativeOutcome = { state: value.state, terminal: value.terminal, succeeded: value.succeeded, recoveryRequired: value.recoveryRequired };
+			persist();
+		}
+		// A third result read would look successful. Durable isolation must stop
+		// that read entirely rather than waiting for a favorable later receipt.
+	}
 	if (name === "spherewright_get_action_result" && mode === "wrong-result-then-valid" && resultReads === 1) value.actionId = "different-native-action";
 	if (name === "spherewright_get_action_result" && mode === "wrong-key-context-failure" && resultReads === 1) value.idempotencyKey = "different-native-key";
 	if (name === "spherewright_get_action_result" && mode === "missing-readback") delete value.researchQueueReadback;

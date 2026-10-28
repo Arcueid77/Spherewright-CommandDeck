@@ -54,7 +54,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		assert.notEqual(replacement, originalClient); assert.equal(refused.developmentFrozen, true); assert.equal(refused.tasks[0].state, expected.taskState);
 		assert.deepEqual(current, { ...original, state: expected.intentState }); assert.equal(current.terminal, null);
 		await assertBlockedMcpExecution(driver, until);
-		if (driver.mcpLossScenario === "receipt-mismatch") {
+		if (expected.auditReason) {
 			const beforeRetry = await world(), rpcBeforeRetry = replacement.stats.requests;
 			await driver.api("game", { action: "reconcile", args: { intentId: original.intentId } });
 			await until(async () => { const value = await state(); return !value.busy && value.error === expected.error; }, "DURABLE_RECEIPT_ISOLATION");
@@ -71,9 +71,19 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		assert.deepEqual((await state()).unresolved, [original]); assert.equal((await state()).developmentFrozen, true); assert.equal(driver.getBridgeClient(), originalClient); assert.equal(driver.bridgeExitConfirmed(), true);
 	}
 	const after = await world(); assert.equal(after.commits, 1); assert.equal(after.prepares, 1); assert.equal(after.launches, expected.hasActionId ? 2 : 1); assert.equal(after.resultReads, expected.resultReads); assert.equal(requests(), 3); assert.equal(driver.getRuntimePid(), runtimePid);
+	assert.deepEqual(after.nativeOutcome ?? null, expected.nativeOutcome ?? null);
 	assert.deepEqual((await state()).tasks[0].details.usage, usage);
 	await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens') && document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('0.001155')"), "MCP_LOSS_USAGE_RETAINED");
 	await writeFile(join(base, "mcp-loss.private.json"), JSON.stringify({ runId: driver.runId, scenario: driver.mcpLossScenario, original, before, after, state: await state() }), { flag: "wx" });
 	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local/mcp-loss", driver.runId); await mkdir(proofDirectory, { recursive: true });
-	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted, unknownCommitRemainsBlocked: !expected.hasActionId, mismatchRemainsBlocked: Boolean(expected.error), recoveryError: expected.error, repeatedIsolatedReconciliationMakesNoRequests: driver.mcpLossScenario === "receipt-mismatch", originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: expected.hasActionId ? 1 : 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true, modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true }, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false }), { flag: "wx" });
+	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({
+		runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted,
+		unknownCommitRemainsBlocked: !expected.hasActionId, mismatchRemainsBlocked: Boolean(expected.error && !expected.nativeOutcome),
+		nativeOutcomeRemainsBlocked: Boolean(expected.nativeOutcome), nativeOutcome: after.nativeOutcome ?? null, recoveryError: expected.error,
+		repeatedIsolatedReconciliationMakesNoRequests: Boolean(expected.auditReason), originalIdentityRetained: true, newExecutionDisabledDuringLoss: true,
+		explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: expected.hasActionId ? 1 : 0,
+		syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true,
+		modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true },
+		gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false,
+	}), { flag: "wx" });
 }

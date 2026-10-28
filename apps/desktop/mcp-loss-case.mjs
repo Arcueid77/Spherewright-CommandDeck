@@ -1,10 +1,15 @@
-export const packagedMcpLossVersion = 2;
+export const packagedMcpLossVersion = 3;
+const nativeOutcome = (mode, state, recoveryRequired, succeeded = false) => Object.freeze({ mode, hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "NATIVE_OUTCOME_REQUIRES_AUDIT", nativeOutcome: Object.freeze({ state, terminal: true, succeeded, recoveryRequired }) });
 const cases = Object.freeze({
 	accepted: Object.freeze({ mode: "mcp-drop-after-accept", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null }),
 	"lost-ack": Object.freeze({ mode: "mcp-lost-ack", hasActionId: false, taskState: "blocked", intentState: "unknown", resultReads: 0, error: null }),
 	"world-change": Object.freeze({ mode: "mcp-drop-after-accept-world", hasActionId: true, taskState: "accepted", intentState: "accepted", resultReads: 1, error: "GAME_CONTEXT_CHANGED" }),
 	"schema-change": Object.freeze({ mode: "mcp-drop-after-accept-schema", hasActionId: true, taskState: "accepted", intentState: "accepted", resultReads: 1, error: "ORIGINAL_MCP_COHORT_REQUIRED" }),
-	"receipt-mismatch": Object.freeze({ mode: "mcp-drop-after-accept-key", hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED" }),
+	"receipt-mismatch": Object.freeze({ mode: "mcp-drop-after-accept-key", hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "ORIGINAL_ACTION_BINDING_MISMATCH" }),
+	"native-unknown": nativeOutcome("mcp-drop-after-accept-unknown", "outcome_unknown", false),
+	"native-recovery": nativeOutcome("mcp-drop-after-accept-recovery", "recovery_required", false),
+	"native-failed": nativeOutcome("mcp-drop-after-accept-failed", "action_failed", false),
+	"recovery-flag": nativeOutcome("mcp-drop-after-accept-recovery-flag", "completed", true, true),
 });
 export const portableMcpScenarios = Object.freeze(Object.keys(cases));
 export const mcpLossModes = Object.freeze(Object.values(cases).map(value => value.mode));

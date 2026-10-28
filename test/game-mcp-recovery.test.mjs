@@ -82,6 +82,25 @@ test("a mismatched original receipt after reconnect enters durable isolation and
 	assert.equal(repeated.error, "INDEPENDENT_GAME_AUDIT_REQUIRED"); assert.equal(f.clients[1].stats.requests, requests); assert.deepEqual(await f.world(), before); assert.equal(f.frozen(), true);
 });
 
+for (const [suffix, state, recoveryRequired, succeeded] of [["unknown", "outcome_unknown", false, false], ["recovery", "recovery_required", false, false], ["failed", "action_failed", false, false], ["recovery-flag", "completed", true, true]]) test("native " + suffix + " after MCP reconnect remains isolated across coordinator restart without further requests", async t => {
+	const f = await fixture(t, "mcp-drop-after-accept-" + suffix), original = await f.submitted();
+	f.host.reconcile(original.intentId); const blocked = await f.host.settled();
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.error, "INDEPENDENT_GAME_AUDIT_REQUIRED");
+	assert.deepEqual(blocked.unresolved, [{ ...original, state: "unknown" }]);
+	assert.equal(f.host.ledger.db.prepare("SELECT reason FROM game_gate WHERE id=1").get().reason, "NATIVE_OUTCOME_REQUIRES_AUDIT");
+	const world = await f.world(), count = f.clients[1].stats.requests;
+	assert.deepEqual(world.nativeOutcome, { state, terminal: true, succeeded, recoveryRequired });
+	assert.equal(world.resultReads, 2); assert.equal(world.commits, 1); assert.equal(world.prepares, 1);
+	f.host.reconcile(original.intentId); assert.equal((await f.host.settled()).error, "INDEPENDENT_GAME_AUDIT_REQUIRED");
+	assert.equal(f.clients[1].stats.requests, count); assert.deepEqual(await f.world(), world);
+	await f.bridge.close(); assert.equal(f.clients[1].exitConfirmed, true);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize();
+	assert.deepEqual(reopened.snapshot().unresolved, blocked.unresolved); assert.equal(reopened.snapshot().developmentFrozen, true);
+	reopened.reconcile(original.intentId); assert.equal((await reopened.settled()).error, "INDEPENDENT_GAME_AUDIT_REQUIRED");
+	assert.equal(f.clients[1].stats.requests, count); assert.deepEqual(await f.world(), world); assert.equal(f.clients.length, 2); assert.equal(f.modelRequests(), 1);
+	assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/);
+});
+
 test("a recovery adapter refuses prepare and commit before allocating either request", async t => {
 	const f = await fixture(t), lease = f.bridge.acquireResearch(f.authority), adapter = new ResearchAdapter({ ...lease, authority: f.authority, recoveryOnly: true }), before = f.clients[0].stats.requests;
 	await assert.rejects(adapter.prepareResearch({}, {}), /READ_ONLY_RESEARCH_RECOVERY/); await assert.rejects(adapter.commit({}), /READ_ONLY_RESEARCH_RECOVERY/);
