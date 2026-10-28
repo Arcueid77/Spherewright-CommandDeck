@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { bundleExecutable, copyBundleTree, verifyBundle } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
-import { portableStorageScenarios, runtimeStorageScenarios, storageFaultBoundary } from "../apps/desktop/portable-mode.mjs";
+import { portableStorageScenarios, runtimeStorageScenarios, mcpRuntimeStorageScenarios, storageFaultBoundary } from "../apps/desktop/portable-mode.mjs";
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
 import { readGit } from "../apps/desktop/workspace.mjs";
 
@@ -22,6 +22,7 @@ assert.equal((await readGit(root, ["status", "--porcelain"])).trim(), "", "STORA
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
 assert.equal(manifest.portableStorageFaults, 1, "PACKAGED_STORAGE_MODE_UNSUPPORTED_REBUILD_REQUIRED"); assert.equal(manifest.nativeProcessObserver, 1);
 assert.equal(manifest.portableRuntimeStorageFaults, 1, "PACKAGED_RUNTIME_STORAGE_MODE_UNSUPPORTED_REBUILD_REQUIRED");
+assert.equal(manifest.portableMcpRuntimeStorageFaults, 1, "PACKAGED_MCP_RUNTIME_STORAGE_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 const proofRoot = join(root, ".local/packaged-storage", runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
 async function temporary() { const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))); directories.push(directory); return directory; }
@@ -29,14 +30,16 @@ const copyRoot = await temporary(), copy = join(copyRoot, "bundle");
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
 	for (const scenario of portableStorageScenarios) {
-		const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario);
+		const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario), mcpLoss = mcpRuntimeStorageScenarios.includes(scenario);
 		const directory = await temporary(), caseId = randomUUID(), evidence = join(proofRoot, scenario); await mkdir(evidence);
 		await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, scenario, directory, copy, sourceRevision: manifest.sourceRevision, controllerRevision, controllerSha256 }), { flag: "wx" });
 		const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 		const env = syntheticMcpEnvironment({ ...inherited, PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: caseId });
 		const phaseProofs = []; let beforeState, originalBytes;
 		for (const resume of [false, true]) {
-			const phase = resume ? "resume" : "fault", child = spawn(join(copy, bundleExecutable), ["--portable-smoke", "--portable-storage-fault=" + scenario, ...(resume ? ["--portable-storage-resume"] : [])], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
+			const phase = resume ? "resume" : "fault";
+			console.log("PACKAGED_STORAGE_CASE " + JSON.stringify({ scenario, phase }));
+			const child = spawn(join(copy, bundleExecutable), ["--portable-smoke", "--portable-storage-fault=" + scenario, ...(resume ? ["--portable-storage-resume"] : [])], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 			let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
 			const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000); let code, signal;
 			try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
@@ -57,6 +60,11 @@ try {
 			else { assert.equal(proof.originalRecordsRetainedOnOpen, true); assert.equal(proof.unknownActionRemainsBlocked, boundary === "receipt"); assert.equal(proof.onlyOriginalAcceptedActionReconciled, boundary === "terminal"); }
 			if (runtimeLoss && !resume) { for (const key of ["runtimeExitObserved", "runtimeExitedBeforeStorageAttempt", "originalDurableIntentRetained", "noRuntimeRestart"]) assert.equal(proof[key], true, key); assert.equal(proof.runtimeExitBoundary, boundary); }
 			if (runtimeLoss && resume) { assert.equal(proof.originalRuntimeLoss, true); assert.equal(proof.newApplicationRuntimeAvailable, true); }
+			if (mcpLoss && !resume) {
+				for (const key of ["originalMcpExitObserved", "mcpExitedBeforeRuntime", "ledgerWriteRejected", "noMcpRestartBeforeApplicationExit"]) assert.equal(proof[key], true, key);
+				assert.equal(proof.mcpTermination, "owned-child-handle"); assert.equal(proof.ledgerWriteBoundary, boundary); assert.equal(proof.ledgerWriteAttempts, 1);
+			}
+			if (mcpLoss && resume) { assert.equal(proof.originalMcpLoss, true); assert.equal(proof.noMcpAutoReconnectOnOpen, true); }
 			await writeFile(join(evidence, phase + "-application-proof.json"), proofBytes, { flag: "wx" }); phaseProofs.push(proof);
 			const state = await usageRecoveryState(directory, caseId);
 			await writeFile(join(evidence, phase + "-state.private.json"), JSON.stringify(state), { flag: "wx" });

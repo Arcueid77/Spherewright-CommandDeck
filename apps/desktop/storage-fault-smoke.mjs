@@ -4,22 +4,41 @@ import { lstat, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { mcpLossCase } from "./mcp-loss-case.mjs";
 import { ResearchAdapter } from "./research-adapter.mjs";
-import { runtimeStorageScenarios, storageFaultBoundary } from "./portable-mode.mjs";
+import { ReadOnlyMcpClient } from "./mcp-client.mjs";
+import { runtimeStorageScenarios, mcpRuntimeStorageScenarios, storageFaultBoundary } from "./portable-mode.mjs";
 
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const originalFile = "storage-original.private.json";
 const disabled = "(()=>{const panel=document.querySelector('.game-tasks-panel');return panel&&['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()";
 
-export function armRuntimeStorageFault(host, { boundary, stopRuntime }) {
+export function armRuntimeStorageFault(host, { boundary, stopRuntime, mcpClient }) {
 	assert.equal(host.syntheticOnly, true); assert.ok(["receipt", "terminal"].includes(boundary)); assert.equal(typeof stopRuntime, "function");
 	assert.equal(host.phase, "awaiting_approval"); assert.equal(host.ledger.storageAvailable, true); assert.deepEqual(host.ledger.unresolved(), []);
+	if (mcpClient) { assert.ok(mcpClient instanceof ReadOnlyMcpClient); assert.equal(host.adapter.client, mcpClient); assert.equal(mcpClient.closed, false); assert.equal(mcpClient.exitConfirmed, false); }
 	const adapter = host.adapter, commit = adapter.commit, readProof = ResearchAdapter.prototype.readResearchProof;
-	let original = null, runtimeExit = null, entered = false, restored = false;
+	const ledger = host.ledger, writeMethod = boundary === "receipt" ? "accept" : "reconcile", write = ledger[writeMethod];
+	let original = null, runtimeExit = null, mcpExit = null, writeAttempts = 0, writeRejected = false, entered = false, restored = false;
+	function rejectedWrite(error) {
+		assert.equal(entered, true); assert.equal(error.message, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(ledger.storageAvailable, false);
+		assert.deepEqual(ledger.intent(original.intentId), original); writeRejected = true; throw error;
+	}
+	const observedWrite = function (...args) {
+		writeAttempts++; assert.equal(writeAttempts, 1);
+		if (boundary === "receipt") { assert.equal(entered, true); try { return write.apply(this, args); } catch (error) { return rejectedWrite(error); } }
+		return write.apply(this, args).catch(rejectedWrite);
+	};
 	async function interrupt(value) {
 		assert.equal(entered, false); entered = true; const pending = host.ledger.unresolved(); assert.equal(pending.length, 1); original = structuredClone(pending[0]);
 		assert.equal(original.state, boundary === "receipt" ? "recorded" : "accepted"); assert.equal(original.terminal, null);
 		if (boundary === "receipt") { assert.equal(value.accepted, true); assert.equal(value.idempotencyKey, original.idempotencyKey); }
 		else { assert.equal(value.request.intentId, original.intentId); assert.equal(value.terminal.actionId, original.actionId); assert.equal(value.terminal.terminal, true); assert.equal(value.terminal.succeeded, true); }
+		if (mcpClient) {
+			assert.equal(host.runtimeAvailable, true); assert.equal(mcpClient.exitConfirmed, false); assert.equal(mcpClient.closed, false);
+			const pid = mcpClient.child.pid; assert.ok(Number.isSafeInteger(pid) && pid > 0);
+			assert.equal(mcpClient.child.kill(), true); await mcpClient.exited; assert.equal(mcpClient.exitConfirmed, true);
+			assert.equal(host.runtimeAvailable, true); assert.equal(ledger.storageAvailable, true);
+			mcpExit = { pid, exitObserved: true, beforeRuntime: true, requests: mcpClient.stats.requests };
+		}
 		runtimeExit = await stopRuntime(); assert.equal(runtimeExit.exitObserved, true); assert.equal(host.runtimeAvailable, false);
 		assert.equal(host.ledger.storageAvailable, true); assert.deepEqual(host.ledger.intent(original.intentId), original);
 		host.ledger.db.exec("PRAGMA query_only=ON"); return value;
@@ -28,13 +47,16 @@ export function armRuntimeStorageFault(host, { boundary, stopRuntime }) {
 		const proof = await readProof.call(this, request);
 		return host.adapter === this ? interrupt(proof) : proof;
 	};
+	ledger[writeMethod] = observedWrite;
 	if (boundary === "receipt") adapter.commit = async function (...args) { return interrupt(await commit.apply(this, args)); };
 	else ResearchAdapter.prototype.readResearchProof = readWithInterruption;
 	return Object.freeze({
-		get original() { return structuredClone(original); }, get runtimeExit() { return structuredClone(runtimeExit); },
+		get original() { return structuredClone(original); }, get runtimeExit() { return structuredClone(runtimeExit); }, get mcpExit() { return structuredClone(mcpExit); },
+		get writeAttempts() { return writeAttempts; }, get writeRejected() { return writeRejected; },
 		restore() {
 			if (restored) return;
 			host.ledger.db.exec("PRAGMA query_only=OFF"); adapter.commit = commit;
+			assert.equal(ledger[writeMethod], observedWrite); ledger[writeMethod] = write;
 			if (boundary === "terminal") { assert.equal(ResearchAdapter.prototype.readResearchProof, readWithInterruption); ResearchAdapter.prototype.readResearchProof = readProof; }
 			restored = true;
 		},
@@ -73,13 +95,13 @@ async function ui(driver) {
 
 export async function runGameStorageFaultSmoke(driver, { evaluate, state, until, requests, base }) {
 	const { scenario, resume } = driver.storageCase, host = driver.getGameTasks(), taskId = (await state()).currentTaskId;
-	const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario);
+	const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario), mcpLoss = mcpRuntimeStorageScenarios.includes(scenario);
 	assert.equal(resume, false); assert.equal(host.syntheticOnly, true); assert.equal((await state()).phase, "awaiting_approval"); assert.equal(host.ledger.storageAvailable, true);
 	const runtimePid = driver.getRuntimePid(), originalClient = driver.getBridgeClient();
 	const adapter = host.adapter, commit = adapter.commit, reconcile = host.ledger.reconcile;
 	let runtimeFault;
 	try {
-		if (runtimeLoss) runtimeFault = armRuntimeStorageFault(host, { boundary, stopRuntime: driver.stopRuntimeForSmoke });
+		if (runtimeLoss) runtimeFault = armRuntimeStorageFault(host, { boundary, stopRuntime: driver.stopRuntimeForSmoke, ...(mcpLoss ? { mcpClient: originalClient } : {}) });
 		else if (boundary === "before-send") host.ledger.db.exec("PRAGMA query_only=ON");
 		else if (boundary === "receipt") adapter.commit = async function(dto) { const receipt = await commit.call(this, dto); assert.equal(receipt.accepted, true); host.ledger.db.exec("PRAGMA query_only=ON"); return receipt; };
 		else { assert.equal(boundary, "terminal"); host.ledger.reconcile = async function(id) { assert.equal(this.intent(id).state, "accepted"); host.ledger.db.exec("PRAGMA query_only=ON"); return reconcile.call(this, id); }; }
@@ -93,7 +115,8 @@ export async function runGameStorageFaultSmoke(driver, { evaluate, state, until,
 	if (boundary === "before-send") assert.equal(intent, null);
 	else { assert.equal(intent.state, boundary === "receipt" ? "recorded" : "accepted"); assert.equal(intent.actionId, boundary === "receipt" ? null : "synthetic-action"); assert.equal(intent.terminal, null); }
 	assert.equal(blocked.runtimeAvailable, !runtimeLoss);
-	if (runtimeLoss) { assert.equal(runtimeFault.runtimeExit.pid, runtimePid); assert.equal(runtimeFault.runtimeExit.exitObserved, true); assert.deepEqual(intent, runtimeFault.original); }
+	if (runtimeLoss) { assert.equal(runtimeFault.runtimeExit.pid, runtimePid); assert.equal(runtimeFault.runtimeExit.exitObserved, true); assert.deepEqual(intent, runtimeFault.original); assert.equal(runtimeFault.writeAttempts, 1); assert.equal(runtimeFault.writeRejected, true); }
+	if (mcpLoss) { assert.equal(runtimeFault.mcpExit.pid, originalClient.child.pid); assert.equal(runtimeFault.mcpExit.exitObserved, true); assert.equal(runtimeFault.mcpExit.beforeRuntime, true); assert.equal(originalClient.exitConfirmed, true); assert.equal(originalClient.stats.requests, runtimeFault.mcpExit.requests); }
 	for (const action of ["start", "catalog", "reprepare", "reconcile"]) await until(async () => {
 		if (!driver.getUi() || driver.getUi().nativeProbePending) return false;
 		await assert.rejects(driver.api("game", { action, args: { intentId: intent?.intentId } }), runtimeLoss && action !== "reconcile" ? /GAME_RUNTIME_UNAVAILABLE/ : /GAME_LEDGER_STORAGE_UNAVAILABLE/); return true;
@@ -106,9 +129,10 @@ export async function runGameStorageFaultSmoke(driver, { evaluate, state, until,
 	const diagnostic = await evaluate("(async()=>{const preview=await window.deck.diagnosticPreview({includeTasks:true,includePerformance:true});try{return JSON.parse(preview.text)}finally{await window.deck.discardDiagnosticPreview(preview.id)}})()");
 	assert.equal(diagnostic.game.storageAvailable, false); assert.equal(diagnostic.game.code, "GAME_LEDGER_STORAGE_UNAVAILABLE");
 	assert.deepEqual(JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")), world); assert.equal(requests(), 3); assert.equal(driver.getProbeSequence(), 0);
+	if (mcpLoss) { assert.equal(originalClient.exitConfirmed, true); assert.equal(originalClient.stats.requests, runtimeFault.mcpExit.requests); }
 	const original = { version: 1, kind: "synthetic-storage-original", runId: driver.runId, scenario, task: blocked.tasks[0], events: blocked.events, world, sha256: hash({ task: blocked.tasks[0], events: blocked.events }) };
 	await writeFile(join(driver.context.root, originalFile), JSON.stringify(original), { flag: "wx" });
-	return { runId: driver.runId, storageScenario: scenario, phase: "fault", fault: "sqlite-query-only", storageBlocked: true, developmentFrozen: true, restoredWritabilityDoesNotUnlock: true, uiReloadRetainsFreeze: true, diagnosticShowsStorageFailure: true, ...(runtimeLoss ? { runtimeExitObserved: true, runtimeExitBoundary: boundary, runtimeExitedBeforeStorageAttempt: true, originalDurableIntentRetained: true, noRuntimeRestart: true } : {}), originalRecordSha256: original.sha256, noProbeAllocated: true, noModelOrCommitReplay: true, syntheticModelRequests: 3, syntheticPrepareCalls: 1, syntheticGameCommits: world.commits, originalActionIdAvailable: Boolean(intent?.actionId), nativeConfirmationMocked: true, physicalInputVerified: false, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
+	return { runId: driver.runId, storageScenario: scenario, phase: "fault", fault: "sqlite-query-only", storageBlocked: true, developmentFrozen: true, restoredWritabilityDoesNotUnlock: true, uiReloadRetainsFreeze: true, diagnosticShowsStorageFailure: true, ...(runtimeLoss ? { runtimeExitObserved: true, runtimeExitBoundary: boundary, runtimeExitedBeforeStorageAttempt: true, originalDurableIntentRetained: true, noRuntimeRestart: true } : {}), ...(mcpLoss ? { originalMcpExitObserved: true, mcpExitedBeforeRuntime: true, mcpTermination: "owned-child-handle", ledgerWriteBoundary: boundary, ledgerWriteAttempts: runtimeFault.writeAttempts, ledgerWriteRejected: runtimeFault.writeRejected, noMcpRestartBeforeApplicationExit: true } : {}), originalRecordSha256: original.sha256, noProbeAllocated: true, noModelOrCommitReplay: true, syntheticModelRequests: 3, syntheticPrepareCalls: 1, syntheticGameCommits: world.commits, originalActionIdAvailable: Boolean(intent?.actionId), nativeConfirmationMocked: true, physicalInputVerified: false, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
 }
 
 export async function runGameMcpStorageFaultSmoke(driver, { evaluate, state, until, requests, base }) {
@@ -143,7 +167,7 @@ export async function runGameMcpStorageFaultSmoke(driver, { evaluate, state, unt
 
 export async function runStorageResumeSmoke(driver) {
 	const { scenario, resume } = driver.storageCase; assert.equal(resume, true);
-	const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario);
+	const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario), mcpLoss = mcpRuntimeStorageScenarios.includes(scenario);
 	const file = join(driver.context.root, originalFile), info = await lstat(file);
 	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size > 0 && info.size <= 262144); assert.equal((await realpath(file)).toLowerCase(), file.toLowerCase());
 	// Expected records are data only. Recovery authority still comes from the
@@ -176,5 +200,5 @@ export async function runStorageResumeSmoke(driver) {
 	}
 	const retained = (await state()).tasks; await driver.testCommand("reload"); await activate(); assert.deepEqual((await state()).tasks, retained);
 	const after = await world(); assert.equal(after.commits, original.world.commits); assert.equal(after.prepares, 1); assert.equal(after.launches, boundary === "terminal" ? 2 : 1); assert.equal(after.resultReads, boundary === "terminal" ? 2 : 0); assert.equal(driver.getProbeSequence(), 0); assert.equal(driver.getRuntimePid(), runtimePid);
-	return { runId: driver.runId, storageScenario: scenario, phase: "resume", storageAvailable: true, originalRecordsRetainedOnOpen: true, originalRecordSha256: original.sha256, oldApprovalNotRestored: true, unknownActionRemainsBlocked: boundary === "receipt", onlyOriginalAcceptedActionReconciled: boundary === "terminal", ...(runtimeLoss ? { originalRuntimeLoss: true, newApplicationRuntimeAvailable: true } : {}), noModelOrCommitReplay: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticPrepareCalls: after.prepares, syntheticGameCommits: after.commits, mcpLaunchesAcrossBothProcesses: after.launches, nativeConfirmationMocked: true, physicalInputVerified: false, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
+	return { runId: driver.runId, storageScenario: scenario, phase: "resume", storageAvailable: true, originalRecordsRetainedOnOpen: true, originalRecordSha256: original.sha256, oldApprovalNotRestored: true, unknownActionRemainsBlocked: boundary === "receipt", onlyOriginalAcceptedActionReconciled: boundary === "terminal", ...(runtimeLoss ? { originalRuntimeLoss: true, newApplicationRuntimeAvailable: true } : {}), ...(mcpLoss ? { originalMcpLoss: true, noMcpAutoReconnectOnOpen: true } : {}), noModelOrCommitReplay: true, noProbeAllocated: true, syntheticModelRequests: 0, syntheticPrepareCalls: after.prepares, syntheticGameCommits: after.commits, mcpLaunchesAcrossBothProcesses: after.launches, nativeConfirmationMocked: true, physicalInputVerified: false, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
 }

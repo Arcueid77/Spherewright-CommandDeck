@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { portableStorageCase, portableStorageScenarios, assertPortableStorageAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
+import { portableStorageCase, portableStorageScenarios, runtimeStorageScenarios, storageFaultBoundary, assertPortableStorageAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
 
 test("packaged storage fault and resume require one explicit isolated scenario with no mixed fault mode", () => {
 	assert.equal(portableStorageCase([]), null);
 	for (const scenario of portableStorageScenarios) for (const resume of [false, true]) assert.deepEqual(portableStorageCase(["--portable-smoke", "--portable-storage-fault=" + scenario, ...(resume ? ["--portable-storage-resume"] : [])]), { scenario, resume });
 	for (const args of [["--portable-storage-resume"], ["--portable-smoke", "--portable-storage-resume"], ["--portable-storage-fault=receipt"], ["--portable-smoke", "--portable-storage-fault=unknown"], ["--portable-smoke", "--portable-storage-fault=receipt", "--portable-storage-fault=terminal"], ["--portable-smoke", "--portable-storage-fault=receipt", "--portable-storage-resume=yes"], ["--portable-smoke", "--portable-storage-fault=terminal", "--portable-diagnostics"], ["--portable-smoke", "--portable-storage-fault=terminal", "--portable-runtime-loss=idle"], ["--portable-smoke", "--portable-storage-fault=terminal", "--portable-mcp-loss=accepted"]]) assert.throws(() => portableStorageCase(args), /PACKAGED_PORTABLE_STORAGE_CASE_REQUIRED/);
-	for (const scenario of ["receipt-runtime", "terminal-runtime"]) for (const other of ["--portable-runtime-loss=accepted", "--portable-mcp-loss=lost-ack", "--portable-diagnostics"]) assert.throws(() => portableStorageCase(["--portable-smoke", "--portable-storage-fault=" + scenario, other]), /PACKAGED_PORTABLE_STORAGE_CASE_REQUIRED/);
+	for (const scenario of runtimeStorageScenarios) for (const other of ["--portable-runtime-loss=accepted", "--portable-mcp-loss=lost-ack", "--portable-diagnostics"]) assert.throws(() => portableStorageCase(["--portable-smoke", "--portable-storage-fault=" + scenario, other]), /PACKAGED_PORTABLE_STORAGE_CASE_REQUIRED/);
+	assert.equal(storageFaultBoundary("receipt-mcp-runtime"), "receipt"); assert.equal(storageFaultBoundary("terminal-mcp-runtime"), "terminal");
+	assert.throws(() => storageFaultBoundary("receipt-anything-runtime"), /UNKNOWN_STORAGE_FAULT_SCENARIO/);
 });
 
 test("the storage fixture cannot allocate probes, real MCP selections or renderer providers and retains trusted diagnostic checks", () => {

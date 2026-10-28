@@ -12,7 +12,7 @@ import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { ResearchAdapter } from "../apps/desktop/research-adapter.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
-import { armLostAckStorageFault } from "../apps/desktop/storage-fault-smoke.mjs";
+import { armLostAckStorageFault, armRuntimeStorageFault } from "../apps/desktop/storage-fault-smoke.mjs";
 
 async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } = {}) {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-"))), runId = randomUUID(), worldPath = join(directory, "synthetic-research-world.json");
@@ -94,6 +94,43 @@ test("a lost MCP acceptance plus a rejected unknown write preserves the durable 
 	assert.equal(recovered.storageAvailable, true); assert.equal(recovered.phase, "blocked"); assert.equal(recovered.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(recovered.developmentFrozen, true); assert.deepEqual(recovered.unresolved, [original]); assert.deepEqual(recovered.tasks, blocked.tasks); assert.deepEqual(recovered.events, blocked.events);
 	assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/); assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1);
 	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, original.idempotencyKey); assert.equal(world.launches, 1); assert.equal(world.resultReads, 0);
+});
+
+for (const boundary of ["receipt", "terminal"]) test(boundary + " rejection after original MCP exit and runtime loss preserves the original intent across a healthy reopen", async t => {
+	const f = await fixture(t, "storage-normal"); f.start(); const prepared = await f.host.settled(), client = f.clients[0];
+	let runtimeStops = 0;
+	const fault = armRuntimeStorageFault(f.host, { boundary, mcpClient: client, stopRuntime: async () => {
+		assert.equal(client.exitConfirmed, true); assert.equal(f.host.runtimeAvailable, true); runtimeStops++;
+		f.host.runtimeUnavailable(); return { pid: 1, exitObserved: true };
+	} });
+	try { const challenge = f.host.confirmation(prepared.currentTaskId, 1); f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled(); }
+	finally { fault.restore(); }
+	const blocked = f.host.snapshot(), original = fault.original, requests = client.stats.requests;
+	assert.equal(runtimeStops, 1); assert.equal(fault.writeAttempts, 1); assert.equal(fault.writeRejected, true);
+	assert.equal(fault.mcpExit.pid, client.child.pid); assert.equal(fault.mcpExit.exitObserved, true); assert.equal(fault.mcpExit.beforeRuntime, true);
+	assert.equal(client.exitConfirmed, true); assert.equal(blocked.runtimeAvailable, false); assert.equal(blocked.storageAvailable, false);
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(blocked.developmentFrozen, true);
+	assert.deepEqual(blocked.unresolved, [original]); assert.deepEqual(blocked.tasks[0].intent, original);
+	assert.equal(original.state, boundary === "receipt" ? "recorded" : "accepted"); assert.equal(original.terminal, null);
+	assert.equal(f.host.ledger.db.prepare("PRAGMA query_only").get().query_only, 0);
+	for (const operation of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare()]) assert.throws(operation, /GAME_RUNTIME_UNAVAILABLE/);
+	assert.throws(() => f.host.reconcile(original.intentId), /GAME_LEDGER_STORAGE_UNAVAILABLE/); f.host.stop();
+	assert.deepEqual(f.host.snapshot().tasks, blocked.tasks); assert.deepEqual(f.host.snapshot().events, blocked.events); assert.equal(client.stats.requests, requests);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const healthy = reopened.snapshot();
+	assert.equal(healthy.runtimeAvailable, true); assert.equal(healthy.storageAvailable, true); assert.equal(healthy.phase, "blocked"); assert.equal(healthy.developmentFrozen, true);
+	assert.deepEqual(healthy.tasks, blocked.tasks); assert.deepEqual(healthy.events, blocked.events); assert.deepEqual(healthy.unresolved, [original]);
+	assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/); assert.equal(f.clients.length, 1);
+	if (boundary === "receipt") {
+		assert.equal(original.actionId, null); assert.equal(original.acceptance, null); assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/);
+	} else {
+		// Match a healthy application's explicit selection of the same fixed MCP.
+		await f.bridge.connect();
+		reopened.reconcile(original.intentId); const done = await reopened.settled(); assert.equal(done.phase, "completed", JSON.stringify({ error: done.error, clients: f.clients.length, world: await f.world() })); assert.equal(done.developmentFrozen, false);
+		assert.equal(done.tasks[0].intent.actionId, original.actionId); assert.equal(done.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.deepEqual(done.tasks[0].intent.acceptance, original.acceptance);
+	}
+	assert.equal(client.stats.requests, requests); assert.equal(f.modelRequests(), 1); assert.equal(f.clients.length, boundary === "terminal" ? 2 : 1);
+	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, original.idempotencyKey); assert.equal(world.prepares, 1);
+	assert.equal(world.resultReads, boundary === "terminal" ? 2 : 0); assert.equal(world.launches, boundary === "terminal" ? 2 : 1);
 });
 
 test("accepted MCP exit can explicitly reconnect and reconcile only the original action without replay", async t => {

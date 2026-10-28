@@ -8,11 +8,12 @@ import { portablePopoutCase } from "./popout-case.mjs";
 export { portableMcpScenarios } from "./mcp-loss-case.mjs";
 
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
-export const runtimeStorageScenarios = Object.freeze(["receipt-runtime", "terminal-runtime"]);
+export const mcpRuntimeStorageScenarios = Object.freeze(["receipt-mcp-runtime", "terminal-mcp-runtime"]);
+export const runtimeStorageScenarios = Object.freeze(["receipt-runtime", "terminal-runtime", ...mcpRuntimeStorageScenarios]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal", ...runtimeStorageScenarios]);
 export function storageFaultBoundary(scenario) {
 	if (!portableStorageScenarios.includes(scenario)) throw new Error("UNKNOWN_STORAGE_FAULT_SCENARIO");
-	return runtimeStorageScenarios.includes(scenario) ? scenario.slice(0, -"-runtime".length) : scenario;
+	return runtimeStorageScenarios.includes(scenario) ? scenario.split("-")[0] : scenario;
 }
 export const portableCommandScenarios = Object.freeze(["reload", "runtime", "helper", "exit"]);
 export const developmentUsagePrompt = "Read fixture.txt and report its synthetic content. Do not edit files or run commands.";

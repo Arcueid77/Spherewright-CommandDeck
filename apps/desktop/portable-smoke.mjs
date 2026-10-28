@@ -11,7 +11,7 @@ import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
 import { packagedMcpLossVersion } from "./mcp-loss-case.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
-import { runtimeStorageScenarios } from "./portable-mode.mjs";
+import { runtimeStorageScenarios, mcpRuntimeStorageScenarios } from "./portable-mode.mjs";
 import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
 import { readPortableProfileCase, runProfileBootstrap } from "./portable-profile.mjs";
 import { checkPowerLifecycle } from "./power-smoke.mjs";
@@ -80,6 +80,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 	if (driver.storageCase) {
 		assert.equal(manifest.portableStorageFaults, 1); assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		if (runtimeStorageScenarios.includes(driver.storageCase.scenario)) assert.equal(manifest.portableRuntimeStorageFaults, 1);
+		if (mcpRuntimeStorageScenarios.includes(driver.storageCase.scenario)) assert.equal(manifest.portableMcpRuntimeStorageFaults, 1);
 		const scenarioDriver = { ...driver, runId: context.runId };
 		const proof = driver.storageCase.resume ? await runStorageResumeSmoke(scenarioDriver) : await runGameSmoke(scenarioDriver);
 		await writeFile(join(context.root, "storage-" + (driver.storageCase.resume ? "resume" : "fault") + "-application.json"), JSON.stringify({ ...proof, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, visibleRenderer: true, rendererNodeDisabled: true, syntheticFactoryOnly: true }), { flag: "wx" });

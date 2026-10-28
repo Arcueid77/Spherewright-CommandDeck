@@ -651,6 +651,10 @@ M5新增固定`accepted-runtime`组合，fixture声明升为`portableMcpFaults:9
 
 准确候选`e6a559a41829c203cec08315006aabb5eecc24db`已从干净源码生成独立16,204文件 / 741,177,022字节自包含包，Pi仍固定71023ae。run `14afbb05-7dee-42ec-b6be-77bf4689c07d`完成十八类固定MCP场景的36次实际应用启动：36份退出记录均exit0/无超时，18次整应用重开均保留原任务、用量及Pi历史，独立所属映像观察均归零，源/复制包完整hash不变；合计54次合成模型请求、15次commit请求/14次合成接受，0真实模型/游戏调用。证明SHA256 `74BAAF363C5775AAEDA6AB7DA176F90270B5857CF49B321C7A84D79EFF828551`。精确CI40683010670仍运行；实际包通过关闭本候选的接线复验，不确认原JSON失败的唯一原因或完整恢复矩阵通过。另`df50f44 / CI40676105006`的完整日记进度候选CI现已成功，早期CI40671425172就绪失败的原因仍无足够证据归因。
 
+2026-10-28新增两类固定三方故障入口`receipt-mcp-runtime`、`terminal-mcp-runtime`，复用现有存储恢复矩阵：取得绑定原请求的接受回执或完整成功终态证明后，才按当前合成适配器的精确child handle终止原MCP并观察退出；随后等待原Utility Runtime退出，最后开启SQLite query_only并核一次原accept/reconcile写入被拒绝。新入口绑定实际ReadOnlyMcpClient及当前adapter，禁止任意进程选择；恢复原连接可写后存储失效仍锁定，UI重载/停止/新执行不重放。回执未落盘保留recorded原键且无actionId；终态未落盘保留accepted原action/acceptance，健康整应用重开后由显式同源MCP选择和原动作核销完成。新包单独声明`portableMcpRuntimeStorageFaults:1`，控制器拒绝旧包，原五类存储场景继续覆盖。
+
+55项定向测试、完整Node22回归499/499（0skip）及入口语法通过；两项新增Core流实际启动并终止原合成MCP，Runtime退出在这些单测中仍是显式回调模拟，尚不能当作Utility进程或整应用验证。首次终态回归未执行健康重开后的显式MCP选择而被`RESEARCH_BRIDGE_UNAVAILABLE`拒绝；测试按既有产品入口补齐选择后通过，产品准入没有放宽。实际包七类/十四次启动及准确CI仍待；SQLite query_only不冒充操作系统磁盘满或权限故障。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：
