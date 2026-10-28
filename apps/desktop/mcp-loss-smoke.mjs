@@ -8,6 +8,18 @@ export function mcpLossProofName(scenario) {
 	return "desktop-smoke-game-mcp-" + scenario + ".application.private.json";
 }
 
+export async function assertBlockedMcpExecution(driver, until) {
+	for (const action of ["start", "catalog"]) await until(async () => {
+		// A UI response probe is an earlier, transient supervisor admission gate.
+		// Check it and invoke the synchronous admission prefix in the same turn;
+		// keep requiring the ledger gate's exact rejection, not either error.
+		const ui = driver.getUi();
+		if (!ui || ui.nativeProbePending) return false;
+		await assert.rejects(driver.api("game", { action }), /GAME_TASK_START_BLOCKED/);
+		return true;
+	}, "MCP_LOSS_NATIVE_RESPONSE_CHECK_PENDING");
+}
+
 export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requests, base }) {
 	const accepted = driver.mcpLossScenario === "accepted", expected = mcpLossCase(driver.mcpLossScenario), originalClient = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), taskId = (await state()).currentTaskId;
 	const usage = (await state()).tasks[0].details.usage;
@@ -41,7 +53,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		const refused = await state(), current = refused.unresolved[0], replacement = driver.getBridgeClient();
 		assert.notEqual(replacement, originalClient); assert.equal(refused.developmentFrozen, true); assert.equal(refused.tasks[0].state, expected.taskState);
 		assert.deepEqual(current, { ...original, state: expected.intentState }); assert.equal(current.terminal, null);
-		for (const action of ["start", "catalog"]) await assert.rejects(driver.api("game", { action }), /GAME_TASK_START_BLOCKED/);
+		await assertBlockedMcpExecution(driver, until);
 		if (driver.mcpLossScenario === "receipt-mismatch") {
 			const beforeRetry = await world(), rpcBeforeRetry = replacement.stats.requests;
 			await driver.api("game", { action: "reconcile", args: { intentId: original.intentId } });
@@ -54,7 +66,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		await replacement.close(); assert.equal(replacement.exitConfirmed, true); assert.equal((await state()).developmentFrozen, true);
 	} else {
 		await assert.rejects(driver.api("game", { action: "reconcile", args: { intentId: original.intentId } }), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/);
-		for (const action of ["start", "catalog"]) await assert.rejects(driver.api("game", { action }), /GAME_TASK_START_BLOCKED/);
+		await assertBlockedMcpExecution(driver, until);
 		await reloadGame(); await until(disabledExecution, "UNKNOWN_COMMIT_STILL_DISABLED");
 		assert.deepEqual((await state()).unresolved, [original]); assert.equal((await state()).developmentFrozen, true); assert.equal(driver.getBridgeClient(), originalClient); assert.equal(driver.bridgeExitConfirmed(), true);
 	}
