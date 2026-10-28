@@ -6,9 +6,9 @@ import { spawn } from "node:child_process";
 import { ReadOnlyMcpClient } from "./mcp-client.mjs";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 
-export function bridgeFixtureOptions(root, runId) {
+export function bridgeFixtureOptions(root, runId, { directory } = {}) {
 	if (!/^[0-9a-f-]{36}$/.test(runId ?? "")) throw new Error("EXPLICIT_BRIDGE_SMOKE_REQUIRED");
-	const marker = join(root, ".local/m2-smoke", runId, "Spherewright.Mcp.exe");
+	const marker = join(directory ?? join(root, ".local/m2-smoke", runId), "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M2_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
 		launch(_selection, options) { return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/mcp-server.mjs"), "telemetry"], { windowsHide: true, stdio: "pipe", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } }), options); },

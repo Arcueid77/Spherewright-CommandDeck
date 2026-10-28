@@ -3,15 +3,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
 
-export async function runGatewaySmoke(driver) {
-	const directory = join(driver.root, ".local/gateway-smoke", driver.runId), fixtureRoot = join(driver.root, ".local/m2-smoke", driver.runId);
-	await mkdir(directory, { recursive: true }); await mkdir(fixtureRoot, { recursive: true });
-	const marker = join(fixtureRoot, "Spherewright.Mcp.exe"); await writeFile(marker, "OWNED_M2_SYNTHETIC_FIXTURE", { flag: "wx" });
+export function gatewaySmokeUi(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source }), state = () => driver.api("gateway", { action: "snapshot" });
 	const until = async (predicate, label) => { const end = performance.now() + 10000; while (!await predicate()) { assert.ok(performance.now() < end, "GATEWAY_SMOKE_TIMEOUT_" + label); await new Promise(resolve => setTimeout(resolve, 40)); } };
 	const open = async () => { await until(() => evaluate("[...document.querySelectorAll('header button')].some(button=>button.textContent==='外部 Agent'&&!button.disabled)"), "HEADER"); await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='外部 Agent').click();true"); await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"外部 Agent 只读网关\"]'))"), "PANEL"); };
 	const click = async label => { const selector = `[...document.querySelectorAll('[aria-label="外部 Agent 只读网关"] button')].find(button=>button.textContent===${JSON.stringify(label)}&&!button.disabled)`; await until(() => evaluate(`Boolean(${selector})`), "BUTTON"); await evaluate(`${selector}.click();true`); };
 	const copy = async () => { await click("复制 MCP 配置"); await until(() => evaluate("document.querySelector('[aria-label=\"外部 Agent 只读网关\"] [role=status]')?.textContent.includes('已复制')===true"), "COPIED"); const config = driver.getGatewayConfigurationForSmoke()?.mcpServers?.["spherewright-commanddeck"]; assert.equal(config.command, process.execPath); assert.deepEqual(config.args, [join(driver.root, "apps/desktop/agent-gateway-stdio.mjs")]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1"); assert.ok(!String(await evaluate("document.body.innerText")).includes(config.env.COMMANDDECK_GATEWAY_KEY)); return config; };
+	return { evaluate, state, until, open, click, copy };
+}
+
+export async function runGatewaySmoke(driver) {
+	const directory = driver.context?.root ?? join(driver.root, ".local/gateway-smoke", driver.runId), fixtureRoot = driver.gatewayFixtureDirectory ?? join(driver.root, ".local/m2-smoke", driver.runId);
+	await mkdir(directory, { recursive: true }); await mkdir(fixtureRoot, { recursive: true });
+	const marker = join(fixtureRoot, "Spherewright.Mcp.exe"); await writeFile(marker, "OWNED_M2_SYNTHETIC_FIXTURE", { flag: "wx" });
+	const { evaluate, state, until, open, click, copy } = gatewaySmokeUi(driver);
 	const peers = [], exits = []; const peerFor = async config => { const peer = new GatewaySmokeClient(config, driver.root); peers.push(peer); assert.equal((await peer.initialize()).result.protocolVersion, "2025-11-25"); return peer; };
 	const runtime = driver.getRuntimePid(), probes = driver.getProbeSequence(); assert.equal(probes, 0); assert.equal((await state()).enabled, false);
 	try {
@@ -38,7 +43,14 @@ export async function runGatewaySmoke(driver) {
 		assert.equal(await evaluate("window.deck.gateway('start').then(()=>false,error=>error.message.includes('SYSTEM_POWER_PAUSED'))"), true);
 		driver.emitPowerForSmoke("resume"); await until(() => driver.getPower().ready, "WAKE"); assert.equal((await state()).enabled, false); assert.equal((await secondPeer.observe({ section: "status" })).result.isError, true);
 		assert.equal(driver.getRuntimePid(), runtime); assert.equal(driver.getProbeSequence(), probes); assert.equal((await driver.api("bridge", { action: "snapshot" })).requestPerformance.started, before);
-		for (const peer of peers.splice(0)) exits.push(await peer.close());
-		await writeFile(join(directory, "application.private.json"), JSON.stringify({ runId: driver.runId, readOnlyGateway: true, copiedConfigurationAccepted: true, protocolToolScopeVerified: true, freshAndStaleCacheVerified: true, noExtraMcpRequestsAfterDisconnect: true, uiReloadRetainsGateway: true, oldConfigRevokedAfterRestart: true, suspendRevokesWithoutAutomaticReopen: true, credentialsNotRendered: true, sameRuntimeWithoutModelReplay: true, ownServerExitConfirmed: true, externalPeerExits: exits, rpcCountAfterDisconnect: before, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, clipboardOsWriteVerified: false, physicalInputVerified: false, actualOsSleepVerified: false, fullPackagedGatewayVerified: false }, null, 2), { flag: "wx" });
+		if (driver.gatewayCase?.phase === "record") {
+			await click("开启只读网关"); await until(async () => (await state()).enabled, "BEFORE_APPLICATION_EXIT");
+			const exitConfig = await copy(), exitPeer = await peerFor(exitConfig); assert.equal((await exitPeer.observe({ section: "research" })).result.isError, false);
+			await writeFile(join(directory, "gateway-exit-config.private.json"), JSON.stringify(exitConfig), { flag: "wx", mode: 0o600 });
+		}
+		while (peers.length) { exits.push(await peers[0].close()); peers.shift(); }
+		const proof = { runId: driver.runId, readOnlyGateway: true, copiedConfigurationAccepted: true, protocolToolScopeVerified: true, freshAndStaleCacheVerified: true, noExtraMcpRequestsAfterDisconnect: true, uiReloadRetainsGateway: true, oldConfigRevokedAfterRestart: true, suspendRevokesWithoutAutomaticReopen: true, credentialsNotRendered: true, sameRuntimeWithoutModelReplay: true, ownServerExitConfirmed: true, gatewayEnabledBeforeApplicationExit: (await state()).enabled, externalPeerExits: exits, rpcCountAfterDisconnect: before, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, clipboardOsWriteVerified: false, physicalInputVerified: false, actualOsSleepVerified: false, fullPackagedGatewayVerified: false };
+		if (!driver.gatewayCase) await writeFile(join(directory, "application.private.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
+		return proof;
 	} finally { for (const peer of peers) await peer.close().catch(() => {}); }
 }

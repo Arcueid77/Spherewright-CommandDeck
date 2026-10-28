@@ -21,6 +21,7 @@ import { runDevelopmentUsageSmoke } from "./development-usage-smoke.mjs";
 import { runDevelopmentContextRecovery } from "./development-context-recovery.mjs";
 import { runDevelopmentContextInterruption } from "./development-context-interruption.mjs";
 import { runProviderContextSmoke } from "./development-provider-context-smoke.mjs";
+import { runPackagedGatewaySmoke } from "./agent-gateway-packaged-smoke.mjs";
 
 export async function runPortableSmoke(driver, videoArchive, journal) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -41,6 +42,11 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 	const journalInterruption = await readJournalInterruptionCase(context);
 	const videoArchiveCase = await readVideoArchiveCase(context);
 	const usageRecovery = await readModelUsageRecovery(context);
+	if (driver.gatewayCase) {
+		assert.ok(!usageRecovery && !journalInterruption && !videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario && !driver.developmentUsageCase, "GATEWAY_FIXTURE_MODE_CONFLICT");
+		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
+		await runPackagedGatewaySmoke(driver, manifest); return;
+	}
 	if (driver.developmentUsageCase) {
 		assert.equal(manifest.modelUsageSummary, 1);
 		assert.equal(manifest.portableDevelopmentUsage, 1); assert.ok(!usageRecovery && !journalInterruption && !videoArchiveCase && !profileCase && !driver.commandCase && !driver.storageCase && !driver.diagnostics && !driver.runtimeScenario && !driver.mcpLossScenario, "DEVELOPMENT_USAGE_MODE_CONFLICT");

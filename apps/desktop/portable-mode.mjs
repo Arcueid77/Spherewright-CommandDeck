@@ -9,6 +9,20 @@ export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
 export const portableCommandScenarios = Object.freeze(["reload", "runtime", "helper", "exit"]);
 export const developmentUsagePrompt = "Read fixture.txt and report its synthetic content. Do not edit files or run commands.";
+export function portableGatewayCase(argv) {
+	const values = argv.filter(arg => arg.startsWith("--portable-gateway"));
+	if (!values.length) return null;
+	const phase = values[0].slice("--portable-gateway=".length);
+	if (!argv.includes("--portable-smoke") || values.length !== 1 || values[0] !== "--portable-gateway=" + phase || !["record", "reopen"].includes(phase) || argv.some(arg => arg.startsWith("--portable-") && arg !== "--portable-smoke" && arg !== values[0])) throw new Error("PACKAGED_GATEWAY_CASE_REQUIRED");
+	return { phase };
+}
+export function assertPortableGatewayAction(action, args, { phase, internal = false } = {}) {
+	if (!["record", "reopen"].includes(phase)) throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	if (action === "gateway" && ["snapshot", "start", "copy", "stop"].includes(args?.action)) return;
+	if (["probe", "attach", "start-fixture"].includes(action) || action === "journal" && !["snapshot", "read"].includes(args?.action) || action === "video" && args?.action === "bookmark") throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	if (internal && phase === "record" && (action === "bridge-select" || action === "bridge" && ["refresh", "disconnect"].includes(args?.action))) return;
+	return assertPortableAction(action, args);
+}
 export function portableDevelopmentUsageCase(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-development-usage"));
 	if (!values.length) return null;
@@ -146,9 +160,10 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
-	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv), developmentUsage = portableDevelopmentUsageCase(argv);
+	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv), developmentUsage = portableDevelopmentUsageCase(argv), gateway = portableGatewayCase(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
+	if (gateway) allowed.add("--portable-gateway=" + gateway.phase);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
 	if (mcpScenario) allowed.add("--portable-mcp-loss=" + mcpScenario);
 	if (diagnostic) allowed.add("--portable-diagnostics");

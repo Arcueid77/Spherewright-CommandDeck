@@ -39,6 +39,7 @@
 		"test:packaged-command": "node scripts/packaged-command-smoke.mjs",
 		"test:packaged-journal-interruption": "node scripts/packaged-journal-interruption-smoke.mjs",
 		"test:packaged-video-archive": "node scripts/packaged-video-archive-smoke.mjs",
+		"test:packaged-gateway": "node scripts/packaged-gateway-smoke.mjs",
 		"installer:toolchain": "node scripts/prepare-installer-toolchain.mjs",
 		"package:installer": "node scripts/package-installer.mjs",
 		"test:installer": "node scripts/installer-smoke.mjs",
