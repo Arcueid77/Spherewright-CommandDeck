@@ -74,6 +74,7 @@ jobs:
       - run: npm run test:diagnostics
       - run: npm run package:desktop -- --output artifacts/portable-desktop
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop --reopen-history
+      - run: npm run test:packaged-popouts -- --source artifacts/portable-desktop
       - run: npm run test:packaged-journal-interruption -- --source artifacts/portable-desktop
       - run: npm run test:packaged-video-archive -- --source artifacts/portable-desktop
       - run: npm run test:packaged-video-archive -- --source artifacts/portable-desktop --coarse-clock

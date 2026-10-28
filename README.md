@@ -286,6 +286,14 @@ Protected profiles support explicit Chat Completions or Messages protocol config
 
 `npm run test:vault` uses a synthetic credential to verify Windows encryption and reopening in a separate Electron process. Node tests additionally exercise split provider echoes, rejected control fields, safe initialization errors and actual Pi session/SQLite persistence. The desktop workbench smoke covers the renderer-to-supervisor configuration whitelist and the private task-bound runtime channel against a loopback fake provider. These are zero-external-network credential tests; only the existing MiniMax Chat Completions configuration has a live-model result. A corrupt/newer vault or unavailable OS protection is never silently reset or stored as plaintext.
 
+## Independent panel windows (M6)
+
+Select a tab and click **独立窗口** in its group header to move that panel into a separate desktop window. Use **收回主窗口**, close the separate window, or select **收回全部浮窗** to bring panels back. These operations retain the same task and editor state. Up to eight separate windows are supported; the native game viewport and recording controls remain in the main window.
+
+The windows share the original renderer's React state and supervised runtime. Main-window settings and confirmation dialogs also block input in separate panels. Initial placement is constrained to an available display, with relocation when a display disappears. Physical multi-monitor placement, DPI transitions and cross-window drag gestures still require acceptance; pointer docking within the main window remains available.
+
+`npm run test:workbench` covers editing an unsaved draft in a real separate Electron window, returning it, UI reload, renderer crash recovery, native close, modal gating and unchanged task/runtime identity. `npm run test:packaged-popouts -- --source <bundle>` adds three actual application starts with retained synthetic closed history and read-only drafts. The packaged entry is implemented; its first candidate result is recorded separately in [ROADMAP.md](ROADMAP.md). Neither fixture makes real game or model calls.
+
 ## Read-only bridge panels (M2)
 
 Open **只读舰桥**, choose the intended `Spherewright.Mcp.exe`, and inspect its connection details. This starts one local MCP process; it does not start DSP or load a world. The selection is kept by the supervisor across UI reloads, but must be selected again after the whole application restarts. Reconnecting requires the selected executable/DLL/config cohort to retain its recorded fingerprint; changing it requires an explicit new selection. The fingerprint is a file observation at connection time, not a frozen payload, loaded-DLL proof or installed Plugin hash.

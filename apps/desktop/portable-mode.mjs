@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { assertContextFixtureTask } from "./development-context-case.mjs";
 import { assertProviderContextTask, providerContextPrefix } from "./development-provider-context-case.mjs";
 import { portableMcpScenarios } from "./mcp-loss-case.mjs";
+import { portablePopoutCase } from "./popout-case.mjs";
 export { portableMcpScenarios } from "./mcp-loss-case.mjs";
 
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
@@ -161,9 +162,11 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
+	const popout = portablePopoutCase(argv);
 	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv), developmentUsage = portableDevelopmentUsageCase(argv), gateway = portableGatewayCase(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
+	if (popout) allowed.add("--portable-popouts=" + popout.phase);
 	if (gateway) allowed.add("--portable-gateway=" + gateway.phase);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
 	if (mcpScenario) allowed.add("--portable-mcp-loss=" + mcpScenario);

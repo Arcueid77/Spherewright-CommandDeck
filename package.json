@@ -17,6 +17,7 @@
 		"test:portable-pi": "node scripts/portable-pi-smoke.mjs",
 		"package:desktop": "node scripts/package-desktop.mjs",
 		"test:portable-desktop": "node scripts/portable-desktop-smoke.mjs",
+		"test:packaged-popouts": "node scripts/portable-desktop-smoke.mjs --popouts",
 		"test:process-cohort": "node scripts/cohort-observer-smoke.mjs",
 		"test:profile-lock": "node scripts/profile-lock-smoke.mjs",
 		"test:startup-failure": "node scripts/startup-failure-smoke.mjs",

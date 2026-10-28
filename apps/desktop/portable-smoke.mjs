@@ -23,6 +23,7 @@ import { runDevelopmentContextRecovery } from "./development-context-recovery.mj
 import { runDevelopmentContextInterruption } from "./development-context-interruption.mjs";
 import { runProviderContextSmoke } from "./development-provider-context-smoke.mjs";
 import { runPackagedGatewaySmoke } from "./agent-gateway-packaged-smoke.mjs";
+import { runPackagedPopoutSmoke } from "./popout-packaged-smoke.mjs";
 
 export async function runPortableSmoke(driver, videoArchive, journal) {
 	const { root, context, api, testCommand, getRuntimePid, getProbeSequence, getUi, privateDirectory } = driver;
@@ -40,6 +41,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.equal(renderer.noNode, true); assert.equal(renderer.hasBridge, true); assert.deepEqual(renderer.errors, []);
+	if (driver.popoutCase) { await runPackagedPopoutSmoke(driver, manifest); return; }
 	const journalInterruption = await readJournalInterruptionCase(context);
 	const videoArchiveCase = await readVideoArchiveCase(context);
 	const usageRecovery = await readModelUsageRecovery(context);

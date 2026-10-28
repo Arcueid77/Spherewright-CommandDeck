@@ -13,6 +13,11 @@
 body {
 	margin: 0;
 }
+.popout-actions { display: flex; align-items: center; gap: 6px; padding: 0 6px; }
+.popout-actions button { padding: 3px 7px; white-space: nowrap; }
+.popout-actions span { color: #e8bd78; font-size: 11px; }
+.popout-modal-notice { position: fixed; inset: 0; z-index: 10000; display: grid; place-content: center; padding: 24px; background: #0b1119e8; text-align: center; }
+.popout-modal-notice[hidden] { display: none; }
 button,
 select,
 input,

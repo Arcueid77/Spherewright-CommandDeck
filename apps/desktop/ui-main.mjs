@@ -1,17 +1,18 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, protocol, screen } from "electron";
 import { once } from "node:events";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { confirmResearchFromUi } from "./research-confirmation.mjs";
 import { createVideoProtocol, videoScheme, videoPlaybackUrl } from "./video-protocol.mjs";
 import { recordingPermissionGate } from "./recording-permission.mjs";
+import { createRendererProtocol, rendererScheme, rendererUrl } from "./renderer-protocol.mjs";
+import { managePopoutWindows } from "./popout-windows.mjs";
 
-protocol.registerSchemesAsPrivileged([{ scheme: videoScheme, privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: rendererScheme, privileges: { standard: true, secure: true } }, { scheme: videoScheme, privileges: { standard: true, secure: true, stream: true, corsEnabled: true } }]);
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const rendererFile = join(root, "dist/renderer/index.html");
-const rendererUrl = pathToFileURL(rendererFile).href;
+const rendererDirectory = join(root, "dist/renderer");
 const smoke = process.argv.includes("--smoke-ui");
 const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
 const diagnosticSmoke = smoke && process.argv.includes("--smoke-diagnostics-ui");
@@ -27,7 +28,7 @@ let window,
 let confirmingGame = false;
 let diagnosticSaving = false, documentGeneration = 0;
 const videoEntries = new Map(); let videoSelection = 0;
-let recordingGate, recordingPermit;
+let recordingGate, recordingPermit, popouts;
 const pending = new Map();
 function send(message) {
 	if (process.connected) process.send(message, () => {});
@@ -60,6 +61,13 @@ async function testCommand(message) {
 		let result;
 		if (message.name === "evaluate")
 			result = await window.webContents.executeJavaScript(message.source);
+		else if (message.name === "popout-state") result = [...popouts.windows].map(([name, child]) => ({ name, id: child.id, url: child.webContents.getURL(), visible: child.isVisible(), bounds: child.getBounds(), preferences: { sandbox: child.webContents.getLastWebPreferences().sandbox, contextIsolation: child.webContents.getLastWebPreferences().contextIsolation, nodeIntegration: child.webContents.getLastWebPreferences().nodeIntegration, preload: Boolean(child.webContents.getLastWebPreferences().preload) } }));
+		else if (["popout-evaluate", "popout-close"].includes(message.name)) {
+			const child = popouts.windows.get(message.windowName);
+			if (!child || child.isDestroyed()) throw new Error("UNKNOWN_OWN_POPOUT");
+			if (message.name === "popout-close") { child.close(); result = true; }
+			else result = await child.webContents.executeJavaScript(message.source);
+		}
 		else if (message.name === "portable-renderer-state" && portableSmoke) {
 			const dom = await window.webContents.executeJavaScript("({body:document.body.textContent.length,brand:document.querySelector('.brand')?.textContent,groups:document.querySelectorAll('.dv-groupview').length,noNode:typeof require==='undefined',hasBridge:typeof window.deck?.snapshot==='function',readyState:document.readyState})");
 			result = { ...dom, loading: window.webContents.isLoadingMainFrame(), errors: [...portableRendererErrors] };
@@ -171,6 +179,7 @@ if (typeof process.send !== "function") {
 	app
 		.whenReady()
 		.then(async () => {
+			await protocol.handle(rendererScheme, createRendererProtocol(rendererDirectory));
 			window = new BrowserWindow({
 				width: 1440,
 				height: 940,
@@ -187,7 +196,7 @@ if (typeof process.send !== "function") {
 			});
 			window.removeMenu();
 			if (portableSmoke) window.webContents.on("console-message", (details) => { if (details.level === "error") { portableRendererErrors.push(String(details.message).slice(0, 400)); if (portableRendererErrors.length > 4) portableRendererErrors.shift(); } });
-			window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+			popouts = managePopoutWindows({ owner: window, BrowserWindow, screen, closing: () => closing });
 			window.webContents.on("will-navigate", (event) => event.preventDefault());
 			recordingGate = recordingPermissionGate({ owner: window.webContents, url: rendererUrl, generation: () => documentGeneration, authorize: (permit, generation) => request("recording", { action: "authorize", generation, args: { permit } }) });
 			window.webContents.session.setPermissionRequestHandler((contents, permission, callback) => callback(recordingGate.permission(contents, permission)));
@@ -322,7 +331,7 @@ if (typeof process.send !== "function") {
 			);
 			window.webContents.on("render-process-gone", () => {
 				if (!closing && !window.isDestroyed())
-					void window.loadFile(rendererFile).catch(() => {});
+					void window.loadURL(rendererUrl).catch(() => {});
 			});
 			window.on("close", (event) => {
 				if (allowClose) return;
@@ -360,7 +369,7 @@ if (typeof process.send !== "function") {
 				hwnd: window.getNativeWindowHandle().readBigUInt64LE().toString(),
 			});
 			await registered;
-			await window.loadFile(rendererFile);
+			await window.loadURL(rendererUrl);
 		})
 		.catch(() => {
 			console.error("MANAGED_UI_STARTUP_FAILED");

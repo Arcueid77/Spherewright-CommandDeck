@@ -13,10 +13,12 @@ import { seedPortableHistory } from "./portable-history-fixture.mjs";
 import { readPortableHistory } from "../apps/desktop/portable-history.mjs";
 import { readInstalledProfileContext } from "./installer-upgrade-state.mjs";
 
-const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
+const root = fileURLToPath(new URL("../", import.meta.url)), rawArgs = process.argv.slice(2), popouts = rawArgs.includes("--popouts"), args = rawArgs.filter(arg => arg !== "--popouts");
+if (popouts && (rawArgs.filter(arg => arg === "--popouts").length !== 1 || args.length !== 2 || args[0] !== "--source")) throw new Error("EXPLICIT_PACKAGED_POPOUTS_REQUIRED");
 if (process.platform !== "win32" || ![2, 3, 4].includes(args.length) || !["--source", "--installed-source"].includes(args[0]) || args.length === 3 && args[2] !== "--reopen-history" || args.length === 4 && (args[0] !== "--installed-source" || args[2] !== "--resume-profile")) throw new Error("EXPLICIT_WINDOWS_PORTABLE_DESKTOP_REQUIRED");
 const reopenHistory = args[2] === "--reopen-history";
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
+if (popouts) assert.equal(manifest.independentPopoutWindows, 1, "REBUILD_WITH_POPOUT_FIXTURE_REQUIRED");
 if (manifest.nativeProcessObserver !== 1) throw new Error("PACKAGED_PROCESS_OBSERVER_UNSUPPORTED_REBUILD_REQUIRED");
 const installed = args[0] === "--installed-source";
 if (installed) await validateInstalledSmokeSource(source, manifest.sourceRevision);
@@ -28,7 +30,8 @@ let child, exitConfirmed = false, remaining = null, verified = false;
 try {
 	if (!installed) await copyBundleTree(source, copy); await verifyBundle(copy);
 	let history = resumed?.history ?? null;
-	for (const phase of resumed ? [resumed.phase] : reopenHistory ? ["fresh", "reopen"] : ["fresh"]) {
+	for (const phase of resumed ? [resumed.phase] : popouts ? ["fresh", "record", "reopen"] : reopenHistory ? ["fresh", "reopen"] : ["fresh"]) {
+	const popoutPhase = popouts && phase !== "fresh";
 	const phaseProofRoot = phase === "fresh" ? proofRoot : join(proofRoot, phase); await mkdir(phaseProofRoot, { recursive: !resumed });
 	exitConfirmed = false; remaining = null;
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
@@ -42,7 +45,7 @@ try {
 			await assert.rejects(realpath(to), { code: "ENOENT" }); await rename(from, to);
 		}
 	}
-	child = spawn(join(copy, bundleExecutable), ["--portable-smoke"], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
+	child = spawn(join(copy, bundleExecutable), ["--portable-smoke", ...(popoutPhase ? ["--portable-popouts=" + phase] : [])], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 	let output = ""; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
 	let timedOut = false; const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000);
 	let code, signal; try { [code, signal] = await once(child, "exit"); exitConfirmed = true; } finally { clearTimeout(timer); }
@@ -69,6 +72,13 @@ try {
 	assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
 	assert.ok(application, "Packaged application did not write its completion proof");
 	assert.equal(application.runId, runId); assert.equal(application.sourceRevision, manifest.sourceRevision); assert.equal(application.piCommit, manifest.piCommit);
+	if (popoutPhase) {
+		assert.equal(application.popoutPhase, phase); assert.equal(application.independentWindows, 3);
+		assert.deepEqual(application.panels, ["editor", "tasks", "production"]);
+		for (const field of ["layoutAndReadOnlyDraftRetained", "originalClosedHistoryRetained", "originalRuntimeRetained", "noTasksOrModelReplay", "childWindowsWithoutPreloadOrNode", "gameViewportRemainsInMain"]) assert.equal(application[field], true, field);
+		assert.equal(application.wholeApplicationReopen, phase === "reopen"); assert.equal(application.allWindowsReturned, phase === "reopen");
+		assert.equal(application.syntheticModelRequests, 0); assert.equal(application.realModelRequests, 0); assert.equal(application.gameCalls, 0);
+	} else {
 	if (manifest.desktopTray === 1) for (const field of ["supervisorTrayRetainedAcrossReload", "nativeTrayMenuRestoresMinimizedUi", "exitRequestedThroughTray"]) assert.equal(application[field], true, field);
 	if (manifest.powerLifecycle === 1) {
 		for (const field of ["synthesizedPowerMonitorEvents", "rejectedAdmissionWhileSuspended", "reloadRetainsPowerGate", "wakeCheckFailureStaysBlockedUntilUiRetry", "noModelOrTaskReplay", "originalNativeBindingRetained"]) assert.equal(application.powerLifecycle?.[field], true, field);
@@ -81,21 +91,24 @@ try {
 		if (phase === "reopen") assert.equal(application.eventJournal.previousAppRecordingReopened, true);
 	}
 	if (phase === "reopen" || resumed) { assert.equal(application.closedHistoryReopened, true); assert.equal(application.emptyIsolatedWorkspace, false); assert.equal(application.history?.closedHistorySha256, history.sha256); assert.equal((await readPortableHistory({ root: directory, runId })).sha256, history.sha256); }
+	}
 	const trace = await readFile(join(directory, "runtime.trace.private.log")), text = trace.toString().toLowerCase();
 	for (const file of ["hostfxr.dll", "coreclr.dll", "System.Windows.Forms.dll"]) assert.ok(text.includes(join(copy, "resources/app/artifacts/native", file).toLowerCase()), "App-local native runtime missing: " + file);
-	assert.ok(text.includes("portable-command-cache"));
+	if (!popoutPhase) assert.ok(text.includes("portable-command-cache"));
 	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { ...application, processObserver: "native-v1", installedExecutable: installed, profileRetainedForInstallerVerification: installed, outsideSourceCheckout: true, developerToolsAbsentFromPath: true, noExternalNodeTestChild: true, sharedDotnetRootsUnavailable: true, appLocalNativeAndCommandRuntimesObserved: true, bundleUnchanged: true, noPackagedChildrenRemain: true, files: manifest.files.length, bytes: manifest.bytes, traceSha256: bundleHash(trace) };
+	const proof = { ...application, processObserver: "native-v1", installedExecutable: installed, profileRetainedForInstallerVerification: installed, outsideSourceCheckout: true, developerToolsAbsentFromPath: true, noExternalNodeTestChild: true, sharedDotnetRootsUnavailable: true, appLocalNativeAndCommandRuntimesObserved: !popoutPhase, appLocalNativeRuntimeObserved: true, bundleUnchanged: true, noPackagedChildrenRemain: true, files: manifest.files.length, bytes: manifest.bytes, traceSha256: bundleHash(trace) };
 	await writeFile(join(phaseProofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	await writeFile(join(phaseProofRoot, "runtime.trace.private.log"), trace, { flag: "wx" });
 	await writeFile(join(root, ".local/portable-desktop-smoke.json"), JSON.stringify(proof, null, 2));
-	if (reopenHistory && phase === "fresh") {
+	if ((reopenHistory || popouts) && phase === "fresh") {
 		history = await seedPortableHistory({ directory, bundle: copy, runId });
 		assert.equal((await realpath(directory)).toLowerCase(), directory.toLowerCase());
 		for (const name of ["application-proof.json", "runtime.trace.private.log"]) await rename(join(directory, name), join(directory, "fresh-" + name));
+	} else if (popouts && phase === "record") {
+		for (const name of ["application-proof.json", "runtime.trace.private.log"]) await rename(join(directory, name), join(directory, "record-" + name));
 	} else verified = true;
 	}
-	console.log(JSON.stringify({ portableDesktopSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, installedExecutable: installed, outsideSourceCheckout: true, files: manifest.files.length, closedHistoryReopened: reopenHistory || Boolean(resumed), resumedPhase: resumed?.phase ?? null, applicationRuns: reopenHistory ? 2 : 1, gameCalls: 0, realModelRequests: 0, cleanWindowsVmVerified: false, installerVerified: false }));
+	console.log(JSON.stringify({ portableDesktopSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, installedExecutable: installed, outsideSourceCheckout: true, files: manifest.files.length, closedHistoryReopened: reopenHistory || popouts || Boolean(resumed), independentPopoutsReopened: popouts, resumedPhase: resumed?.phase ?? null, applicationRuns: popouts ? 3 : reopenHistory ? 2 : 1, gameCalls: 0, realModelRequests: 0, cleanWindowsVmVerified: false, installerVerified: false }));
 } finally {
 	// On an unconfirmed exit retain the candidate for diagnosis; never remove a
 	// live executable or kill an adopted process to make the test look clean.

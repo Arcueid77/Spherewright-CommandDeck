@@ -17,6 +17,7 @@ import { AgentGatewayPanel } from "./agent-gateway";
 import { VideosPanel } from "./videos";
 import { RecordingIndicator } from "./recording";
 import { UsageSummaryPanel } from "./usage-summary";
+import { checkPopoutLayout, configurePopouts, PopoutActions, popoutPage } from "./popouts";
 
 type Target = { id: string; pid: number; kind: string; title: string };
 type NativeState = {
@@ -435,10 +436,11 @@ function addBridgePanels(api: DockviewReadyEvent["api"], activate = false) {
 }
 async function ready(event: DockviewReadyEvent) {
 	const api = event.api;
+	const popouts = configurePopouts(api);
 	const snapshot = await window.deck.snapshot();
 	if (snapshot.layoutMode === "development") {
 		let restored = false;
-		try { const saved = await persistedLayout.load(); if (saved) { api.fromJSON(saved as unknown as Parameters<typeof api.fromJSON>[0]); restored = true; } } catch { api.clear(); }
+		try { const saved = await persistedLayout.load(); if (saved) { api.fromJSON(checkPopoutLayout(saved as unknown as Parameters<typeof api.fromJSON>[0])); await api.popoutRestorationPromise; restored = true; } } catch { api.clear(); }
 		if (!restored) {
 			api.addPanel({ id: "editor", component: "editor", title: "代码 / 差异" });
 			api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口", position: { referencePanel: "editor", direction: "within" }, inactive: true });
@@ -452,7 +454,7 @@ async function ready(event: DockviewReadyEvent) {
 			addBridgePanels(api);
 		}
 		addGamePanel(api);
-		api.onDidLayoutChange(() => { void persistedLayout.save(api.toJSON()).catch(() => {}); });
+		api.onDidLayoutChange(() => { if (popouts.canSave()) void persistedLayout.save(api.toJSON()).catch(() => {}); });
 		return;
 	}
 	api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口" });
@@ -512,6 +514,7 @@ function App() {
 				</div>
 				<div className="tag">{observationOnly ? "限时只读观测" : "开发 · 观察 · 有限研究"}</div>
 				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
+				<button disabled={!layoutReady} onClick={() => { for (const popout of dock.current?.getPopouts() ?? []) popout.window.close(); }}>收回全部浮窗</button>
 				<button disabled={observationOnly} onClick={() => setSettings(true)}>模型设置</button>
 				<button disabled={!layoutReady} onClick={() => setDiagnostics(true)}>诊断报告</button>
 				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
@@ -532,6 +535,8 @@ function App() {
 					className="dockview-theme-abyss"
 					dndStrategy="pointer"
 					components={components}
+					popoutUrl={popoutPage}
+					rightHeaderActionsComponent={PopoutActions}
 					onReady={(event) => { dock.current = event.api; setLayoutReady(false); void ready(event).then(() => setLayoutReady(true)); }}
 				/>
 			</div>

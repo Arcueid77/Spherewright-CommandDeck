@@ -11,6 +11,7 @@ import { runDesktopSmoke } from "./desktop-smoke.mjs";
 import { inspectOwnedUi } from "./inspect-ui.mjs";
 import { runAdapterDesktopSmoke } from "./adapter-desktop-smoke.mjs";
 import { runWorkbenchSmoke } from "./workbench-smoke.mjs";
+import { portablePopoutCase, assertPortablePopoutAction } from "./popout-case.mjs";
 import { createUiWatchdog } from "./ui-watchdog.mjs";
 import { CredentialVault, protectedProvider } from "./credential-vault.mjs";
 import { readPortableProfileCase, runProfileVaultFixture } from "./portable-profile.mjs";
@@ -58,6 +59,7 @@ const storageCase = portableSmoke ? portableStorageCase(process.argv) : null;
 const commandCase = portableSmoke ? portableCommandCase(process.argv) : null;
 const developmentUsageCase = portableSmoke ? portableDevelopmentUsageCase(process.argv) : null;
 const gatewayCase = portableSmoke ? portableGatewayCase(process.argv) : null;
+const popoutCase = portableSmoke ? portablePopoutCase(process.argv) : null;
 let developmentUsageRootId, developmentUsageProfileId, developmentUsageStarted = false;
 let developmentContextTasks = [], developmentContextProfiles = [], developmentContextPending = false;
 let commandFixtureRootId;
@@ -129,7 +131,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !gatewaySmoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !popoutCase && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !gatewaySmoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
@@ -357,7 +359,8 @@ async function api(action, args, source) {
 	systemPower.assertAction(action, args);
 	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
 	if (portableSmoke && !diagnosticSmoke) {
-		if (gatewayCase) assertPortableGatewayAction(action, args, { phase: gatewayCase.phase, internal: source === fixtureAuthority });
+		if (popoutCase) assertPortablePopoutAction(action, args);
+		else if (gatewayCase) assertPortableGatewayAction(action, args, { phase: gatewayCase.phase, internal: source === fixtureAuthority });
 		else if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending, interruption: developmentUsageCase.interruption === true, multipleProviders: developmentUsageCase.multipleProviders === true, contextProfiles: developmentContextProfiles, summaryFailure: developmentUsageCase.summaryFailure });
 		else if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
 		else if (storageCase) assertPortableStorageAction(action, args, { internal: source === fixtureAuthority });
@@ -593,6 +596,7 @@ function clearUiTests(record) {
 }
 function startUi() {
 	const args = [root, "--managed-ui", ...(smoke ? ["--smoke-ui"] : []), ...(diagnosticSmoke ? ["--smoke-diagnostics-ui"] : []), ...(portableSmoke ? ["--portable-smoke"] : []), ...(gatewayCase ? ["--portable-gateway=" + gatewayCase.phase] : []), ...(portableDiagnostics ? ["--portable-diagnostics"] : []), ...(portableScenario ? ["--portable-runtime-loss=" + portableScenario] : []), ...(portableMcpLoss ? ["--portable-mcp-loss=" + portableMcpLoss] : []), ...(storageCase ? ["--portable-storage-fault=" + storageCase.scenario, ...(storageCase.resume ? ["--portable-storage-resume"] : [])] : []), ...(commandCase ? ["--portable-command-loss=" + commandCase.scenario, ...(commandCase.resume ? ["--portable-command-resume"] : [])] : []), ...(gameSmoke ? ["--smoke-game-ui"] : [])];
+	if (popoutCase) args.push("--portable-popouts=" + popoutCase.phase);
 	const child = spawnOwnedUi(process.execPath, args, {
 		cwd: root,
 		env: safeEnvironment(),
@@ -1018,6 +1022,7 @@ if (!app.hasSingleInstanceLock()) {
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
 				await runPortableSmoke({
+					popoutCase,
 					getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext,
 					api: portableScenario || portableMcpLoss || storageCase || developmentUsageCase || gatewayCase ? (action, args) => api(action, args, fixtureAuthority) : api,
 					testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui,

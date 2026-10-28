@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 import { runDevelopmentContextSmoke } from "./development-context-smoke.mjs";
+import { runPopoutSmoke } from "./popout-smoke.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -180,6 +181,7 @@ export async function runWorkbenchSmoke(driver) {
 	proof.developmentJournalPreservesStagesWithoutPrivateContent = true;
 	const accounted = await request("task", { taskId: accountedTask });
 	proof.usageSummary = await verifyUsageSummary(driver, { domain: "development", usage: accounted.usage, context: accounted.context });
+	proof.popouts = await runPopoutSmoke(driver);
 	proof.developmentContext = await runDevelopmentContextSmoke(driver, root.id);
 	await writeFile(join(driver.root, ".local/desktop-smoke-workbench.json"), JSON.stringify(proof, null, 2));
 }
