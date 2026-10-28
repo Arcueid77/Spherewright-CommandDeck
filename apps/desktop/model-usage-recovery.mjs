@@ -21,23 +21,25 @@ export async function readModelUsageRecovery(context) {
 	const expected = mcpLossCase(value.scenario);
 	assert.deepEqual(Object.keys(value.expected).sort(), ["events", "tasks"]); assert.ok(Array.isArray(value.expected.tasks) && value.expected.tasks.length === 1); assert.ok(Array.isArray(value.expected.events) && value.expected.events.length <= 100);
 	const task = value.expected.tasks[0];
-	assert.match(task.id, /^[a-f0-9-]{36}$/); assert.equal(task.intent.taskId, task.id);
+	assert.match(task.id, /^[a-f0-9-]{36}$/);
 	assert.equal(task.scope.techId, 100); assert.equal(task.details.model, "fixture"); assert.equal(task.details.mode, "assist");
-	assert.equal(task.state, expected.taskState); assert.equal(task.intent.state, expected.intentState);
-	assert.equal(task.intent.actionId, expected.hasActionId ? "synthetic-action" : null);
+	assert.equal(task.state, expected.taskState);
+	if (expected.hasIntent === false) assert.equal(task.intent, null);
+	else { assert.equal(task.intent.taskId, task.id); assert.equal(task.intent.state, expected.intentState); assert.equal(task.intent.actionId, expected.hasActionId ? "synthetic-action" : null); }
 	const usage = modelUsageSnapshot(task.details.usage);
 	assert.equal(usage.reportedResponses, 3); assert.equal(usage.requests, 3); assert.equal(usage.tokens.totalTokens, 360); assert.equal(usage.estimate.status, "estimated"); assert.ok(Math.abs(usage.estimate.usd - 0.001155) < 1e-12);
 	assert.equal(value.sha256, modelUsageRecoveryHash(value.expected)); return value;
 }
 
 export async function runModelUsageRecovery(driver, value, manifest) {
-	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), expected = mcpLossCase(value.scenario), accepted = expected.taskState === "completed";
+	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), expected = mcpLossCase(value.scenario), noIntent = expected.hasIntent === false, settled = expected.taskState === "completed" || noIntent;
 	async function compare() {
 		const game = await api("game", { action: "snapshot" }), work = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual({ tasks: game.tasks, events: game.events }, value.expected, "MODEL_USAGE_TASK_CHANGED_AFTER_RESTART");
-		assert.equal(game.busy, false); assert.equal(game.syntheticOnly, true); assert.equal(game.developmentFrozen, !accepted); assert.equal(game.unresolved.length, accepted ? 0 : 1);
-		if (!accepted) { assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.unresolved[0].actionId, expected.hasActionId ? "synthetic-action" : null); }
-		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.activeTask, null); assert.equal(work.executionBlocked, !accepted);
+		assert.equal(game.busy, false); assert.equal(game.syntheticOnly, true); assert.equal(game.developmentFrozen, !settled); assert.equal(game.unresolved.length, settled ? 0 : 1);
+		if (noIntent) { assert.equal(game.phase, "idle"); assert.equal(game.tasks[0].intent, null); }
+		if (!settled) { assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.unresolved[0].actionId, expected.hasActionId ? "synthetic-action" : null); }
+		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.activeTask, null); assert.equal(work.executionBlocked, !settled);
 		assert.equal(bridge.selected, null); assert.equal(bridge.observation, null); assert.equal(driver.getProbeSequence(), 0); assert.equal(driver.getRuntimePid(), runtimePid);
 	}
 	async function showUsage() {
@@ -52,7 +54,7 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 	const denied = await testCommand("evaluate", { source: "(async()=>{let count=0;for(const call of [()=>window.deck.game('start',{}),()=>window.deck.game('reconcile',{}),()=>window.deck.manageProfiles('save',{}),()=>window.deck.workbench('agent',{}),()=>window.deck.workbench('check',{}),()=>window.deck.probe({mode:'live'})])try{await call()}catch{count++}return count})()" }); assert.equal(denied, 6);
 	await testCommand("reload"); await showUsage(); await compare();
 	const summary = manifest.modelUsageSummary === 1 ? await verifyUsageSummary(driver, { domain: "game", usage: value.expected.tasks[0].details.usage, context: value.expected.tasks[0].details.context }) : null;
-	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !expected.hasActionId, mismatchRemainsBlocked: Boolean(expected.error && !expected.nativeOutcome), nativeOutcomeRemainsBlocked: Boolean(expected.nativeOutcome), modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
+	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !expected.hasActionId && !noIntent, mismatchRemainsBlocked: Boolean(expected.error && !expected.nativeOutcome), nativeOutcomeRemainsBlocked: Boolean(expected.nativeOutcome), noIntentRemainsUnallocated: noIntent, modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
 	if (summary) proof.summary = summary;
 	await writeFile(join(driver.context.root, "model-usage-recovery-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	return proof;

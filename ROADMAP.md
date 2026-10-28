@@ -593,6 +593,10 @@ MCP矩阵随后补三种固定边界，fixture声明升至`portableMcpFaults:4`�
 
 意图前断线新增两项Node协调器/独立合成MCP子进程用例：固定正常预览后，在确认nonce发出前或发出后终止原自有MCP，确认入口必须在fresh观察以精确`MCP_READ_NOT_SUPPORTED`拒绝。两例都核原任务无intent/action/acceptance、commit请求及受理均0、退出后无新增RPC/替代MCP/模型调用；旧nonce再次提交或重新申请确认均拒绝。正常drain后重建协调器，原已取消任务保持且旧确认不能恢复，无未决intent时正常释放开发门。该文件20项测试通过；这两例仅覆盖协调器与真实子进程管道退出，原生确认窗口在途、整应用退出重开及更深的fresh再验在途断线仍待，不将其并入已通过的十二类实际包场景。
 
+意图前断线现接入共享源码/实际包矩阵，fixture声明升至`portableMcpFaults:5`，新增`preview-disconnect`及`confirmation-disconnect`。源码实际Electron run分别为`0c21c47c-1ea5-4ae8-a654-9a5b4e4e70ec`和`4182bed3-3c86-4185-a595-ba0ab1f752a5`：前者在预览后退出原MCP再发起确认，后者经真实renderer/UI进程确认链挂起受控对话框返回并核遮罩，再退出原MCP、返回确认。均在fresh观察以原错误拒绝，零intent/commit，旧确认入口拒绝；显式停止后保留cancelled任务、原用量及正常释放的开发门，UI重载无任务/模型重放，原Runtime保持、所属进程0残留。原生对话框返回为fixture模拟，未证明物理点击。
+
+两例只扩大固定合成场景，不改变生产确认/意图策略。原十二例继续要求其既有隔离与原动作证明；新两例单独核零intent且不冒充unknown隔离。重开marker严格区分null intent与已有意图，拒绝给前者补造原动作；整应用重开将比较完整SQL/Pi/vault/world原件及原取消任务。31项定向、完整480项Node22回归（0skip）及两次源码Electron已通过，新准确包十四场景/28次实际启动及CI仍待。已有诊断阶段候选`547f7632 / 40655222371`的源码诊断步骤已通过，整条CI仍运行；原22c失败原因仍未复现，fresh再验在途断线及超时后迟到也继续保留。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

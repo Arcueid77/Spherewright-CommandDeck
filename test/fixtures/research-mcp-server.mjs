@@ -5,7 +5,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
-const persistent = ["mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
+const persistent = ["mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
 let world, worldPath;
 if (persistent) {
 	let stage = "ARGUMENTS";

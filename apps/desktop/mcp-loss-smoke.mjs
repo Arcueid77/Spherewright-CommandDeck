@@ -21,6 +21,7 @@ export async function assertBlockedMcpExecution(driver, until) {
 }
 
 export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requests, base }) {
+	if (mcpLossCase(driver.mcpLossScenario).hasIntent === false) return runBeforeIntentLoss(driver, { evaluate, state, until, requests, base });
 	const expected = mcpLossCase(driver.mcpLossScenario), accepted = expected.taskState === "completed", commits = expected.commits ?? 1, originalClient = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), taskId = (await state()).currentTaskId;
 	let duplicateReplies = 0;
 	const usage = (await state()).tasks[0].details.usage;
@@ -91,4 +92,41 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true },
 		gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false,
 	}), { flag: "wx" });
+}
+
+async function runBeforeIntentLoss(driver, { evaluate, state, until, requests, base }) {
+	const expected = mcpLossCase(driver.mcpLossScenario), client = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), initial = await state(), taskId = initial.currentTaskId, usage = initial.tasks[0].details.usage;
+	const world = async () => JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));
+	assert.equal(initial.phase, "awaiting_approval"); assert.equal(initial.tasks[0].intent, null); assert.deepEqual(initial.unresolved, []);
+	const before = await world(); assert.equal(before.runId, driver.runId); assert.equal(before.prepares, 1); assert.equal(before.commits, 0); assert.equal(before.commitRequests ?? 0, 0);
+	if (expected.beforeIntent === "confirmation") {
+		await driver.testCommand("hold-game-confirmation");
+		await evaluate("(()=>{window.__mcpBeforeIntentAnswer=null;void window.deck.confirmResearch(" + JSON.stringify(taskId) + ").then(()=>window.__mcpBeforeIntentAnswer={ok:true},()=>window.__mcpBeforeIntentAnswer={ok:false});return true})()");
+		await until(() => driver.testCommand("held-game-confirmation-state"), "PREINTENT_CONFIRMATION_HELD");
+		await until(() => evaluate("document.querySelector('header').inert && document.querySelector('.workspace').inert"), "PREINTENT_CONFIRMATION_OVERLAY");
+		assert.equal((await state()).phase, "awaiting_approval"); assert.equal((await state()).tasks[0].intent, null);
+	}
+	const rpcBeforeLoss = client.stats.requests;
+	assert.equal(client.child.kill(), true); await until(() => client.exitConfirmed && client.closed, "PREINTENT_ORIGINAL_EXITED");
+	if (expected.beforeIntent === "confirmation") {
+		await driver.testCommand("answer-held-game-confirmation", { response: 1 });
+		await until(() => evaluate("window.__mcpBeforeIntentAnswer?.ok===true"), "PREINTENT_CONFIRMATION_RETURNED");
+	} else {
+		await driver.testCommand("answer-game-confirmation", { response: 1 });
+		await evaluate("window.deck.confirmResearch(" + JSON.stringify(taskId) + ")");
+	}
+	await until(async () => { const value = await state(); return !value.busy && value.phase === "failed"; }, "PREINTENT_REVALIDATION_REFUSED");
+	const refused = await state(); assert.equal(refused.error, "MCP_READ_NOT_SUPPORTED"); assert.equal(refused.tasks[0].intent, null); assert.deepEqual(refused.unresolved, []); assert.equal(refused.developmentFrozen, false);
+	assert.equal(client.stats.requests, rpcBeforeLoss); assert.deepEqual(await world(), before);
+	const rejected = await evaluate("(async()=>{try{await window.deck.confirmResearch(" + JSON.stringify(taskId) + ");return false}catch(error){return String(error).includes('GAME_CONFIRMATION_UNAVAILABLE')}})()"); assert.equal(rejected, true);
+	await driver.api("game", { action: "stop" }); await until(async () => { const value = await state(); return !value.busy && value.phase === "cancelled"; }, "PREINTENT_TASK_STOPPED");
+	const stopped = await state(); assert.equal(stopped.tasks[0].state, "cancelled"); assert.equal(stopped.tasks[0].intent, null); assert.equal(stopped.developmentFrozen, false);
+	await driver.testCommand("reload");
+	await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "PREINTENT_RELOAD_LAYOUT");
+	await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens')"), "PREINTENT_RELOAD_USAGE");
+	assert.deepEqual((await state()).tasks, stopped.tasks); assert.deepEqual((await state()).events, stopped.events); assert.equal(driver.getBridgeClient(), client); assert.equal(driver.getRuntimePid(), runtimePid); assert.equal(requests(), 3); assert.equal(client.stats.requests, rpcBeforeLoss);
+	const after = await world(); assert.deepEqual(after, before);
+	await writeFile(join(base, "mcp-loss.private.json"), JSON.stringify({ runId: driver.runId, scenario: driver.mcpLossScenario, original: null, originalTask: initial.tasks[0], before, after, state: await state() }), { flag: "wx" });
+	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local/mcp-loss", driver.runId); await mkdir(proofDirectory, { recursive: true });
+	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: false, unknownCommitRemainsBlocked: false, mismatchRemainsBlocked: false, nativeOutcomeRemainsBlocked: false, nativeOutcome: null, recoveryError: null, repeatedIsolatedReconciliationMakesNoRequests: false, originalIdentityRetained: true, newExecutionDisabledDuringLoss: false, explicitOriginalReconciliationOnly: false, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: 0, syntheticModelRequests: requests(), syntheticGameCommits: 0, syntheticCommitRequests: 0, syntheticPrepareCalls: 1, duplicateRepliesIgnored: 0, duplicateDelivery: null, ownServerExitConfirmed: true, noIntentAllocated: true, approvalStage: expected.beforeIntent, heldDialogResponseMocked: expected.beforeIntent === "confirmation", confirmationAfterLossRejected: true, preIntentError: refused.error, stoppedTaskRetained: true, modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true }, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false }), { flag: "wx" });
 }
