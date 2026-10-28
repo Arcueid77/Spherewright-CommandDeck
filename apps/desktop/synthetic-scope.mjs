@@ -28,7 +28,7 @@ export function syntheticProviderScope() {
 	}
 	return Object.freeze({
 		register(server, id, key) {
-			if (binding || !(server instanceof Server) || !server.listening || !/^deckvault-[0-9a-f-]{36}$/.test(id ?? "") || !/^synthetic-game-smoke-[0-9a-f-]{36}$/.test(key ?? "")) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
+			if (binding || !(server instanceof Server) || !server.listening || !/^deckvault-[0-9a-f-]{36}$/.test(id ?? "") || !/^synthetic-(?:game|development)-smoke-[0-9a-f-]{36}$/.test(key ?? "")) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
 			const address = server.address();
 			if (!address || address.address !== "127.0.0.1" || !Number.isSafeInteger(address.port) || address.port <= 0) throw new Error("SYNTHETIC_PROVIDER_BINDING_INVALID");
 			binding = { server, id, key, port: address.port, url: `http://127.0.0.1:${address.port}/v1` };

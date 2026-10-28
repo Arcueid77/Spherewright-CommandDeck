@@ -6,6 +6,28 @@ export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "
 export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
 export const portableCommandScenarios = Object.freeze(["reload", "runtime", "helper", "exit"]);
+export const developmentUsagePrompt = "Read fixture.txt and report its synthetic content. Do not edit files or run commands.";
+export function portableDevelopmentUsageCase(argv) {
+	const values = argv.filter(arg => arg.startsWith("--portable-development-usage"));
+	if (!values.length) return null;
+	const phase = values[0].slice("--portable-development-usage=".length);
+	if (!argv.includes("--portable-smoke") || values.length !== 1 || values[0] !== "--portable-development-usage=" + phase || !["record", "reopen"].includes(phase) || argv.some(arg => arg.startsWith("--portable-") && arg !== "--portable-smoke" && arg !== values[0])) throw new Error("PACKAGED_DEVELOPMENT_USAGE_CASE_REQUIRED");
+	return { phase };
+}
+
+export function assertPortableDevelopmentUsageAction(action, args, { phase, rootId, profileId, started = false, internal = false } = {}) {
+	if (!["record", "reopen"].includes(phase)) throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	if (["probe", "attach", "start-fixture"].includes(action)) throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	if (action === "journal" && !["snapshot", "read"].includes(args?.action) || action === "video" && args?.action === "bookmark") throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+	try { assertPortableAction(action, args); return; } catch {}
+	if (internal && action === "profiles-manage" && args?.action === "describe" && args.args?.id === profileId && typeof profileId === "string") return;
+	if (phase === "record" && internal && action === "profiles-manage" && args?.action === "save" && args.args?.id === profileId && typeof profileId === "string") return;
+	if (action === "workbench" && typeof rootId === "string" && args?.args?.rootId === rootId) {
+		if (["checks", "list", "read", "diff"].includes(args.action)) return;
+		if (phase === "record" && !started && args.action === "agent" && typeof profileId === "string" && args.args.providerId === profileId && args.args.modelId === "fixture" && args.args.prompt === developmentUsagePrompt && Object.keys(args.args).every(key => ["rootId", "providerId", "modelId", "prompt"].includes(key))) return;
+	}
+	throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
+}
 export function portableCommandCase(argv) {
 	const values = argv.filter(arg => arg.startsWith("--portable-command"));
 	if (!values.length) return null;
@@ -105,7 +127,7 @@ async function physicalProfile(directory) {
 }
 
 export async function preparePortableMode(app, argv, env = process.env) {
-	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv);
+	const scenario = portableRuntimeScenario(argv), mcpScenario = portableMcpScenario(argv), diagnostic = portableDiagnosticMode(argv), storage = portableStorageCase(argv), command = portableCommandCase(argv), developmentUsage = portableDevelopmentUsageCase(argv);
 	if (!argv.includes("--portable-smoke")) return null;
 	const allowed = new Set(["--portable-smoke", "--managed-ui", "--smoke-ui"]);
 	if (scenario) allowed.add("--portable-runtime-loss=" + scenario);
@@ -115,6 +137,7 @@ export async function preparePortableMode(app, argv, env = process.env) {
 	if (storage?.resume) allowed.add("--portable-storage-resume");
 	if (command) allowed.add("--portable-command-loss=" + command.scenario);
 	if (command?.resume) allowed.add("--portable-command-resume");
+	if (developmentUsage) allowed.add("--portable-development-usage=" + developmentUsage.phase);
 	if (diagnostic && argv.includes("--managed-ui")) allowed.add("--smoke-diagnostics-ui");
 	if ((scenario && scenario !== "idle" || mcpScenario || storage) && argv.includes("--managed-ui")) allowed.add("--smoke-game-ui");
 	if (!app.isPackaged || argv.some(arg => arg.startsWith("--") && !allowed.has(arg)) || !/^[a-f0-9-]{36}$/.test(env.COMMANDDECK_PORTABLE_RUN_ID ?? "") || !isAbsolute(env.COMMANDDECK_PORTABLE_ROOT ?? "")) throw new Error("PACKAGED_PORTABLE_SMOKE_REQUIRED");

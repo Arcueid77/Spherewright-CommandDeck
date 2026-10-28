@@ -24,6 +24,7 @@
 		"test:full-profile-migration": "node scripts/legacy-recovery-smoke.mjs --full-profile",
 		"test:packaged-runtime-loss": "node scripts/packaged-runtime-smoke.mjs",
 		"test:packaged-mcp-loss": "node scripts/packaged-runtime-smoke.mjs --mcp-loss",
+		"test:packaged-development-usage": "node scripts/packaged-runtime-smoke.mjs --development-usage",
 		"test:diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-storage": "node scripts/packaged-storage-smoke.mjs",

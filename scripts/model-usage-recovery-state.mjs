@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
-export async function usageRecoveryState(directory, runId) {
+export async function usageRecoveryState(directory, runId, { role = "game" } = {}) {
+	assert.ok(["game", "development"].includes(role));
 	assert.match(runId, /^[a-f0-9-]{36}$/); assert.equal((await realpath(directory)).toLowerCase(), directory.toLowerCase());
 	assert.equal(dirname(directory).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(directory).startsWith("commanddeck-desktop-smoke-"));
 	const profile = join(directory, "supervisor-profile/supervisor");
@@ -35,6 +36,18 @@ export async function usageRecoveryState(directory, runId) {
 	}
 	assert.ok(pi.some(entry => entry.path.endsWith(".jsonl"))); pi.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 	const vaultFile = join(profile, "vault-smoke-" + runId, "profiles.vault.json"), vaultInfo = await physical(vaultFile); assert.ok(vaultInfo.isFile() && vaultInfo.size > 0 && vaultInfo.size <= 1048576);
+	if (role === "development") {
+		assert.ok(Object.values(rows).every(values => values.length === 0));
+		const workFile = join(profile, "m1-smoke-" + runId, "workbench.sqlite"), workInfo = await physical(workFile); assert.ok(workInfo.isFile() && workInfo.size > 0 && workInfo.size <= 4194304);
+		const work = new DatabaseSync(workFile, { readOnly: true }); let workbench;
+		try {
+			assert.equal(work.prepare("PRAGMA user_version").get().user_version, 1);
+			workbench = Object.fromEntries(["roots", "tasks", "invocations", "changes", "events"].map(table => { const values = work.prepare("SELECT * FROM " + table + " ORDER BY rowid LIMIT 513").all().map(row => ({ ...row })); assert.ok(values.length <= 512); return [table, values]; }));
+			workbench.ui = work.prepare("SELECT * FROM ui_state WHERE key IN ('selection','draft') ORDER BY key").all().map(row => ({ ...row }));
+		} finally { work.close(); }
+		assert.equal(await physical(join(directory, "runtime-fixtures/m3-smoke", runId, "synthetic-research-world.json"), true), null);
+		return { rows, workbench, pi, vault: { bytes: vaultInfo.size, sha256: sha256(await readFile(vaultFile)) }, world: null };
+	}
 	const worldFile = join(directory, "runtime-fixtures/m3-smoke", runId, "synthetic-research-world.json"), worldInfo = await physical(worldFile); assert.ok(worldInfo.isFile() && worldInfo.size > 0 && worldInfo.size <= 65536);
 	return { rows, pi, vault: { bytes: vaultInfo.size, sha256: sha256(await readFile(vaultFile)) }, world: { bytes: worldInfo.size, sha256: sha256(await readFile(worldFile)) } };
 }

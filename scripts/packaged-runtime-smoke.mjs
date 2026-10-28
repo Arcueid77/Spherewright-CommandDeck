@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, realpath, readFile, writeFile, rm } from "node:fs/promises";
-import { dirname, basename, join, resolve } from "node:path";
+import { dirname, basename, join, resolve, delimiter } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -12,13 +12,17 @@ import { portableRuntimeScenarios, portableMcpScenarios } from "../apps/desktop/
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 import { modelUsageRecoveryFile, modelUsageRecoveryHash } from "../apps/desktop/model-usage-recovery.mjs";
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
+import { prepareDevelopmentUsageCase, developmentWorkspaceState, developmentGitHash } from "./development-usage-case.mjs";
+import { readDevelopmentUsageOriginal } from "../apps/desktop/development-usage-smoke.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
+const developmentUsage = args[0] === "--development-usage"; if (developmentUsage) args.shift();
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
-const scenarios = mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
+if (developmentUsage && mcpLoss) throw new Error("PACKAGED_USAGE_MODE_CONFLICT");
+const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
-assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
+assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 assert.ok(manifest.files.some(file => file.path === "resources/app/test/fixtures/research-mcp-server.mjs"));
 const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
@@ -47,6 +51,28 @@ try {
 		const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 		Object.assign(env, { PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: caseId });
 		const caseEnvironment = mcpLoss ? syntheticMcpEnvironment(env) : env;
+		if (developmentUsage) {
+			const toolchain = await prepareDevelopmentUsageCase(directory), workspaceBefore = await developmentWorkspaceState(directory);
+			caseEnvironment.PATH = [toolchain.gitDirectory, join(process.env.SystemRoot, "System32")].join(delimiter);
+			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=record"], "record-");
+			const original = await readDevelopmentUsageOriginal({ root: directory, runId: caseId }), before = await usageRecoveryState(directory, caseId, { role: "development" });
+			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED");
+			await writeFile(join(caseProof, "before-reopen.private.json"), JSON.stringify(before), { flag: "wx" });
+			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=reopen"], "reopen-");
+			const phases = [];
+			for (const phase of ["record", "reopen"]) {
+				const proof = JSON.parse(await readFile(join(directory, "development-usage-" + phase + "-proof.json"), "utf8"));
+				assert.equal(proof.runId, caseId); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.expectedSha256, original.sha256);
+				for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "priceSnapshotSurvivesReconfiguration", "uiReloadRetainsUsage", "originalTaskRetained", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
+				assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? 2 : 0); assert.equal(proof.toolInvocations, 1); assert.equal(proof.normalizedTokens, 240); assert.equal(proof.reportedResponses, 2); assert.ok(Math.abs(proof.estimatedUsd - 0.00077) < 1e-12); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
+				await writeFile(join(caseProof, phase + "-application-proof.json"), JSON.stringify(proof), { flag: "wx" }); phases.push(proof);
+			}
+			const after = await usageRecoveryState(directory, caseId, { role: "development" }); assert.deepEqual(after, before, "DEVELOPMENT_USAGE_ORIGINAL_ROWS_OR_PI_CHANGED");
+			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED_AFTER_RESTART"); assert.equal(await developmentGitHash(toolchain.git), toolchain.gitSha256);
+			await writeFile(join(caseProof, "after-reopen.private.json"), JSON.stringify(after), { flag: "wx" });
+			cases.push({ ...phases[0], developmentUsageScenario: "read-file-and-reopen", developmentUsageRecovery: phases[1], noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
+			continue;
+		}
 		await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario]);
 		const proof = JSON.parse(await readFile(join(directory, "application-proof.json"), "utf8"));
 		assert.equal(proof.runId, caseId); assert.equal(proof[mcpLoss ? "mcpLossScenario" : "runtimeScenario"], scenario); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit);
@@ -86,9 +112,9 @@ try {
 		cases.push({ ...proof, noPackagedChildrenRemain: true, ...(modelUsageRecovery ? { modelUsageRecovery } : {}) });
 	}
 	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.length + cases.filter(value => value.modelUsageRecovery).length, cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
+	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.length + cases.filter(value => value.modelUsageRecovery || value.developmentUsageRecovery).length, cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local", proofFolder + "-smoke.json"), JSON.stringify(proof, null, 2));
-	passed = true; console.log(JSON.stringify({ [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, cases: cases.map(value => value[mcpLoss ? "mcpLossScenario" : "runtimeScenario"]), gameCalls: 0, realModelRequests: 0 }));
+	passed = true; console.log(JSON.stringify({ [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, cases: cases.map(value => value[developmentUsage ? "developmentUsageScenario" : mcpLoss ? "mcpLossScenario" : "runtimeScenario"]), gameCalls: 0, realModelRequests: 0 }));
 } finally {
 	if (passed) for (const directory of directories.reverse()) { const canonical = await realpath(directory); assert.equal(canonical.toLowerCase(), directory.toLowerCase()); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-desktop-smoke-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 }

@@ -23,7 +23,7 @@ import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
 import { OwnedFixtureHost } from "./owned-fixture.mjs";
-import { assertPortableAction, assertPortableRuntimeAction, assertPortableStorageAction, assertPortableCommandAction, portableRuntimeScenario, portableMcpScenario, portableDiagnosticMode, portableStorageCase, portableCommandCase } from "./portable-mode.mjs";
+import { assertPortableAction, assertPortableRuntimeAction, assertPortableStorageAction, assertPortableCommandAction, assertPortableDevelopmentUsageAction, portableDevelopmentUsageCase, portableRuntimeScenario, portableMcpScenario, portableDiagnosticMode, portableStorageCase, portableCommandCase } from "./portable-mode.mjs";
 import { syntheticProviderScope } from "./synthetic-scope.mjs";
 import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
 import { startupFailureCode } from "./startup-failure.mjs";
@@ -52,6 +52,8 @@ const portableMcpLoss = portableSmoke ? portableMcpScenario(process.argv) : null
 const portableDiagnostics = portableSmoke && portableDiagnosticMode(process.argv);
 const storageCase = portableSmoke ? portableStorageCase(process.argv) : null;
 const commandCase = portableSmoke ? portableCommandCase(process.argv) : null;
+const developmentUsageCase = portableSmoke ? portableDevelopmentUsageCase(process.argv) : null;
+let developmentUsageRootId, developmentUsageProfileId, developmentUsageStarted = false;
 let commandFixtureRootId;
 const smoke = process.argv.includes("--smoke") || portableSmoke;
 const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
@@ -80,7 +82,7 @@ const native = portableSmoke || diagnosticSmoke ? new OwnedFixtureHost() : new W
 const events = new EventEmitter();
 const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle") || Boolean(portableMcpLoss) || Boolean(storageCase));
-const fixtureProvider = gameSmoke ? syntheticProviderScope() : null;
+const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope() : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
@@ -117,7 +119,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
@@ -240,6 +242,26 @@ async function registerCommandWorkspace() {
 	}
 	commandFixtureRootId = registered.roots[0].id; return registered;
 }
+async function registerDevelopmentUsageWorkspace() {
+	if (!developmentUsageCase) throw new Error("DEVELOPMENT_USAGE_FIXTURE_ONLY");
+	const { validateDevelopmentUsageWorkspace } = await import("./development-usage-smoke.mjs");
+	const path = await validateDevelopmentUsageWorkspace(portableContext), current = await workbenchCall("state");
+	let registered;
+	if (developmentUsageCase.phase === "record") {
+		if (current.roots.length || current.tasks.length) throw new Error("DEVELOPMENT_USAGE_REQUIRES_EMPTY_WORKSPACE");
+		registered = await workbenchCall("add", { path, label: "Synthetic development usage", canWrite: false, canExecute: false });
+	} else {
+		if (current.roots.length !== 1 || current.tasks.length !== 1 || current.roots[0].path !== path || current.roots[0].canWrite || current.roots[0].canExecute) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
+		registered = current;
+		developmentUsageProfileId = current.tasks[0].provider;
+	}
+	developmentUsageRootId = registered.roots[0].id; return registered;
+}
+function registerFixtureProvider(...args) {
+	if (developmentUsageCase && developmentUsageCase.phase !== "record") throw new Error("DEVELOPMENT_USAGE_REOPEN_IS_READ_ONLY");
+	fixtureProvider.register(...args);
+	if (developmentUsageCase) developmentUsageProfileId = args[1];
+}
 function runGamePlanner(command) {
 	if (!workbenchReady || runtimeExit?.exited) return Promise.reject(new Error("GAME_RUNTIME_UNAVAILABLE"));
 	const id = "game-planner:" + randomUUID(), { signal, observe, event, ...data } = command;
@@ -317,7 +339,8 @@ async function api(action, args, source) {
 	systemPower.assertAction(action, args);
 	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
 	if (portableSmoke && !diagnosticSmoke) {
-		if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
+		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority });
+		else if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
 		else if (storageCase) assertPortableStorageAction(action, args, { internal: source === fixtureAuthority });
 		else if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });
 		else assertPortableAction(action, args);
@@ -433,6 +456,7 @@ async function api(action, args, source) {
 		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "change-diff", "attach-reference", "read-reference", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent", "attach-reference"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
+		if (developmentUsageCase && args.action === "agent") developmentUsageStarted = true;
 		const result = await workbenchCall(args.action, args.args ?? {});
 		return args.action === "state" && (!systemPower.ready || observationPolicy) ? { ...result, ...(observationPolicy ? { observationOnly: true } : {}), executionBlocked: true } : result;
 	}
@@ -442,7 +466,7 @@ async function api(action, args, source) {
 	}
 	if (action === "profiles-manage") {
 		if (!args || !["list", "describe", "save", "remove"].includes(args.action)) throw new Error("INVALID_PROFILE_ACTION");
-		if (gameSmoke && args.action === "save") fixtureProvider.assertDraft(args.args);
+		if ((gameSmoke || developmentUsageCase) && args.action === "save") fixtureProvider.assertDraft(args.args);
 		if (args.action === "list") {
 			if (!vault.available()) return { available: false, revision: null, profiles: [], external: externalProfiles() };
 			return { ...await vault.list(), external: externalProfiles() };
@@ -887,9 +911,9 @@ if (!app.hasSingleInstanceLock()) {
 					void (async () => {
 						try {
 							if (stopping || changingProfiles || !workbenchReady || typeof message.id !== "string" || !/^credential:[0-9a-f-]{36}$/.test(message.id)) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
-							if (gameSmoke) fixtureProvider.assertReference(message.providerId, message.modelId);
+							if (gameSmoke || developmentUsageCase) fixtureProvider.assertReference(message.providerId, message.modelId);
 							const profile = await resolveTaskProfile(vault, (taskId) => message.taskType === "game" ? game.profileTask(taskId) : workbenchCall("task", { taskId }), message);
-							if (gameSmoke) fixtureProvider.assertResolved(profile);
+							if (gameSmoke || developmentUsageCase) fixtureProvider.assertResolved(profile);
 							if (stopping || changingProfiles || !workbenchReady) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
 							runtime.postMessage({ type: "credential-response", id: message.id, ok: true, profile });
 						} catch { runtime.postMessage({ type: "credential-response", id: message.id, ok: false }); }
@@ -957,7 +981,20 @@ if (!app.hasSingleInstanceLock()) {
 			await attachFromCommandLine(process.argv);
 			if (portableSmoke) {
 				const { runPortableSmoke } = await import("./portable-smoke.mjs");
-				await runPortableSmoke({ getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext, api: portableScenario || portableMcpLoss || storageCase ? (action, args) => api(action, args, fixtureAuthority) : api, testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui, runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, registerCommandWorkspace, profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); }, stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); }, tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); }, getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; }, runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: (...args) => fixtureProvider.register(...args), getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true, getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; } }, videoArchive, journal);
+				await runPortableSmoke({
+					getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext,
+					api: portableScenario || portableMcpLoss || storageCase || developmentUsageCase ? (action, args) => api(action, args, fixtureAuthority) : api,
+					testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui,
+					runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, developmentUsageCase,
+					registerCommandWorkspace, registerDevelopmentUsageWorkspace,
+					profileVaultFixture: phase => { if (portableScenario || portableMcpLoss || storageCase || commandCase || portableDiagnostics || developmentUsageCase) throw new Error("FULL_PROFILE_FIXTURE_MODE_CONFLICT"); return runProfileVaultFixture(vault, portableContext, phase); },
+					stopCommandHelperForSmoke: taskId => { if (commandCase?.scenario !== "helper" || commandCase.resume) throw new Error("COMMAND_HELPER_FIXTURE_REQUIRED"); return workbenchCall("stop-command-helper-fixture", { taskId }); },
+					tryCommandGameAdmission: () => { if (!commandCase) throw new Error("COMMAND_FIXTURE_ONLY"); return workbenchCall("game-begin"); },
+					getGameTasks: () => { if (!storageCase) throw new Error("STORAGE_FIXTURE_ONLY"); return game; },
+					runId: portableContext.runId, stopRuntimeForSmoke, registerSyntheticProvider: registerFixtureProvider,
+					getBridgeClient: () => bridge.telemetry?.client, getBridgePid: () => bridge.telemetry?.client.child.pid, bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true,
+					getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; },
+				}, videoArchive, journal);
 				await shutdown(); return;
 			}
 			if (process.argv.includes("--demo-fixture")) {
