@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { portableDevelopmentUsageCase, assertPortableDevelopmentUsageAction, developmentUsagePrompt, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
 import { prepareDevelopmentUsageCase, developmentWorkspaceState } from "../scripts/development-usage-case.mjs";
-import { validateDevelopmentUsageWorkspace, readDevelopmentUsageOriginal, developmentUsageOriginalFile } from "../apps/desktop/development-usage-smoke.mjs";
+import { validateDevelopmentUsageWorkspace, readDevelopmentUsageOriginal, developmentUsageOriginalFile, callDevelopmentUsageApi, verifyDevelopmentUsageUiRecovery } from "../apps/desktop/development-usage-smoke.mjs";
 import { profileHash } from "../apps/desktop/portable-profile.mjs";
 import { ModelUsage } from "../apps/desktop/model-usage.mjs";
 import { Workbench } from "../apps/desktop/workbench.mjs";
@@ -20,6 +20,28 @@ async function fixture(t) {
 	t.after(async () => { const path = await realpath(root); assert.equal(path, root); assert.equal(dirname(path).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(path).startsWith("commanddeck-desktop-smoke-")); await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 	return { root, runId };
 }
+
+test("development usage waits before admission and never retries an API rejection", async () => {
+	let recovering = true, calls = 0;
+	const args = { action: "save", args: { synthetic: true } };
+	const driver = { getUiRecoveryForSmoke: () => ({ recovering, stopping: false }), api: async (action, value) => { calls++; assert.equal(recovering, false); assert.equal(action, "profiles-manage"); assert.equal(value, args); throw new Error("FIXED_OPERATION_FAILED"); } };
+	const pending = callDevelopmentUsageApi(driver, "profiles-manage", args); assert.equal(calls, 0);
+	recovering = false; await assert.rejects(pending, { message: "FIXED_OPERATION_FAILED" }); assert.equal(calls, 1);
+	recovering = true; calls = 0;
+	await assert.rejects(callDevelopmentUsageApi(driver, "profiles-manage", args, 0), /DEVELOPMENT_USAGE_UI_RECOVERY_DID_NOT_SETTLE/); assert.equal(calls, 0);
+	await assert.rejects(callDevelopmentUsageApi({ ...driver, getUiRecoveryForSmoke: () => ({ recovering: false, stopping: true }) }, "profiles-manage", args), /DEVELOPMENT_USAGE_SUPERVISOR_STOPPING/); assert.equal(calls, 0);
+});
+
+test("the usage recovery witness requires exact refusal, old UI exit, one replacement and the same runtime", async () => {
+	function driverFor({ refusal = "UI_RECOVERY_PENDING", exited = true, sameRuntime = true, epochStep = 1 } = {}) {
+		const old = { epoch: 1, child: { exitCode: null, signalCode: null } }; let ui = old, recovering = false, pid = 10;
+		return { getUi: () => ui, getRuntimePid: () => pid, getUiRecoveryForSmoke: () => ({ recovering, stopping: false }),
+			beginDevelopmentUsageRecovery: () => { recovering = true; return new Promise(resolve => setTimeout(() => { if (exited) old.child.exitCode = 0; ui = { epoch: old.epoch + epochStep, child: { exitCode: null, signalCode: null } }; recovering = false; if (!sameRuntime) pid++; resolve(); }, 5)); },
+			api: async () => { if (recovering) throw new Error(refusal); return { pricing: { input: 0 } }; } };
+	}
+	const proof = await verifyDevelopmentUsageUiRecovery(driverFor(), "synthetic"); assert.equal(proof.waitedBeforeApiCall, true); assert.equal(proof.runtimeRetained, true); assert.deepEqual(proof.described, { pricing: { input: 0 } });
+	for (const options of [{ refusal: "OTHER_FAILURE" }, { exited: false }, { sameRuntime: false }, { epochStep: 2 }]) await assert.rejects(verifyDevelopmentUsageUiRecovery(driverFor(options), "synthetic"));
+});
 test("development usage requires one explicit packaged phase and cannot mix other portable scenarios", async t => {
 	const f = await fixture(t), env = { COMMANDDECK_PORTABLE_ROOT: f.root, COMMANDDECK_PORTABLE_RUN_ID: f.runId }, app = { isPackaged: true, setPath() {} };
 	assert.equal(portableDevelopmentUsageCase(["--portable-smoke"]), null);

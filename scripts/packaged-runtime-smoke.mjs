@@ -34,6 +34,7 @@ if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source")
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
 assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], mcpLoss ? packagedMcpLossVersion : 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAGE_SUMMARY_REBUILD_REQUIRED");
+if (developmentUsage && !developmentContext) assert.equal(manifest.portableUsageUiRecovery, 1, "PACKAGED_USAGE_UI_RECOVERY_REBUILD_REQUIRED");
 if (developmentContext) { assert.equal(manifest.portableDevelopmentContext, 1, "PACKAGED_CONTEXT_REBUILD_REQUIRED"); assert.equal(manifest.developmentContextManagement, 1); }
 if (contextInterruption) assert.equal(manifest.portableDevelopmentContextInterruption, 1, "PACKAGED_CONTEXT_INTERRUPTION_REBUILD_REQUIRED");
 if (providerContext) assert.equal(manifest.portableDevelopmentProviderContext, 1, "PACKAGED_PROVIDER_CONTEXT_REBUILD_REQUIRED");
@@ -116,6 +117,7 @@ try {
 				for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "priceSnapshotSurvivesReconfiguration", "uiReloadRetainsUsage", "originalTaskRetained", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
 				assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? 2 : 0); assert.equal(proof.toolInvocations, 1); assert.equal(proof.normalizedTokens, 240); assert.equal(proof.reportedResponses, 2); assert.ok(Math.abs(proof.estimatedUsd - 0.00077) < 1e-12); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
 				assert.equal(proof.summary.readOnlySummaryVerified, true); assert.equal(proof.summary.normalizedTokens, 240); assert.equal(proof.summary.estimatedUsd, proof.estimatedUsd); assert.deepEqual(proof.summary.taskEndContext, original.expected.task.context);
+					assert.deepEqual(proof.uiRecovery, phase === "record" ? { exactRecoveryGateVerified: true, waitedBeforeApiCall: true, originalUiExitConfirmed: true, uiEpochAdvancedOnce: true, runtimeRetained: true } : null);
 				}
 				await writeFile(join(caseProof, phase + "-application-proof.json"), JSON.stringify(proof), { flag: "wx" }); phases.push(proof);
 			}

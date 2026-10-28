@@ -1026,6 +1026,11 @@ if (!app.hasSingleInstanceLock()) {
 					getTray: () => desktopTray, getPower: () => systemPower, emitPowerForSmoke, failNextPowerCheckForSmoke, root, privateDirectory, context: portableContext,
 					api: portableScenario || portableMcpLoss || storageCase || developmentUsageCase || gatewayCase ? (action, args) => api(action, args, fixtureAuthority) : api,
 					testCommand, getRuntimePid: () => runtime.pid, getProbeSequence: () => probeSequence, getUi: () => ui,
+					getUiRecoveryForSmoke: () => ({ recovering, stopping }),
+					beginDevelopmentUsageRecovery: () => {
+						if (!developmentUsageCase || developmentUsageCase.context || developmentUsageCase.phase !== "record" || recovering || stopping || restarts !== 0) throw new Error("DEVELOPMENT_USAGE_UI_RECOVERY_FIXTURE_REQUIRED");
+						return recoverUi("development-usage-fixture");
+					},
 					runtimeScenario: portableScenario, mcpLossScenario: portableMcpLoss, diagnostics: portableDiagnostics, storageCase, commandCase, developmentUsageCase, gatewayCase, gatewayFixtureDirectory,
 					getGatewayConfigurationForSmoke: () => { if (!gatewayCase) throw new Error("GATEWAY_FIXTURE_REQUIRED"); return gatewayCopiedForSmoke; },
 					registerCommandWorkspace, registerDevelopmentUsageWorkspace,

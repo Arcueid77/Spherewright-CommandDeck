@@ -11,6 +11,35 @@ import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 export const developmentUsageText = "DEVELOPMENT_USAGE_FIXTURE\n";
 export const developmentUsageOriginalFile = "development-usage-original.private.json";
 const json = value => JSON.parse(JSON.stringify(value));
+export async function callDevelopmentUsageApi(driver, action, args, timeoutMs = 20000) {
+	const deadline = performance.now() + timeoutMs;
+	while (true) {
+		const lifecycle = driver.getUiRecoveryForSmoke();
+		if (lifecycle.stopping) throw new Error("DEVELOPMENT_USAGE_SUPERVISOR_STOPPING");
+		// Invoke the synchronous admission prefix in the same turn as this check.
+		// Never retry an API call whose effects may already have started.
+		if (!lifecycle.recovering) return driver.api(action, args);
+		assert.ok(performance.now() < deadline, "DEVELOPMENT_USAGE_UI_RECOVERY_DID_NOT_SETTLE");
+		await new Promise(resolve => setTimeout(resolve, 25));
+	}
+}
+
+export async function verifyDevelopmentUsageUiRecovery(driver, profileId) {
+	const previous = driver.getUi(), runtimePid = driver.getRuntimePid();
+	const replacing = driver.beginDevelopmentUsageRecovery(); replacing.catch(() => {});
+	let described;
+	try {
+		assert.equal(driver.getUiRecoveryForSmoke().recovering, true);
+		await assert.rejects(driver.api("profiles-manage", { action: "describe", args: { id: profileId } }), { message: "UI_RECOVERY_PENDING" });
+		described = await callDevelopmentUsageApi(driver, "profiles-manage", { action: "describe", args: { id: profileId } });
+	} finally { await replacing; }
+	const current = driver.getUi();
+	assert.notEqual(current, previous); assert.equal(current.epoch, previous.epoch + 1);
+	assert.ok(previous.child.exitCode !== null || previous.child.signalCode !== null, "DEVELOPMENT_USAGE_ORIGINAL_UI_EXIT_UNCONFIRMED");
+	assert.equal(driver.getUiRecoveryForSmoke().recovering, false); assert.equal(driver.getRuntimePid(), runtimePid);
+	return { exactRecoveryGateVerified: true, waitedBeforeApiCall: true, originalUiExitConfirmed: true, uiEpochAdvancedOnce: true, runtimeRetained: true, described };
+}
+
 export async function validateDevelopmentUsageWorkspace(context) {
 	const directory = join(context.root, "development-usage-workspace"), info = await lstat(directory);
 	assert.ok(info.isDirectory() && !info.isSymbolicLink()); assert.equal((await realpath(directory)).toLowerCase(), directory.toLowerCase());
@@ -38,7 +67,8 @@ export async function readDevelopmentUsageOriginal(context) {
 }
 
 export async function runDevelopmentUsageSmoke(driver, manifest) {
-	const { api, testCommand, context } = driver, phase = driver.developmentUsageCase.phase, runtimePid = driver.getRuntimePid();
+	const { testCommand, context } = driver, phase = driver.developmentUsageCase.phase, runtimePid = driver.getRuntimePid();
+	const api = (action, args) => callDevelopmentUsageApi(driver, action, args);
 	const request = (action, args = {}) => api("workbench", { action, args }), evaluate = source => testCommand("evaluate", { source });
 	const registered = await driver.registerDevelopmentUsageWorkspace(), root = registered.roots[0];
 	assert.equal(root.canWrite, false); assert.equal(root.canExecute, false);
@@ -83,6 +113,13 @@ export async function runDevelopmentUsageSmoke(driver, manifest) {
 		assert.deepEqual(await expectedState(original.expected.task.id), original.expected); await visible();
 	}
 	original = await readDevelopmentUsageOriginal(context);
+	let uiRecovery = null;
+	if (phase === "record") {
+		uiRecovery = await verifyDevelopmentUsageUiRecovery(driver, original.expected.task.provider);
+		assert.deepEqual(uiRecovery.described.pricing, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }); assert.equal(uiRecovery.described.key, undefined);
+		delete uiRecovery.described;
+		await visible(); assert.deepEqual(await expectedState(original.expected.task.id), original.expected); assert.equal(requests, 2);
+	}
 	const described = await api("profiles-manage", { action: "describe", args: { id: original.expected.task.provider } }); assert.deepEqual(described.pricing, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }); assert.equal(described.key, undefined);
 	const denied = await evaluate("(async()=>{let count=0;for(const call of [()=>window.deck.workbench('agent'," + JSON.stringify({ rootId: root.id, providerId: original.expected.task.provider, modelId: "fixture", prompt: developmentUsagePrompt }) + "),()=>window.deck.workbench('check'," + JSON.stringify({ rootId: root.id, checkId: "npm:test" }) + "),()=>window.deck.game('start',{}),()=>window.deck.manageProfiles('save',{}),()=>window.deck.probe({mode:'offline'})])try{await call()}catch{count++}return count})()"); assert.equal(denied, 5);
 	const summary = await verifyUsageSummary(driver, { domain: "development", usage: original.expected.task.usage, context: original.expected.task.context });
@@ -90,6 +127,6 @@ export async function runDevelopmentUsageSmoke(driver, manifest) {
 	assert.deepEqual(await verifyUsageSummary(driver, { domain: "development", usage: original.expected.task.usage, context: original.expected.task.context }), summary);
 	const game = await api("game", { action: "snapshot" }), bridge = await api("bridge", { action: "snapshot" }); assert.deepEqual(game.tasks, []); assert.deepEqual(game.unresolved, []); assert.equal(bridge.selected, null); assert.equal(bridge.observation, null);
 	const proof = { version: 1, runId: context.runId, phase, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: original.sha256, syntheticOnly: true, packaged: true, syntheticModelRequests: requests, toolInvocations: 1, normalizedTokens: 240, reportedResponses: 2, estimatedUsd: original.expected.task.usage.estimate.usd, readOnlyWorkspace: true, priceSnapshotSurvivesReconfiguration: true, uiReloadRetainsUsage: true, originalTaskRetained: true, wholeApplicationRestartVerified: phase === "reopen", newExecutionRejected: true, noMcpSelected: true, noProbeAllocated: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false };
-	proof.summary = summary;
+	proof.summary = summary; proof.uiRecovery = uiRecovery;
 	await writeFile(join(context.root, "development-usage-" + phase + "-proof.json"), JSON.stringify(proof), { flag: "wx" }); return proof;
 }
