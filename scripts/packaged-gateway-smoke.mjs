@@ -40,6 +40,8 @@ try {
 		assert.equal(proof.runId, runId); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.packaged, true);
 		for (const field of ["rendererNodeDisabled", "zeroDevelopmentAndGameTasks", "credentialsNotRendered"]) assert.equal(proof[field], true);
 		for (const field of ["gameCalls", "realModelRequests", "syntheticModelRequests"]) assert.equal(proof[field], 0);
+		if (phase === "record") for (const field of ["mechaReadOnlyPanelVerified", "mechaExplicitOptInVerified", "mechaPauseAndResumeVerified", "mechaPrivateFieldsOmitted", "mechaUiReloadRetainsSameObserver", "mechaEnabledBeforeDisconnect"]) assert.equal(proof[field], true, field);
+		if (phase === "reopen") assert.equal(proof.mechaDefaultOffAfterApplicationRestart, true);
 		assert.equal(proof.externalPeerExits.length, phase === "record" ? 3 : 2); for (const exit of proof.externalPeerExits) { assert.equal(exit.code, 0); assert.equal(exit.signal, null); assert.equal(exit.stderrBytes, 0); }
 		if (phase === "record") for (const field of ["readOnlyGateway", "copiedConfigurationAccepted", "protocolToolScopeVerified", "freshAndStaleCacheVerified", "noExtraMcpRequestsAfterDisconnect", "uiReloadRetainsGateway", "oldConfigRevokedAfterRestart", "suspendRevokesWithoutAutomaticReopen", "sameRuntimeWithoutModelReplay", "ownServerExitConfirmed", "gatewayEnabledBeforeApplicationExit"]) assert.equal(proof[field], true);
 		else for (const field of ["defaultOffAfterApplicationRestart", "noAutomaticBridgeConnection", "oldConfigurationRejectedAfterApplicationRestart", "freshConfigurationReadsOnlyUnavailableCache"]) assert.equal(proof[field], true);

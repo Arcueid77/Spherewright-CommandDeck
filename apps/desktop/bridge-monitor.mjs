@@ -72,6 +72,7 @@ export class BridgeMonitor {
 	}
 	releaseResearch(lease) { if (this.researchLease !== lease) throw new Error("RESEARCH_LEASE_MISMATCH"); this.researchLease = null; this.poll(); }
 	watch(itemIds) { if (this.systemPaused || !this.telemetry || this.operation || this.closing) throw new Error("BRIDGE_OBSERVER_UNAVAILABLE"); this.telemetry.watch(itemIds); this.poll(); return this.snapshot(); }
+	watchMecha(enabled) { if (this.systemPaused || !this.telemetry || this.operation || this.closing || this.researchLease) throw new Error("BRIDGE_OBSERVER_UNAVAILABLE"); this.telemetry.watchMecha(enabled); this.poll(); return this.snapshot(); }
 	resumeAfterCloseFailure() {
 		if ((!this.pendingClient || this.pendingClient.exitConfirmed) && (!this.telemetry || this.telemetry.client.exitConfirmed)) this.closing = false;
 	}

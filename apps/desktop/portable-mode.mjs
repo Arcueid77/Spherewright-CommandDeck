@@ -29,6 +29,7 @@ export function assertPortableGatewayAction(action, args, { phase, internal = fa
 	if (action === "gateway" && ["snapshot", "start", "copy", "stop"].includes(args?.action)) return;
 	if (["probe", "attach", "start-fixture"].includes(action) || action === "journal" && !["snapshot", "read"].includes(args?.action) || action === "video" && args?.action === "bookmark") throw new Error("PORTABLE_SMOKE_ACTION_REJECTED");
 	if (internal && phase === "record" && (action === "bridge-select" || action === "bridge" && ["refresh", "disconnect"].includes(args?.action))) return;
+	if (phase === "record" && action === "bridge" && args?.action === "mecha" && typeof args.args?.enabled === "boolean" && Object.keys(args.args).length === 1) return;
 	return assertPortableAction(action, args);
 }
 export function portableDevelopmentUsageCase(argv) {

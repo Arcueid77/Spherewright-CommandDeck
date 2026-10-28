@@ -7,6 +7,7 @@ const tools = [tool("spherewright_get_status"), tool("spherewright_get_session_s
 if (mode === "bad-hint") tools[0].annotations.readOnlyHint = false;
 if (mode === "bad-schema") tools[0].inputSchema.required = ["unexpected"];
 if (mode === "invalid-suffix") tools.push(tool("spherewright_get_status"));
+if (mode === "telemetry-mecha") tools.push(tool("spherewright_get_player_state", { sessionId: "string", planetId: "integer" }, ["sessionId", "planetId"]));
 const input = createInterface({ input: process.stdin });
 input.on("line", (line) => {
 	const message = JSON.parse(line); if (message.id === undefined || !message.method) return;
@@ -19,11 +20,12 @@ input.on("line", (line) => {
 	if (message.method === "tools/call") {
 		if (mode === "error") { send({ id: message.id, error: { code: -1, message: "SYNTHETIC_RAW_DIAGNOSTIC_MUST_NOT_ESCAPE" } }); return; }
 		result = { structuredContent: { success: true, status: { bridgeConnected: false } }, content: [] };
-		if (mode === "telemetry") {
+		if (["telemetry", "telemetry-mecha"].includes(mode)) {
 			const name = message.params.name, args = message.params.arguments;
 			let value;
 			if (name === "spherewright_get_status") value = { success: true, status: { bridgeConnected: true, bridgeInstanceId: "synthetic-bridge", protocolVersion: 1, pluginVersion: "synthetic", gameVersion: "synthetic", gameLoaded: true, runtimePerformance: runtimePerformanceFixture() } };
 			else if (name === "spherewright_get_session_state") value = { success: true, result: { bridgeConnected: true, sessionId: "synthetic-session", gameLoaded: true, ownedBySpherewright: true, accessRestricted: false, gameTick: 1200, localPlanetId: 1, revision: 1, saveName: "PRIVATE_SYNTHETIC_SAVE", restartResumeToken: "PRIVATE_SYNTHETIC_TOKEN" } };
+			else if (name === "spherewright_get_player_state") value = { success: true, result: { sessionId: "synthetic-session", planetId: args.planetId, capturedAtGameTick: 1200, movementState: "Fly", isAlive: true, isOnPlanet: true, isFlying: true, isSailing: false, position: { x: 10, y: -20, z: 30 }, speed: 12.5, coreEnergy: 75000000, coreEnergyCapacity: 100000000, reactorItemId: 1006, reactorItemName: "Synthetic fuel", autoReplenishFuel: true, fuelStorage: [{ itemId: 1006, name: "Synthetic fuel", count: 18, slotCount: 1 }], constructionDrones: { enabled: true, constructionEnabled: true, total: 4, alive: 3, idle: 2, working: 1, pendingBuildTargets: 0, pendingRepairTargets: 0 }, handcraftQueue: [{ queueIndex: 0, recipeId: 1, recipeName: "Synthetic craft", remainingCraftCount: 3, progress: 20, progressRequired: 60 }], stateHash: "PRIVATE_SYNTHETIC_MECHA_HASH", inventory: [{ name: "PRIVATE_SYNTHETIC_INVENTORY" }], checkpointToken: "PRIVATE_SYNTHETIC_MECHA_TOKEN" } };
 			else {
 				const production = name.endsWith("production"), planetId = args.cursor ? 2 : 1;
 				const body = { sessionId: "synthetic-session", capturedAtGameTick: 1200, snapshotId: production ? "synthetic-production" : "synthetic-summary", snapshotExpiresAtUtc: "2099-01-01T00:00:00Z", totalFactoryCount: 2, returnedFactoryCount: 1, nextCursor: args.cursor ? null : "next", planets: [{ planetId, planetName: `Fixture planet ${planetId}`, capturedAtGameTick: 1200, isLocalPlanet: planetId === 1, power: { totalEnergyGenerated: 1000000, totalEnergyCapacity: 1200000, totalEnergyRequired: 800000, totalEnergyServed: 800000, minimumConsumerRatio: 1 }, logistics: { stationCount: 2, storedItemCount: 120, workingDroneCount: 1, idleDroneCount: 4, workingVesselCount: 0, idleVesselCount: 2, underpoweredStationCount: 0, outstandingLocalOrderSlotCount: 1, outstandingRemoteOrderSlotCount: 0 }, ...(production ? { production: args.itemIds.map((itemId) => ({ itemId, itemName: `Synthetic matrix ${itemId}`, producedCount: 4, consumedCount: 1, actualProductionPerMinute: 24, actualConsumptionPerMinute: 6, theoreticalProductionPerMinute: 30, utilization: 0.8, theoreticalCoverage: "complete", theoreticalRateSource: "current_runtime_component_formula_v1", rateSource: "native_factory_statistics_level_0", findingCount: 0, findingsTruncated: false, findings: [] })) } : {}) }] };

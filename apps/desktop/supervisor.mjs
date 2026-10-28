@@ -95,7 +95,7 @@ const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(por
 const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope({ multipleApis: developmentUsageCase?.multipleProviders === true }) : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const gatewayFixtureDirectory = gatewayCase ? join(portableContext.root, "runtime-fixtures/gateway", portableContext.runId) : undefined;
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { ...(gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}), mecha: Boolean(gatewaySmoke) }) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
@@ -484,10 +484,11 @@ async function api(action, args, source) {
 		return bridge.select(args);
 	}
 	if (action === "bridge") {
-		if (!args || !["snapshot", "refresh", "watch", "disconnect", "connect"].includes(args.action)) throw new Error("INVALID_BRIDGE_ACTION");
+		if (!args || !["snapshot", "refresh", "watch", "mecha", "disconnect", "connect"].includes(args.action)) throw new Error("INVALID_BRIDGE_ACTION");
 		if (args.action === "snapshot") return bridge.snapshot();
 		if (args.action === "refresh") return bridge.refresh();
 		if (args.action === "watch") return bridge.watch(args.args?.itemIds);
+		if (args.action === "mecha") { if (!args.args || Object.keys(args.args).length !== 1 || typeof args.args.enabled !== "boolean") throw new Error("INVALID_MECHA_OBSERVATION"); return bridge.watchMecha(args.args.enabled); }
 		if (args.action === "disconnect") return bridge.disconnect();
 		return bridge.connect();
 	}

@@ -5,7 +5,7 @@ import { gatewaySmokeUi, runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
 import { gatewayConnection } from "./agent-gateway-wire.mjs";
 
-export const packagedGatewayVersion = 3;
+export const packagedGatewayVersion = 4;
 export function assertGatewayFixtureConfig(config, command, script) {
 	assert.deepEqual(Object.keys(config).sort(), ["args", "command", "env"]); assert.equal(config.command, command); assert.deepEqual(config.args, [script]);
 	assert.deepEqual(Object.keys(config.env).sort(), ["COMMANDDECK_GATEWAY_KEY", "COMMANDDECK_GATEWAY_PIPE", "ELECTRON_RUN_AS_NODE"]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1");
@@ -34,6 +34,7 @@ export async function runPackagedGatewaySmoke(driver, manifest) {
 		const { state, open, click, copy, until } = gatewaySmokeUi(driver), runtime = driver.getRuntimePid();
 		assert.equal((await state()).enabled, false);
 		const bridge = await driver.api("bridge", { action: "snapshot" }); assert.equal(bridge.selected, null); assert.equal(driver.getBridgePid(), undefined);
+		assert.equal(bridge.observation, null);
 		const oldConfig = await readGatewayExitConfig(context, process.execPath, join(driver.root, "apps/desktop/agent-gateway-stdio.mjs"));
 		const peers = [], exits = []; const peerFor = async config => { const peer = new GatewaySmokeClient(config, context.root); peers.push(peer); assert.equal((await peer.initialize()).result.protocolVersion, "2025-11-25"); return peer; };
 		try {
@@ -49,6 +50,7 @@ export async function runPackagedGatewaySmoke(driver, manifest) {
 			proof = { runId: context.runId, defaultOffAfterApplicationRestart: true, noAutomaticBridgeConnection: true, oldConfigurationRejectedAfterApplicationRestart: true, freshConfigurationReadsOnlyUnavailableCache: true, credentialsNotRendered: true, externalPeerExits: exits, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, physicalInputVerified: false, clipboardOsWriteVerified: false, actualOsSleepVerified: false };
 		} finally { for (const peer of peers) await peer.close().catch(() => {}); }
 	}
+	if (gatewayCase.phase === "reopen") proof.mechaDefaultOffAfterApplicationRestart = true;
 	await empty();
 	Object.assign(proof, { phase: gatewayCase.phase, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, rendererNodeDisabled: true, zeroDevelopmentAndGameTasks: true });
 	await writeFile(join(context.root, "gateway-" + gatewayCase.phase + "-application.json"), JSON.stringify(proof, null, 2), { flag: "wx" });

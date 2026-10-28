@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
 import { gatewaySdkHandoff } from "./agent-gateway-sdk-case.mjs";
+import { runMechaPanelSmoke } from "./mecha-smoke.mjs";
 
 export function gatewaySmokeUi(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source }), state = () => driver.api("gateway", { action: "snapshot" });
@@ -24,6 +25,7 @@ export async function runGatewaySmoke(driver) {
 		await assert.rejects(driver.api("gateway", { action: "start" }), /TRUSTED_UI_REQUIRED/);
 		await driver.api("bridge-select", marker); await driver.api("bridge", { action: "refresh" });
 		await until(async () => (await driver.api("bridge", { action: "snapshot" })).observation?.production?.data?.coverage?.complete === true, "CACHE");
+		const mecha = await runMechaPanelSmoke(driver, { evaluate, until });
 		await open(); await click("开启只读网关"); await until(async () => (await state()).enabled, "ENABLED");
 		const firstConfig = await copy(), firstPeer = await peerFor(firstConfig), listed = await firstPeer.request("tools/list"); assert.equal(listed.result.tools.length, 1); assert.equal(listed.result.tools[0].annotations.readOnlyHint, true);
 		const fresh = (await firstPeer.observe({ section: "production", limit: 1 })).result.structuredContent; assert.equal(fresh.state, "observed"); assert.equal(fresh.planets[0].production[0].actualProductionPerMinute, 24);
@@ -52,7 +54,7 @@ export async function runGatewaySmoke(driver) {
 			await writeFile(join(directory, "gateway-exit-config.private.json"), JSON.stringify(exitConfig), { flag: "wx", mode: 0o600 });
 		}
 		while (peers.length) { exits.push(await peers[0].close()); peers.shift(); }
-		const proof = { runId: driver.runId, readOnlyGateway: true, copiedConfigurationAccepted: true, protocolToolScopeVerified: true, freshAndStaleCacheVerified: true, noExtraMcpRequestsAfterDisconnect: true, uiReloadRetainsGateway: true, oldConfigRevokedAfterRestart: true, suspendRevokesWithoutAutomaticReopen: true, credentialsNotRendered: true, sameRuntimeWithoutModelReplay: true, ownServerExitConfirmed: true, gatewayEnabledBeforeApplicationExit: (await state()).enabled, externalPeerExits: exits, rpcCountAfterDisconnect: before, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, clipboardOsWriteVerified: false, physicalInputVerified: false, actualOsSleepVerified: false, fullPackagedGatewayVerified: false };
+		const proof = { ...mecha, runId: driver.runId, readOnlyGateway: true, copiedConfigurationAccepted: true, protocolToolScopeVerified: true, freshAndStaleCacheVerified: true, noExtraMcpRequestsAfterDisconnect: true, uiReloadRetainsGateway: true, oldConfigRevokedAfterRestart: true, suspendRevokesWithoutAutomaticReopen: true, credentialsNotRendered: true, sameRuntimeWithoutModelReplay: true, ownServerExitConfirmed: true, gatewayEnabledBeforeApplicationExit: (await state()).enabled, externalPeerExits: exits, rpcCountAfterDisconnect: before, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, clipboardOsWriteVerified: false, physicalInputVerified: false, actualOsSleepVerified: false, fullPackagedGatewayVerified: false };
 		if (!driver.gatewayCase) await writeFile(join(directory, "application.private.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 		return proof;
 	} finally { for (const peer of peers) await peer.close().catch(() => {}); }

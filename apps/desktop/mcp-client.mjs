@@ -9,10 +9,11 @@ import { observationLimits } from "./observation-policy.mjs";
 
 const definitions = {
 	spherewright_get_status: {}, spherewright_get_session_state: {},
+	spherewright_get_player_state: { sessionId: "string", planetId: "integer" },
 	spherewright_get_overseer_summary: { sessionId: "string", limit: "integer", cursor: "string" },
 	spherewright_get_overseer_production: { sessionId: "string", itemIds: "array", limit: "integer", cursor: "string" },
 };
-const required = { spherewright_get_overseer_summary: ["sessionId"], spherewright_get_overseer_production: ["sessionId", "itemIds"] };
+const required = { spherewright_get_player_state: ["sessionId", "planetId"], spherewright_get_overseer_summary: ["sessionId"], spherewright_get_overseer_production: ["sessionId", "itemIds"] };
 const pendingCapacity = 8;
 export function supportedReadTool(tool) {
 	if (!tool || !Object.hasOwn(definitions, tool.name) || tool.annotations?.readOnlyHint !== true || tool.annotations?.destructiveHint === true) return false;
@@ -23,6 +24,7 @@ export function supportedReadTool(tool) {
 function validArguments(name, args) {
 	if (!args || Array.isArray(args) || typeof args !== "object" || Object.keys(args).some((key) => !Object.hasOwn(definitions[name], key))) return false;
 	if (required[name] && (typeof args.sessionId !== "string" || !args.sessionId.length || args.sessionId.length > 128)) return false;
+	if (name === "spherewright_get_player_state" && (!Number.isSafeInteger(args.planetId) || args.planetId <= 0)) return false;
 	if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 16)) return false;
 	if (args.cursor !== undefined && (typeof args.cursor !== "string" || args.cursor.length > 8192)) return false;
 	if (name === "spherewright_get_overseer_production" && (!Array.isArray(args.itemIds) || !args.itemIds.length || args.itemIds.length > 64 || new Set(args.itemIds).size !== args.itemIds.length || !args.itemIds.every((id) => Number.isSafeInteger(id) && id > 0))) return false;
@@ -51,7 +53,7 @@ export function launchMcp(selection, { descriptorPath, researchAuthority, observ
 	return new ReadOnlyMcpClient(child, { researchAuthority, startedAt, observation: limits });
 }
 
-// Closed MCP adapter. Public read() stays M2-only; research requires the supervisor's object identity.
+// Closed read adapter. Research writes require the supervisor's object identity.
 export class ReadOnlyMcpClient {
 	#pending = new Map(); #sequence = 0; #buffer = ""; #tools = new Map(); #stage = "new"; #discoveryDeadline = Infinity;
 	#researchTools = new Set(); #researchAuthority; #hasPlaybook = false;

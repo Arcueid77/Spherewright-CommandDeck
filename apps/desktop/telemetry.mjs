@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { runtimePerformanceDatum } from "./runtime-performance.mjs";
+import { projectMechaState } from "./mecha-state.mjs";
 
 const text = (value, max = 200) => typeof value === "string" && value.length <= max ? value : null;
 const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -44,10 +45,17 @@ export class ReadOnlyTelemetry {
 		this.client = client; this.now = now; this.emit = emit; this.intervalMs = intervalMs; this.staleMs = staleMs;
 		this.generation = 0; this.identity = null; this.inFlight = null; this.lastStarted = -Infinity; this.connected = true;
 		this.itemIds = [6001, 6002, 6003, 6004]; this.summary = empty(); this.production = empty(); this.bridge = empty(); this.session = empty(); this.runtimePerformance = empty(); this.events = [];
+		this.mechaEnabled = false; this.mecha = empty("MECHA_OBSERVATION_DISABLED");
 	}
 	snapshot() {
 		const qualify = (value) => ({ ...value, state: ["observed", "warming_up"].includes(value.state) && (!this.connected || this.client.closed || this.now() - value.receivedAt > this.staleMs) ? "stale" : value.state, ageMs: value.receivedAt === null ? null : Math.max(0, this.now() - value.receivedAt) });
-		return structuredClone({ connected: this.connected && !this.client.closed, refreshing: Boolean(this.inFlight), itemIds: this.itemIds, bridge: qualify(this.bridge), session: qualify(this.session), summary: qualify(this.summary), production: qualify(this.production), runtimePerformance: qualify(this.runtimePerformance), events: this.events, requests: this.client.stats?.toolCalls ?? 0 });
+		return structuredClone({ connected: this.connected && !this.client.closed, refreshing: Boolean(this.inFlight), itemIds: this.itemIds, bridge: qualify(this.bridge), session: qualify(this.session), summary: qualify(this.summary), production: qualify(this.production), runtimePerformance: qualify(this.runtimePerformance), mechaEnabled: this.mechaEnabled, mecha: qualify(this.mecha), events: this.events, requests: this.client.stats?.toolCalls ?? 0 });
+	}
+	watchMecha(enabled) {
+		if (typeof enabled !== "boolean") throw new Error("INVALID_MECHA_OBSERVATION");
+		if (enabled === this.mechaEnabled) return;
+		this.mechaEnabled = enabled; this.generation++; this.lastStarted = -Infinity;
+		this.mecha = !enabled && this.mecha.data ? { ...this.mecha, state: "stale", reason: "MECHA_OBSERVATION_DISABLED" } : empty(enabled ? "WAITING_FOR_MECHA" : "MECHA_OBSERVATION_DISABLED");
 	}
 	watch(itemIds) {
 		if (!Array.isArray(itemIds) || !itemIds.length || itemIds.length > 16 || !itemIds.every((id) => Number.isSafeInteger(id) && id > 0) || new Set(itemIds).size !== itemIds.length) throw new Error("INVALID_WATCHED_ITEM_IDS");
@@ -56,11 +64,11 @@ export class ReadOnlyTelemetry {
 	}
 	interrupt() {
 		this.generation++; this.lastStarted = -Infinity;
-		for (const key of ["summary", "production", "bridge", "session", "runtimePerformance"]) this[key] = { ...this[key], state: this[key].data ? "stale" : "unavailable", reason: "SYSTEM_POWER_SUSPENDED" };
+		for (const key of ["summary", "production", "bridge", "session", "runtimePerformance", "mecha"]) this[key] = { ...this[key], state: this[key].data ? "stale" : "unavailable", reason: "SYSTEM_POWER_SUSPENDED" };
 		this.#event("SYSTEM_POWER_SUSPENDED"); this.emit();
 	}
 	#event(reason) { this.events.push({ receivedAt: this.now(), reason }); this.events = this.events.slice(-40); }
-	#clearWorld(reason, state = "unavailable") { this.identity = null; this.summary = { ...empty(reason), state }; this.production = { ...empty(reason), state }; }
+	#clearWorld(reason, state = "unavailable") { this.identity = null; this.summary = { ...empty(reason), state }; this.production = { ...empty(reason), state }; this.mecha = { ...empty(reason), state }; }
 	refresh(force = false) {
 		if (this.inFlight) return this.inFlight;
 		if (!this.connected || this.client.closed || this.now() - this.lastStarted < (force ? 1000 : this.intervalMs)) return Promise.resolve(this.snapshot());
@@ -104,6 +112,19 @@ export class ReadOnlyTelemetry {
 		if (status.status?.bridgeConnected !== true || status.status?.protocolVersion !== 1 || result.result?.bridgeConnected !== true) throw new Error("BRIDGE_PROTOCOL_UNSUPPORTED");
 		return { status: status.status, session: result.result, statusReadStartedAt };
 	}
+	async #mecha(context, generation, deadline) {
+		if (!this.mechaEnabled) return this.mecha;
+		if (!this.client.supports("spherewright_get_player_state")) return { ...empty("READ_TOOL_UNSUPPORTED"), state: "unsupported" };
+		if (!Number.isSafeInteger(context.localPlanetId) || context.localPlanetId <= 0) return empty("NO_LOCAL_PLANET");
+		const receivedAt = this.now();
+		try {
+			const reply = await this.#read("spherewright_get_player_state", { sessionId: context.sessionId, planetId: context.localPlanetId }, generation, deadline); failure(reply);
+			return { state: "observed", reason: null, receivedAt, data: projectMechaState(reply.result, { sessionId: context.sessionId, planetId: context.localPlanetId }) };
+		} catch (error) {
+			if (["READ_CONTEXT_CHANGED", "READ_ACCESS_RESTRICTED"].includes(error.message) || error.message.startsWith("MCP_") || this.client.closed) throw error;
+			return empty(error.message === "READ_MECHA_SCHEMA_CHANGED" ? error.message : "MECHA_READ_FAILED");
+		}
+	}
 	async #cycle(generation, watched) {
 		const deadline = this.now() + 30000;
 		try {
@@ -118,18 +139,20 @@ export class ReadOnlyTelemetry {
 			if (this.identity !== identity) { this.#clearWorld("SESSION_CHANGED"); this.identity = identity; }
 			const summary = await this.#pages("spherewright_get_overseer_summary", initial.session.sessionId, null, generation, deadline);
 			const production = await this.#pages("spherewright_get_overseer_production", initial.session.sessionId, watched, generation, deadline);
+			let mecha = await this.#mecha(initial.session, generation, deadline);
 			const final = await this.#context(generation, deadline);
 			if (generation !== this.generation || !this.connected) return this.snapshot();
 			if (final.status.bridgeInstanceId !== initial.status.bridgeInstanceId || final.session.sessionId !== initial.session.sessionId || final.session.gameLoaded !== true || final.session.ownedBySpherewright !== true || final.session.accessRestricted !== false) throw new Error("READ_CONTEXT_CHANGED");
 			if (integer(final.session.gameTick) === null || final.session.gameTick < initial.session.gameTick || [summary, production].some((value) => value.data && (value.data.capturedAtGameTick < initial.session.gameTick || value.data.capturedAtGameTick > final.session.gameTick))) throw new Error("READ_CONTEXT_TICK_CHANGED");
-			this.summary = summary; this.production = production;
+			if (this.mechaEnabled && mecha.data && (final.session.localPlanetId !== initial.session.localPlanetId || mecha.data.capturedAtGameTick < initial.session.gameTick || mecha.data.capturedAtGameTick > final.session.gameTick)) mecha = empty("READ_MECHA_SCOPE_CHANGED");
+			this.summary = summary; this.production = production; this.mecha = mecha;
 			return this.snapshot();
 		} catch (error) {
 			if (generation !== this.generation || !this.connected) return this.snapshot();
 			const reason = error.message.startsWith("MCP_") ? "MCP_UNAVAILABLE" : /^[A-Z_]+$/.test(error.message) ? error.message : "READ_FAILED";
 			if (this.runtimePerformance.data) this.runtimePerformance = { ...this.runtimePerformance, state: "stale", reason };
 			if (["READ_ACCESS_RESTRICTED", "READ_CONTEXT_CHANGED", "READ_CONTEXT_TICK_CHANGED"].includes(reason)) { this.#clearWorld(reason, reason === "READ_ACCESS_RESTRICTED" ? "restricted" : "unavailable"); this.session = empty(reason); }
-			else { for (const key of ["summary", "production", "bridge", "session", "runtimePerformance"]) this[key] = { ...this[key], state: this[key].data ? "stale" : reason === "READ_CONTEXT_UNSUPPORTED" ? "unsupported" : "unavailable", reason }; }
+			else { for (const key of ["summary", "production", "bridge", "session", "runtimePerformance", "mecha"]) this[key] = { ...this[key], state: this[key].data ? "stale" : reason === "READ_CONTEXT_UNSUPPORTED" ? "unsupported" : "unavailable", reason }; }
 			this.#event(reason); return this.snapshot();
 		}
 	}

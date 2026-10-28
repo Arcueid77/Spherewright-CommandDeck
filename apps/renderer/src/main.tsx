@@ -9,7 +9,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
-import { BridgeProvider, ConnectionPanel, ResearchPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
+import { BridgeProvider, ConnectionPanel, ResearchPanel, MechaPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
 import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 import { JournalPanel } from "./journal";
@@ -423,7 +423,7 @@ const components = {
 	"agent-gateway": AgentGatewayPanel,
 	videos: VideosPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
-	bridge: ConnectionPanel, research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
+	bridge: ConnectionPanel, research: ResearchPanel, mecha: MechaPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
 	"game-agent": GameTasksPanel,
 };
 function addGamePanel(api: DockviewReadyEvent["api"], activate = false) {
@@ -431,7 +431,7 @@ function addGamePanel(api: DockviewReadyEvent["api"], activate = false) {
 	if (activate) { api.getPanel("game")?.api.setActive(); api.getPanel("game-agent")?.api.setActive(); }
 }
 function addBridgePanels(api: DockviewReadyEvent["api"], activate = false) {
-	for (const [id, title] of [["bridge", "只读舰桥"], ["research", "科研"], ["production", "生产"], ["power", "供电"], ["logistics", "物流"]]) if (!api.getPanel(id)) api.addPanel({ id, component: id, title, ...(api.getPanel("editor") ? { position: { referencePanel: "editor", direction: "within" as const }, inactive: true } : {}) });
+	for (const [id, title] of [["bridge", "只读舰桥"], ["research", "科研"], ["mecha", "机甲"], ["production", "生产"], ["power", "供电"], ["logistics", "物流"]]) if (!api.getPanel(id)) api.addPanel({ id, component: id, title, ...(api.getPanel("editor") ? { position: { referencePanel: "editor", direction: "within" as const }, inactive: true } : {}) });
 	if (activate) api.getPanel("bridge")?.api.setActive();
 }
 async function ready(event: DockviewReadyEvent) {

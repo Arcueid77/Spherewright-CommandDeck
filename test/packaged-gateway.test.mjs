@@ -24,7 +24,10 @@ test("packaged gateway admission needs the isolated package profile and exactly 
 	assert.equal(env.COMMANDDECK_PI_CONFIG_DIR, join(context.root, "no-user-provider-configuration"));
 });
 
-test("gateway package fixture never admits model, game, file or command execution; bridge is record-only and internal", () => {
+test("gateway fixture rejects execution, keeps service selection internal and admits only the record-phase mecha toggle", () => {
+	for (const enabled of [false, true]) assertPortableGatewayAction("bridge", { action: "mecha", args: { enabled } }, { phase: "record" });
+	for (const args of [{ enabled: "true" }, { enabled: true, extra: "no" }, {}]) assert.throws(() => assertPortableGatewayAction("bridge", { action: "mecha", args }, { phase: "record" }), /PORTABLE_SMOKE_ACTION_REJECTED/);
+	assert.throws(() => assertPortableGatewayAction("bridge", { action: "mecha", args: { enabled: true } }, { phase: "reopen" }), /PORTABLE_SMOKE_ACTION_REJECTED/);
 	for (const phase of ["record", "reopen"]) {
 		for (const action of ["snapshot", "start", "copy", "stop"]) assertPortableGatewayAction("gateway", { action }, { phase });
 		for (const [action, args] of [["probe", { mode: "offline" }], ["probe", { mode: "live" }], ["attach", "owned-fixture"], ["start-fixture"], ["game", { action: "start" }], ["game-confirmed", {}], ["workbench", { action: "check" }], ["workbench", { action: "agent" }], ["workbench", { action: "edit" }], ["profiles-manage", { action: "save" }], ["journal", { action: "start" }]]) assert.throws(() => assertPortableGatewayAction(action, args, { phase, internal: true }), /PORTABLE_SMOKE_ACTION_REJECTED/);
