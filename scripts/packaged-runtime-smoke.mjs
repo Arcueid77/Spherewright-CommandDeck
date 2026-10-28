@@ -16,29 +16,37 @@ import { prepareDevelopmentUsageCase, developmentWorkspaceState, developmentGitH
 import { readDevelopmentUsageOriginal } from "../apps/desktop/development-usage-smoke.mjs";
 import { readDevelopmentContextOriginal } from "../apps/desktop/development-context-recovery.mjs";
 import { modelUsageSnapshot } from "../apps/desktop/model-usage.mjs";
+import { runContextInterruptionCase } from "./development-context-interruption-case.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
-const developmentContext = args[0] === "--development-context"; if (developmentContext) args.shift();
+const contextInterruption = args[0] === "--development-context-interruption";
+const developmentContext = contextInterruption || args[0] === "--development-context"; if (developmentContext) args.shift();
 const developmentUsage = developmentContext || args[0] === "--development-usage"; if (developmentUsage && !developmentContext) args.shift();
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
 if (developmentUsage && mcpLoss) throw new Error("PACKAGED_USAGE_MODE_CONFLICT");
-const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
+const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = contextInterruption ? "packaged-development-context-interruption" : developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = contextInterruption ? "packagedDevelopmentContextInterruptionSmoke" : developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
 assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAGE_SUMMARY_REBUILD_REQUIRED");
 if (developmentContext) { assert.equal(manifest.portableDevelopmentContext, 1, "PACKAGED_CONTEXT_REBUILD_REQUIRED"); assert.equal(manifest.developmentContextManagement, 1); }
+if (contextInterruption) assert.equal(manifest.portableDevelopmentContextInterruption, 1, "PACKAGED_CONTEXT_INTERRUPTION_REBUILD_REQUIRED");
 assert.ok(manifest.files.some(file => file.path === "resources/app/test/fixtures/research-mcp-server.mjs"));
 const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
 async function temporary() { const path = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))); directories.push(path); return path; }
 const copyRoot = await temporary(), copy = join(copyRoot, "bundle");
-async function launch(directory, environment, evidence, argv, prefix = "") {
+async function launch(directory, environment, evidence, argv, prefix = "", { beforeExit, forced = false } = {}) {
 	const child = spawn(join(copy, bundleExecutable), argv, { cwd: directory, env: environment, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 	let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
+	const exited = once(child, "exit"); exited.catch(() => {});
+	const observe = () => observePackagedProcesses({ executable: join(copy, "resources/app/artifacts/native/CommandDeck.NativeHost.exe"), roots: [directory, copyRoot], env: environment });
 	const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000);
-	let code, signal; try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
-	await writeFile(join(evidence, prefix + "exit.private.json"), JSON.stringify({ code, signal, timedOut, output }), { flag: "wx" });
+	let code, signal, phaseError;
+	try { if (beforeExit) await beforeExit(child, observe); [code, signal] = await exited; }
+	catch (error) { phaseError = error; if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); [code, signal] = await exited; }
+	finally { clearTimeout(timer); }
+	await writeFile(join(evidence, prefix + "exit.private.json"), JSON.stringify({ code, signal, timedOut, forced, output, error: phaseError?.message }), { flag: "wx" });
 	let remaining; const until = performance.now() + 25000;
 	do {
 		const budget = Math.floor(until - performance.now()); if (budget <= 0) break;
@@ -46,7 +54,8 @@ async function launch(directory, environment, evidence, argv, prefix = "") {
 		await writeFile(join(evidence, prefix + "process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count;
 		if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
 	} while (performance.now() < until);
-	assert.equal(remaining, 0); assert.equal(timedOut, false); assert.equal(code, 0, signal ?? output);
+	assert.equal(remaining, 0); if (phaseError) throw phaseError; assert.equal(timedOut, false);
+	if (forced) assert.ok(code !== 0 || signal, "EXPECTED_CONTEXT_INTERRUPTION_NOT_OBSERVED"); else assert.equal(code, 0, signal ?? output);
 }
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
@@ -59,6 +68,7 @@ try {
 		if (developmentUsage) {
 			const toolchain = await prepareDevelopmentUsageCase(directory), workspaceBefore = await developmentWorkspaceState(directory);
 			caseEnvironment.PATH = [toolchain.gitDirectory, join(process.env.SystemRoot, "System32")].join(delimiter);
+			if (contextInterruption) { cases.push(await runContextInterruptionCase({ directory, caseId, caseProof, caseEnvironment, manifest, toolchain, workspaceBefore, launch })); continue; }
 			const phasePrefix = developmentContext ? "context-" : "";
 			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=" + phasePrefix + "record"], "record-");
 			const original = await (developmentContext ? readDevelopmentContextOriginal : readDevelopmentUsageOriginal)({ root: directory, runId: caseId }), before = await usageRecoveryState(directory, caseId, { role: "development" });
@@ -129,7 +139,7 @@ try {
 		cases.push({ ...proof, noPackagedChildrenRemain: true, ...(modelUsageRecovery ? { modelUsageRecovery } : {}) });
 	}
 	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.length + cases.filter(value => value.modelUsageRecovery || value.developmentUsageRecovery).length, cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
+	const proof = { [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, outsideSourceCheckout: true, actualPackagedApplication: true, applicationRuns: cases.reduce((sum, value) => sum + (value.applicationRuns ?? 1 + Number(Boolean(value.modelUsageRecovery || value.developmentUsageRecovery))), 0), cases, bundleUnchanged: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false, cleanWindowsVmVerified: false };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local", proofFolder + "-smoke.json"), JSON.stringify(proof, null, 2));
 	passed = true; console.log(JSON.stringify({ [proofKind]: "passed", runId, sourceRevision: manifest.sourceRevision, cases: cases.map(value => value[developmentUsage ? "developmentUsageScenario" : mcpLoss ? "mcpLossScenario" : "runtimeScenario"]), gameCalls: 0, realModelRequests: 0 }));
 } finally {

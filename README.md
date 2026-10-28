@@ -252,6 +252,8 @@ Compaction uses Pi's own manual compaction and consumes the new task's six-reque
 
 Contributors can run `npm run test:packaged-development-context -- --source artifacts/portable-desktop` against a bundle declaring `portableDevelopmentContext: 1`. It reuses the isolated development-usage launcher and owned read-only Git workspace, permits only three fixed synthetic tasks, then exits and reopens the same profile with execution disabled. The controller compares original business rows, Pi files, encrypted configuration and workspace bytes, and checks task/summary UI after reload. This check requires the existing Git toolchain and proves only its tested package/profile pair; exact results and outstanding coverage are recorded in the roadmap.
 
+`npm run test:packaged-development-context-interruption -- --source artifacts/portable-desktop` requires `portableDevelopmentContextInterruption: 1`. It holds the third task's synthetic compaction response, independently observes the exact packaged app, and terminates only its owned spawn handle. Two subsequent launches check normal interrupted-task recovery and its persistence. The original completed tasks, all Pi files, encrypted configuration and workspace must stay unchanged; the pending model request remains unreported with unknown cost. Only the unfinished task's terminal state and one recovery event may change. The controller keeps failure evidence and does not rewrite task storage or replay the pending request. This synthetic check does not establish real endpoint or physical desktop acceptance.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

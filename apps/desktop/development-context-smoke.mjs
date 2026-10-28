@@ -4,14 +4,18 @@ import { randomUUID } from "node:crypto";
 import { contextSeedPrompt, contextContinuePrompt, contextCompactPrompt } from "./development-context-case.mjs";
 
 // Runs inside the existing owned workbench fixture; no real provider or game.
-export async function runDevelopmentContextSmoke(driver, rootId, { readPath = "code.mjs", readOnlyWorkspace = false, keepProfile = false, onComplete } = {}) {
+export async function runDevelopmentContextSmoke(driver, rootId, { readPath = "code.mjs", readOnlyWorkspace = false, keepProfile = false, onComplete, onCompactionPending } = {}) {
 	const request = (action, args = {}) => driver.api("workbench", { action, args }), evaluate = source => driver.testCommand("evaluate", { source });
 	const id = "deckvault-" + randomUUID(), key = "synthetic-development-smoke-" + randomUUID(), calls = [], errors = [], runtime = driver.getRuntimePid();
 	const server = createServer(async (incoming, response) => {
 		try {
 			assert.equal(incoming.headers.authorization, "Bearer " + key); let body = ""; for await (const part of incoming) body += part;
 			const data = JSON.parse(body), encoded = JSON.stringify(data.messages), tools = (data.tools ?? []).map(tool => tool.function.name); calls.push({ summary: !tools.length }); let delta, input = 4000;
-			if (!tools.length) { assert.ok(encoded.includes("CONTEXT_SEED_MARKER")); input = 5000; delta = { content: "HISTORICAL_CONTEXT_SUMMARY: seed completed, follow-up answered. Recheck current files and permissions." }; }
+			if (!tools.length) {
+				assert.ok(encoded.includes("CONTEXT_SEED_MARKER"));
+				if (onCompactionPending) { response.writeHead(200, { "content-type": "text/event-stream" }); response.flushHeaders(); return; }
+				input = 5000; delta = { content: "HISTORICAL_CONTEXT_SUMMARY: seed completed, follow-up answered. Recheck current files and permissions." };
+			}
 			else if (encoded.includes("CONTEXT_AFTER_COMPACT")) {
 				assert.deepEqual(tools.sort(), ["workspace_diff", "workspace_list", "workspace_read", "workspace_search"]); assert.ok(encoded.includes("HISTORICAL_CONTEXT_SUMMARY")); input = 400;
 				delta = data.messages.some(message => message.role === "tool" && message.tool_call_id === "context-fresh-read") ? { content: "CONTEXT_COMPACT_DONE" } : { tool_calls: [{ index: 0, id: "context-fresh-read", type: "function", function: { name: "workspace_read", arguments: JSON.stringify({ path: readPath }) } }] };
@@ -25,12 +29,12 @@ export async function runDevelopmentContextSmoke(driver, rootId, { readPath = "c
 	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 	async function until(predicate, code) { const deadline = performance.now() + 20000; while (!await predicate()) { assert.ok(performance.now() < deadline, code); await new Promise(resolve => setTimeout(resolve, 50)); } }
 	async function settled(taskId) { let task; await until(async () => { task = await request("task", { taskId }); return (await request("state")).activeTask === null && !["queued", "running", "cancelling"].includes(task.state); }, "CONTEXT_TASK_NOT_SETTLED"); assert.equal(task.state, "succeeded", task.error); return task; }
-	async function startFromUi(parent, mode, prompt) {
+	async function startFromUi(parent, mode, prompt, waitForResult = true) {
 		await request("ui-save", { key: "selection", value: { rootId, taskId: parent.id } }); await request("ui-save", { key: "draft", value: { prompt, model: JSON.stringify([id, "fixture"]) } }); await driver.testCommand("reload");
 		await until(() => evaluate("document.querySelector('[aria-label=开发任务]')?.value===" + JSON.stringify(prompt)), "CONTEXT_DRAFT_NOT_READY");
 		await evaluate("(()=>{const select=document.querySelector('[aria-label=开发上下文模式]');select.value=" + JSON.stringify(mode) + ";select.dispatchEvent(new Event('change',{bubbles:true}))})()");
 		await until(() => evaluate("(()=>{const panel=document.querySelector('.development-panel'),button=[...panel.querySelectorAll('button')].find(button=>button.textContent==='开始任务');if(!panel.textContent.includes(" + JSON.stringify("来源 " + parent.id.slice(0, 8)) + ")||!button||button.disabled)return false;button.click();return true})()"), "CONTEXT_UI_START_NOT_READY");
-		let taskId; await until(async () => { taskId = (await request("state")).tasks.find(task => task.parentId === parent.id)?.id; return Boolean(taskId); }, "CONTEXT_CHILD_NOT_CREATED"); return settled(taskId);
+		let taskId; await until(async () => { taskId = (await request("state")).tasks.find(task => task.parentId === parent.id)?.id; return Boolean(taskId); }, "CONTEXT_CHILD_NOT_CREATED"); return waitForResult ? settled(taskId) : request("task", { taskId });
 	}
 	let profileSaved = false;
 	try {
@@ -41,6 +45,13 @@ export async function runDevelopmentContextSmoke(driver, rootId, { readPath = "c
 		if (readOnlyWorkspace) { const root = (await request("state")).roots.find(value => value.id === rootId); assert.equal(root.canWrite, false); assert.equal(root.canExecute, false); }
 		else await request("grants", { rootId, canWrite: false, canExecute: false });
 		const continued = await startFromUi(seed, "continue", contextContinuePrompt), current = await request("context-info", { rootId, taskId: continued.id }); assert.equal(current.canCompact, true);
+		if (onCompactionPending) {
+			const pending = await startFromUi(continued, "compact", contextCompactPrompt, false);
+			await until(() => calls.some(call => call.summary), "CONTEXT_COMPACTION_REQUEST_NOT_OBSERVED");
+			assert.deepEqual(calls, [{ summary: false }, { summary: false }, { summary: true }]); assert.deepEqual(errors, []);
+			await onCompactionPending({ seed, continued, source, current, pending: await request("task", { taskId: pending.id }), syntheticModelRequests: calls.length });
+			throw new Error("CONTEXT_INTERRUPTION_CONTROLLER_DID_NOT_TERMINATE");
+		}
 		const compacted = await startFromUi(continued, "compact", contextCompactPrompt); assert.equal(compacted.response, "CONTEXT_COMPACT_DONE"); assert.equal(compacted.result.contextManagement.compacted, true); assert.ok(compacted.result.contextManagement.estimatedTokensAfter < compacted.result.contextManagement.tokensBefore);
 		assert.equal(compacted.invocations.length, 1); assert.equal(compacted.invocations[0].name, "workspace_read"); assert.equal(compacted.result.toolCalls, 1); assert.equal(compacted.result.contextManagement.compactionRequests, calls.filter(call => call.summary).length); assert.equal(compacted.usage.requests, calls.filter(call => call.summary).length + 2);
 		assert.deepEqual(await request("task", { taskId: seed.id }), seed); assert.deepEqual(await request("task", { taskId: continued.id }), continued); assert.deepEqual(await request("context-info", { rootId, taskId: seed.id }), source); assert.deepEqual(await request("context-info", { rootId, taskId: continued.id }), current);
