@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
 import { syntheticCommitReceiptReleased } from "../../apps/desktop/synthetic-scope.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
-const persistent = ["mcp-commit-timeout", "mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-before-intent-revalidation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
+const persistent = ["mcp-commit-timeout", "mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-before-intent-revalidation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "mcp-lost-ack-storage", "storage-normal"].includes(mode);
 let world, worldPath;
 if (persistent) {
 	let stage = "ARGUMENTS";
@@ -75,7 +75,7 @@ input.on("line", (line) => {
 		if (typeof args.idempotencyKey !== "string" || args.idempotencyKey.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args.idempotencyKey)) return send(request.id, { isError: true, structuredContent: { success: false, error: { code: "INVALID_REQUEST", message: "A UUID idempotency key is required." } } });
 		if (world) { world.commitRequests = (world.commitRequests ?? 0) + 1; world.lastCommitRequestKey = args.idempotencyKey; persist(); }
 		if (mode === "mcp-drop-before-accept") { world.lossInjected = true; persist(); process.exit(0); return; }
-		commits++; tick = 1201; key = args.idempotencyKey; persist(); if (mode === "lost-ack" || mode === "mcp-lost-ack") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
+		commits++; tick = 1201; key = args.idempotencyKey; persist(); if (mode === "lost-ack" || mode === "mcp-lost-ack" || mode === "mcp-lost-ack-storage") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
 		if (mode === "mcp-commit-timeout") {
 			world.commitReceiptWaiting = true; world.lossInjected = true; persist();
 			const receipt = value, deadline = performance.now() + 15000;

@@ -12,6 +12,7 @@ import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { ResearchAdapter } from "../apps/desktop/research-adapter.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
+import { armLostAckStorageFault } from "../apps/desktop/storage-fault-smoke.mjs";
 
 async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } = {}) {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-mcp-recovery-"))), runId = randomUUID(), worldPath = join(directory, "synthetic-research-world.json");
@@ -27,7 +28,7 @@ async function fixture(t, mode = "mcp-drop-after-accept", { driftTemp = false } 
 			const client = new ReadOnlyMcpClient(child, { researchAuthority: options.researchAuthority, timeoutMs: 1000 }); clients.push(client); return client;
 		},
 	});
-	const open = () => { const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, planner: async () => { modelRequests++; return { proposedTechId: 100 }; }, freezeDevelopment: async () => { frozen = true; }, releaseDevelopment: async () => { frozen = false; }, pollMilliseconds: 0 }); hosts.push(host); return host; };
+	const open = () => { const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, planner: async () => { modelRequests++; return { proposedTechId: 100 }; }, freezeDevelopment: async () => { frozen = true; }, releaseDevelopment: async () => { frozen = false; }, pollMilliseconds: 0, syntheticOnly: true }); hosts.push(host); return host; };
 	t.after(async () => {
 		for (const host of hosts) if (!host.ledger.closed) { await host.drain(); host.close(); }
 		await bridge.close(); for (const client of clients) { await client.close(); assert.equal(client.exitConfirmed, true); }
@@ -79,6 +80,20 @@ test("MCP exit with a real buffered fresh-check reply cannot advance approval in
 	assert.throws(() => reopened.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
 	assert.equal(client.stats.requests, requests + 1); assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1);
 	const world = await f.world(); assert.equal(world.prepares, 1); assert.equal(world.commitRequests ?? 0, 0); assert.equal(world.commits, 0); assert.equal(world.launches, 1);
+});
+
+test("a lost MCP acceptance plus a rejected unknown write preserves the durable recorded intent across recovery", async t => {
+	const f = await fixture(t, "mcp-lost-ack"); f.start(); const prepared = await f.host.settled(), fault = armLostAckStorageFault(f.host), challenge = f.host.confirmation(prepared.currentTaskId, 1);
+	try { f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled(); await f.clients[0].exited; } finally { fault.restore(); }
+	const blocked = f.host.snapshot(), original = fault.durableIntent; assert.equal(fault.unknownWriteAttempts, 1); assert.equal(fault.unknownWriteRejected, true);
+	assert.equal(blocked.phase, "blocked"); assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(blocked.storageAvailable, false); assert.equal(blocked.developmentFrozen, true); assert.deepEqual(blocked.unresolved, [original]); assert.equal(blocked.tasks[0].state, "intent_recorded");
+	assert.equal(original.state, "recorded"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null); assert.equal(original.terminal, null); assert.equal(f.host.ledger.db.prepare("PRAGMA query_only").get().query_only, 0);
+	for (const call of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare(), () => f.host.reconcile(original.intentId)]) assert.throws(call, /GAME_LEDGER_STORAGE_UNAVAILABLE/);
+	f.host.stop(); assert.deepEqual(f.host.snapshot().tasks, blocked.tasks); assert.deepEqual(f.host.snapshot().events, blocked.events);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const recovered = reopened.snapshot();
+	assert.equal(recovered.storageAvailable, true); assert.equal(recovered.phase, "blocked"); assert.equal(recovered.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(recovered.developmentFrozen, true); assert.deepEqual(recovered.unresolved, [original]); assert.deepEqual(recovered.tasks, blocked.tasks); assert.deepEqual(recovered.events, blocked.events);
+	assert.throws(() => reopened.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(reopened), /GAME_TASK_START_BLOCKED/); assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1);
+	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, original.idempotencyKey); assert.equal(world.launches, 1); assert.equal(world.resultReads, 0);
 });
 
 test("accepted MCP exit can explicitly reconnect and reconcile only the original action without replay", async t => {

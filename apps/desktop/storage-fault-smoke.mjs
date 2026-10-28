@@ -1,16 +1,36 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { mcpLossCase } from "./mcp-loss-case.mjs";
 
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const originalFile = "storage-original.private.json";
 const disabled = "(()=>{const panel=document.querySelector('.game-tasks-panel');return panel&&['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()";
 
+export function armLostAckStorageFault(host) {
+	assert.equal(host.syntheticOnly, true); assert.equal(host.phase, "awaiting_approval"); assert.equal(host.ledger.storageAvailable, true); assert.deepEqual(host.ledger.unresolved(), []);
+	const ledger = host.ledger, beginIntent = ledger.beginIntent, markUnknown = ledger.markUnknown;
+	let durableIntent = null, unknownWriteAttempts = 0, unknownWriteRejected = false, restored = false;
+	ledger.beginIntent = function (...args) {
+		assert.equal(durableIntent, null); const intent = beginIntent.apply(this, args); durableIntent = structuredClone(this.intent(intent.intentId));
+		assert.equal(durableIntent.state, "recorded"); this.db.exec("PRAGMA query_only=ON"); return intent;
+	};
+	ledger.markUnknown = function (id, ...args) {
+		unknownWriteAttempts++; assert.equal(id, durableIntent.intentId); assert.equal(this.db.prepare("PRAGMA query_only").get().query_only, 1);
+		try { return markUnknown.call(this, id, ...args); }
+		catch (error) { assert.equal(error.message, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(this.storageAvailable, false); unknownWriteRejected = true; throw error; }
+	};
+	return Object.freeze({
+		get durableIntent() { return structuredClone(durableIntent); }, get unknownWriteAttempts() { return unknownWriteAttempts; }, get unknownWriteRejected() { return unknownWriteRejected; },
+		restore() { if (restored) return; ledger.db.exec("PRAGMA query_only=OFF"); ledger.beginIntent = beginIntent; ledger.markUnknown = markUnknown; restored = true; },
+	});
+}
+
 async function ui(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source });
 	const state = () => driver.api("game", { action: "snapshot" });
-	async function until(predicate, label) { const deadline = performance.now() + 12000; while (!await predicate()) { if (performance.now() > deadline) { await writeFile(join(driver.context.root, "storage-" + (driver.storageCase.resume ? "resume" : "fault") + "-failure.private.json"), JSON.stringify({ label, state: await state(), ui: await evaluate("document.body.innerText") }), { flag: "wx" }); throw new Error("STORAGE_SMOKE_TIMEOUT_" + label); } await new Promise(resolve => setTimeout(resolve, 50)); } }
+	async function until(predicate, label) { const deadline = performance.now() + 12000; while (!await predicate()) { if (performance.now() > deadline) { await writeFile(join(driver.context.root, "storage-" + (driver.storageCase?.resume ? "resume" : "fault") + "-failure.private.json"), JSON.stringify({ label, state: await state(), ui: await evaluate("document.body.innerText") }), { flag: "wx" }); throw new Error("STORAGE_SMOKE_TIMEOUT_" + label); } await new Promise(resolve => setTimeout(resolve, 50)); } }
 	async function activate() {
 		await until(() => evaluate("(()=>{const button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(document.querySelector('header')?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "LAYOUT_READY");
 		await until(() => evaluate("Boolean(document.querySelector('.game-tasks-panel'))"), "PANEL");
@@ -48,6 +68,36 @@ export async function runGameStorageFaultSmoke(driver, { evaluate, state, until,
 	const original = { version: 1, kind: "synthetic-storage-original", runId: driver.runId, scenario, task: blocked.tasks[0], events: blocked.events, world, sha256: hash({ task: blocked.tasks[0], events: blocked.events }) };
 	await writeFile(join(driver.context.root, originalFile), JSON.stringify(original), { flag: "wx" });
 	return { runId: driver.runId, storageScenario: scenario, phase: "fault", fault: "sqlite-query-only", storageBlocked: true, developmentFrozen: true, restoredWritabilityDoesNotUnlock: true, uiReloadRetainsFreeze: true, diagnosticShowsStorageFailure: true, originalRecordSha256: original.sha256, noProbeAllocated: true, noModelOrCommitReplay: true, syntheticModelRequests: 3, syntheticPrepareCalls: 1, syntheticGameCommits: world.commits, originalActionIdAvailable: Boolean(intent?.actionId), nativeConfirmationMocked: true, physicalInputVerified: false, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
+}
+
+export async function runGameMcpStorageFaultSmoke(driver, { evaluate, state, until, requests, base }) {
+	assert.equal(mcpLossCase(driver.mcpLossScenario).storageFailure, true);
+	const host = driver.getGameTasks(), runtimePid = driver.getRuntimePid(), client = driver.getBridgeClient(), taskId = (await state()).currentTaskId, fault = armLostAckStorageFault(host);
+	try {
+		await driver.testCommand("answer-game-confirmation", { response: 1 }); await evaluate("window.deck.confirmResearch(" + JSON.stringify(taskId) + ")");
+		await until(async () => { const value = await state(); return !value.busy && value.phase === "blocked" && value.storageAvailable === false && client.exitConfirmed; }, "MCP_AND_STORAGE_BLOCKED");
+	} finally { fault.restore(); }
+	const blocked = await state(), original = fault.durableIntent, rpcCount = client.stats.requests;
+	const before = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));
+	assert.equal(fault.unknownWriteAttempts, 1); assert.equal(fault.unknownWriteRejected, true); assert.equal(host.ledger.db.prepare("PRAGMA query_only").get().query_only, 0);
+	assert.equal(blocked.error, "GAME_LEDGER_STORAGE_UNAVAILABLE"); assert.equal(blocked.storageAvailable, false); assert.equal(blocked.developmentFrozen, true); assert.deepEqual(blocked.unresolved, [original]); assert.equal(blocked.tasks[0].state, "intent_recorded");
+	assert.equal(original.state, "recorded"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null); assert.equal(original.terminal, null);
+	for (const action of ["start", "catalog", "reprepare", "reconcile"]) await until(async () => {
+		if (!driver.getUi() || driver.getUi().nativeProbePending) return false;
+		await assert.rejects(driver.api("game", { action, args: { intentId: original.intentId } }), /GAME_LEDGER_STORAGE_UNAVAILABLE/); return true;
+	}, "COMBINED_STORAGE_ADMISSION");
+	await assert.rejects(driver.api("probe", { mode: "offline" })); await driver.api("game", { action: "stop" });
+	assert.deepEqual((await state()).tasks, blocked.tasks); assert.deepEqual((await state()).events, blocked.events);
+	const helpers = await ui(driver); await driver.testCommand("reload"); await helpers.activate();
+	await helpers.until(() => helpers.evaluate(disabled + "&&document.querySelector('.game-tasks-panel').textContent.includes('任务记录无法写入')"), "COMBINED_STORAGE_UI");
+	assert.deepEqual((await state()).tasks, blocked.tasks); assert.deepEqual((await state()).events, blocked.events); assert.equal(driver.getRuntimePid(), runtimePid); assert.equal(driver.getBridgeClient(), client); assert.equal(client.stats.requests, rpcCount); assert.equal(driver.getProbeSequence(), 0); assert.equal(requests(), 3);
+	const world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));
+	assert.deepEqual(world, before);
+	assert.equal(world.runId, driver.runId); assert.equal(world.commitRequests, 1); assert.equal(world.lastCommitRequestKey, original.idempotencyKey); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, 1); assert.equal(world.resultReads, 0);
+	await writeFile(join(base, "mcp-loss.private.json"), JSON.stringify({ runId: driver.runId, scenario: driver.mcpLossScenario, original, before, after: world, state: await state() }), { flag: "wx" });
+	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local/mcp-loss", driver.runId);
+	await mkdir(proofDirectory, { recursive: true });
+	await writeFile(join(proofDirectory, "desktop-smoke-game-mcp-" + driver.mcpLossScenario + ".application.private.json"), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: false, unknownCommitRemainsBlocked: false, recordedIntentRemainsBlocked: true, mismatchRemainsBlocked: false, nativeOutcomeRemainsBlocked: false, nativeOutcome: null, recoveryError: null, repeatedIsolatedReconciliationMakesNoRequests: false, originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: false, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticCommitRequests: 1, syntheticPrepareCalls: 1, duplicateRepliesIgnored: 0, duplicateDelivery: null, ownServerExitConfirmed: true, storageFailure: { fault: "sqlite-query-only", unknownWriteAttempts: fault.unknownWriteAttempts, unknownWriteRejected: fault.unknownWriteRejected, durableIntentRetained: true, restoredWritabilityDoesNotUnlock: true, uiReloadRetainsFreeze: true, newGameExecutionRejected: true }, modelUsage: { normalizedTokens: blocked.tasks[0].details.usage.tokens.totalTokens, reportedResponses: 3, estimatedUsd: blocked.tasks[0].details.usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true }, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false }), { flag: "wx" });
 }
 
 export async function runStorageResumeSmoke(driver) {

@@ -623,6 +623,8 @@ fresh再验在途断线新增`revalidation-disconnect`，共享fixture声明升�
 
 准确修复候选`cc3039de093c75b01e84c2bb2f30266afab710ad`已生成16,204文件 / 741,158,466字节完整自包含包，Pi仍`71023ae`。run `7594bb7c-c387-4cfc-be76-cbaea7d98e1a`在源码目录外完成首次启动及同物理profile闭合历史重开，两次都核到`close-requested → exit-observed`、正常exit0、未超时和独立原生观察0所属残留；每次包含原两轮合成电源事件，原历史、Pi、保险库与正常运行链保持，源/复制包完整hash不变。两阶段证明SHA256分别为`2CBC670AE2147DBF385B168B138AAD381BF48E3A9150C352D40AE622F3A0FA21`和`36101BE099EC97C80A66C2200A4C1D3ED1AF9289C1699CF34D644AFAE3E3F23C`。真实游戏/模型调用0，不将正常退出包回归冒作云端原超时的复现；准确CI `40669151073`仍在运行、当次无失败步骤。原用户M4三任务/两命令/固定引用、M3原key/action/受理与终态及全部Pi会话另只读核对未变，pending0/gate0、accepted5/remaining0；本轮无新DSP保存tick。
 
+M5新增`lost-ack-storage`固定组合场景（fixture声明`portableMcpFaults:8`）：原持久意图事务完成后同步将该合成SQLite连接设为`query_only`，合成MCP正常受理一次并在ACK前退出；随后真实unknown落盘失败必须保留原`recorded`行、key和空action/acceptance/terminal，不能补写为已落盘unknown。原实例恢复可写、停止及UI重载均保持存储失败和开发冻结；健康对象重开仍保留原未决意图，无actionId不得查询、换键或重发。仅显式合成模式可启用该固定注入，生产IPC权限不扩展。36项相关回归、完整Node22测试488/488（0skip）、类型检查及源码实际Electron run `d3aff41b-2865-47d4-b721-1e8187b53749`通过；原MCP真实退出，终止写入恰拒绝1次，UI按钮保持禁用，恢复写权限后同一原件未变，包外观察0所属残留。两次独立读取的合成world内容完全相同，commit请求/受理各1、无替代MCP或result读取，仅3次合成模型请求，真实游戏/模型调用0。该项仍为源码与对象重开证据；十七场景/34次整应用包启动、准确CI及操作系统磁盘满/运行中权限故障继续待验，既有十六例实际包结论保持原候选归属。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

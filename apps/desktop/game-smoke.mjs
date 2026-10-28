@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { ReadOnlyMcpClient } from "./mcp-client.mjs";
 import { runGameRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
 import { runGameMcpLossSmoke } from "./mcp-loss-smoke.mjs";
-import { mcpLossModes } from "./mcp-loss-case.mjs";
-import { runGameStorageFaultSmoke } from "./storage-fault-smoke.mjs";
+import { mcpLossModes, mcpLossCase } from "./mcp-loss-case.mjs";
+import { runGameStorageFaultSmoke, runGameMcpStorageFaultSmoke } from "./storage-fault-smoke.mjs";
 import { preparePortableFixtureDirectory, createSyntheticResearchWorld, syntheticMcpEnvironment } from "./synthetic-scope.mjs";
 
 export function gameFixtureOptions(root, runId, { mode = "normal", directory = join(root, ".local/m3-smoke", runId) } = {}) {
@@ -82,7 +82,7 @@ export async function runGameSmoke(driver) {
 		await assert.rejects(driver.api("bridge", { action: "disconnect" }), /GAME_TASK_OWNS_BRIDGE/);
 		await until(async () => (await evaluate("document.body.innerText")).includes("等待你确认"), "APPROVAL_DISPLAY");
 		if (driver.storageCase) return await runGameStorageFaultSmoke(driver, { evaluate, state, until, requests: () => requests, base });
-		if (driver.mcpLossScenario) { await runGameMcpLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
+		if (driver.mcpLossScenario) { await (mcpLossCase(driver.mcpLossScenario).storageFailure ? runGameMcpStorageFaultSmoke : runGameMcpLossSmoke)(driver, { evaluate, state, until, requests: () => requests, base }); return; }
 		if (scenario) { await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return; }
 		if (!physical) await driver.testCommand("answer-game-confirmation", { response: 0 });
 		const cancelled = physical ? await realDialog(current.currentTaskId, "cancel_required") : await evaluate(`window.deck.confirmResearch(${JSON.stringify(current.currentTaskId)})`); assert.equal(cancelled.cancelled, true); assert.equal(await driver.getSyntheticCommitCount(), 0);
