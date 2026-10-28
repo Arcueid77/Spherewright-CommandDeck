@@ -1,11 +1,12 @@
-export const packagedMcpLossVersion = 6;
+export const packagedMcpLossVersion = 7;
 export const mcpTimeoutReceiptProof = Object.freeze({ transportStopReason: "MCP_REQUEST_TIMEOUT", acceptedReplyBufferedBeforeTimeout: true, acceptedReplyDeliveredAfterClosure: true, originalIntentRemainsUnknown: true, acceptedReplyMatchesOriginalRequest: true, lateReplyDoesNotCompleteRequest: true, newTransportRequests: 0 });
-const beforeIntent = stage => Object.freeze({ mode: "mcp-before-intent-" + stage, hasIntent: false, beforeIntent: stage, hasActionId: false, taskState: "cancelled", intentState: null, resultReads: 0, error: null, commits: 0, commitRequests: 0 });
+const beforeIntent = stage => Object.freeze({ mode: "mcp-before-intent-" + stage, hasIntent: false, beforeIntent: stage, preIntentError: stage === "revalidation" ? "MCP_EXITED" : "MCP_READ_NOT_SUPPORTED", hasActionId: false, taskState: "cancelled", intentState: null, resultReads: 0, error: null, commits: 0, commitRequests: 0 });
 const nativeOutcome = (mode, state, recoveryRequired, succeeded = false) => Object.freeze({ mode, hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "NATIVE_OUTCOME_REQUIRES_AUDIT", nativeOutcome: Object.freeze({ state, terminal: true, succeeded, recoveryRequired }) });
 const cases = Object.freeze({
 	accepted: Object.freeze({ mode: "mcp-drop-after-accept", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null }),
 	"preview-disconnect": beforeIntent("preview"),
 	"confirmation-disconnect": beforeIntent("confirmation"),
+	"revalidation-disconnect": beforeIntent("revalidation"),
 	"duplicate-receipt": Object.freeze({ mode: "mcp-drop-after-accept-duplicate", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null, duplicateReplies: 1, duplicateDelivery: "same-result" }),
 	"late-receipt": Object.freeze({ mode: "mcp-drop-after-accept-late", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null, duplicateReplies: 1, duplicateDelivery: "next-status" }),
 	"lost-ack": Object.freeze({ mode: "mcp-lost-ack", hasActionId: false, taskState: "blocked", intentState: "unknown", resultReads: 0, error: null }),

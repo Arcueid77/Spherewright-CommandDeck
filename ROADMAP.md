@@ -611,6 +611,10 @@ MCP矩阵随后补三种固定边界，fixture声明升至`portableMcpFaults:4`�
 
 本轮再次只读核原M4三task/两命令/一引用、M3原key/action/接受与终态及完整Pi集合，保持且无新增会话；pending0/gate0、accepted5/remaining0。证据`mcp-commit-timeout-after.private.json`，M3核验UTC `2026-10-28T09:03:32.027Z`、SHA256 `296C837F7467CC22C1495FC184876117E0DA79B013C243373CC0BDAD5EA35275`。无新的DSP启动、部署、游戏调用或存档tick结论，原真实模型/游戏额度保持封闭。
 
+fresh再验在途断线新增`revalidation-disconnect`，共享fixture声明升至`portableMcpFaults:7`。源码实际Electron run `c80115d9-7fb8-43cc-aca0-756d530696a7`在确认返回后暂停真实MCP stdout，先核唯一fresh status请求在途、有效回复已缓冲、应用仍confirming且零intent，再终止原自有MCP。关闭/失败原因为精确`MCP_EXITED`；退出后实际交付的原RPC有效回复没有完成请求或推进审批，工具响应数不增、只中止该读取，仍零intent/commit。旧确认拒绝，显式停止后正常释放开发门；UI重载保留原cancelled任务及用量，原Runtime保持且所属进程0残留，3次合成模型请求、真实游戏/模型调用0。
+
+原两类意图前断线继续要求原精确错误，新一类单独核读请求确实在途及退出原因；没有放宽为任意失败通过。新增协调器真实管道用例和其余46项定向、完整484项Node22回归（0skip）、类型检查通过；源码/包外/包内及重开marker共享十六类定义，准确新包32次启动及CI仍待。本片是固定合成再验边界，真实确认物理操作、DSP恢复、操作系统存储和其他M5门继续保留。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

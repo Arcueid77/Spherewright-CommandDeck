@@ -66,6 +66,21 @@ for (const nonceBeforeLoss of [false, true]) test("MCP exit " + (nonceBeforeLoss
 	const world = await f.world(); assert.equal(world.prepares, 1); assert.equal(world.commits, 0); assert.equal(world.commitRequests ?? 0, 0); assert.equal(world.key, null); assert.equal(world.launches, 1); assert.equal(world.resultReads, 0);
 });
 
+test("MCP exit with a real buffered fresh-check reply cannot advance approval into an intent", async t => {
+	const f = await fixture(t, "storage-normal"); f.start(); const prepared = await f.host.settled(), challenge = f.host.confirmation(prepared.currentTaskId, 1), client = f.clients[0], requests = client.stats.requests;
+	client.child.stdout.pause(); f.host.confirm(f.approval, challenge.nonce, 1);
+	while (!client.child.stdout.readableLength && !client.closed) await new Promise(resolve => setTimeout(resolve, 5));
+	assert.ok(client.child.stdout.readableLength > 0); assert.equal(client.closed, false); assert.equal(client.requestPerformance().pending, 1); assert.equal(client.stats.requests, requests + 1);
+	assert.equal(f.host.snapshot().phase, "confirming"); assert.equal(f.host.snapshot().tasks[0].intent, null); assert.deepEqual(f.host.snapshot().unresolved, []);
+	assert.equal(client.child.kill(), true); await client.exited; client.child.stdout.resume(); const refused = await f.host.settled();
+	assert.equal(refused.phase, "failed"); assert.equal(refused.error, "MCP_EXITED"); assert.equal(client.requestPerformance().transportStopReason, "MCP_EXITED"); assert.equal(refused.tasks[0].intent, null); assert.deepEqual(refused.unresolved, []); assert.equal(refused.developmentFrozen, false);
+	assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
+	await f.host.drain(); const original = f.host.snapshot().tasks; f.host.close(); const reopened = f.open(); await reopened.initialize(); assert.deepEqual(reopened.snapshot().tasks, original);
+	assert.throws(() => reopened.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
+	assert.equal(client.stats.requests, requests + 1); assert.equal(f.clients.length, 1); assert.equal(f.modelRequests(), 1);
+	const world = await f.world(); assert.equal(world.prepares, 1); assert.equal(world.commitRequests ?? 0, 0); assert.equal(world.commits, 0); assert.equal(world.launches, 1);
+});
+
 test("accepted MCP exit can explicitly reconnect and reconcile only the original action without replay", async t => {
 	const f = await fixture(t), original = await f.submitted(); assert.equal(original.state, "accepted"); assert.equal(original.actionId, "synthetic-action");
 	assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/); await assert.rejects(f.bridge.connect(), /GAME_TASK_OWNS_BRIDGE/);
