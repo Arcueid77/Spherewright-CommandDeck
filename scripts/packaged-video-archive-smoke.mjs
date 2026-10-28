@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_VIDEO_ARCHIVE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source); assert.equal(manifest.portableVideoArchive, 1, "PACKAGED_VIDEO_ARCHIVE_REBUILD_REQUIRED"); assert.equal(manifest.videoPlaybackUi, 1, "PACKAGED_VIDEO_PLAYBACK_UI_REBUILD_REQUIRED"); assert.equal(manifest.encodedPrivacyFixture, 2, "PACKAGED_PRIVACY_FIXTURE_REBUILD_REQUIRED"); assert.equal(manifest.nativeProcessObserver, 1);
 assert.equal(manifest.videoAnnotations, 1, "PACKAGED_VIDEO_ANNOTATIONS_REBUILD_REQUIRED");
-assert.equal(manifest.videoEventTimeline, 1, "PACKAGED_VIDEO_TIMELINE_REBUILD_REQUIRED");
+assert.equal(manifest.videoEventTimeline, 2, "PACKAGED_VIDEO_TIMELINE_REBUILD_REQUIRED");
 const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))), copy = join(directory, "bundle"), proofRoot = join(root, ".local/packaged-video-archive", runId); await mkdir(proofRoot, { recursive: true });
 await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, directory, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));

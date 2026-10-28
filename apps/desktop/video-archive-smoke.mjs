@@ -49,6 +49,9 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive, j
 		if (fixture.phase === "record") {
 			assert.equal(archive.snapshot().recordings.length, 0);
 			const journalId = (await driver.api("journal", { action: "start" })).activeId; assert.ok(journalId);
+			await driver.testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true" });
+			const waitUi = async (source, label) => { const deadline = performance.now() + 10000; while (!await driver.testCommand("evaluate", { source })) { assert.ok(performance.now() < deadline, label); await new Promise(resolve => setTimeout(resolve, 25)); } };
+			await waitUi("document.querySelector('.videos-panel')?.getAttribute('data-video-ready')==='true'", "RECORDING_PANEL_NOT_READY");
 			// Synthetic ports exercise the actual coordinator/archive with generated
 			// canvas bytes. They never invoke OS capture or the production UI grant.
 			const owner = {}, source = { version: 1, sourceId: "window:1:0", windowBinding: "f".repeat(32), width: 160, height: 90, layoutRevision: 1, gamePid: 1, gameStartedTicks: "639000000000000000", kind: "fixture", targetId: "generated-canvas-only" };
@@ -56,6 +59,7 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive, j
 			try {
 				const { permit } = await coordinator.prepare(owner, 1, { profile: "720p15", masks: [{ x: 0, y: 0, width: 2500, height: 2500 }] }); await coordinator.authorize(owner, 1, permit);
 				await coordinator.ready(owner, 1, permit, { audioTracks: 0, videoTracks: 1, displaySurface: "window", width: 160, height: 90, frameRate: 15 }); await coordinator.start(owner, 1, permit);
+				await waitUi("document.querySelector('.video-timeline')?.getAttribute('data-timeline-status')==='pending'", "RECORDING_TIMELINE_NOT_PENDING");
 				const encoding = driver.testCommand("evaluate", { source: videoArchiveEncodeScript }); void encoding.catch(() => {});
 				await new Promise(resolve => setTimeout(resolve, 650)); journal.capture({ type: "probe-state", busy: true });
 				await new Promise(resolve => setTimeout(resolve, 450)); journal.capture({ type: "probe-state", busy: false });

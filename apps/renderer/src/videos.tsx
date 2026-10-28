@@ -49,7 +49,7 @@ export function VideosPanel() {
 		try {
 			const opened = await call<Playback>("open", { id: selected });
 			if (!alive.current || expected !== generation.current) { await call("close", { grant: opened.grant }); return; }
-			lease.current = opened; setPlayback(opened);
+			lease.current = opened; setPlayback(opened); await loadContext(opened.recording.id, context?.journal.offset);
 		} catch { if (alive.current && expected === generation.current) setNotice("无法打开这条录像。请检查归档状态，或关闭播放后重新打开。"); }
 		finally { if (alive.current && expected === generation.current) setBusy(false); }
 	}
@@ -81,7 +81,7 @@ export function VideosPanel() {
 	}
 	const row = state?.recordings.find(row => row.id === selected);
 	const canBookmark = Boolean(playback && playback.recording.id === selected && frame.ready && frame.paused && context && !contextBusy && !bookmarkBusy && !seeking && !busy && state?.available && context.bookmarks.length < context.limits.perRecording);
-	return <div className="panel videos-panel" data-video-mode="archive">
+	return <div className="panel videos-panel" data-video-mode="archive" data-video-ready={Boolean(state)}>
 		<RecordingControls />
 		<div className="eyebrow">LOCAL VIDEO ARCHIVE</div><h2>本地录像 / 只读播放</h2>
 		<p className="muted">浏览已经归档的录像。播放不会运行 Agent 或执行游戏操作。</p>
@@ -96,7 +96,7 @@ export function VideosPanel() {
 			<p className="muted">构建声明：{row.build.sourceRevision?.slice(0, 12) ?? "源码模式，未声明固定候选"} · Pi {row.build.piCommit?.slice(0, 12) ?? "未声明"}</p>
 		</>}
 		{playback && <video key={playback.grant} ref={video} controls muted preload="metadata" src={playback.url} aria-label="本地录像播放器" onLoadedData={observeFrame} onTimeUpdate={observeFrame} onPause={observeFrame} onPlay={observeFrame} onSeeked={observeFrame} onError={() => { setFrame({ ready: false, paused: true, timeMs: 0 }); setNotice("播放已停止或链接已失效，请重新打开录像。"); }} />}
-		{row && context && <section className="video-timeline" aria-label="录像自动事件时间线">
+		{row && context && <section className="video-timeline" aria-label="录像自动事件时间线" data-timeline-status={context.timeline.status}>
 			<h3>自动事件时间线</h3>
 			{context.timeline.status === "bounded" ? <><p className="muted">事件自动关联到视频时间范围，范围宽度不超过 {context.timeline.uncertaintyMs} 毫秒。点击定位范围中点；播放不会执行任务。</p>
 				{context.timeline.events.map(marker => <div key={marker.event.sequence}><button data-timeline-sequence={marker.event.sequence} aria-current={frame.timeMs >= marker.fromMs && frame.timeMs <= marker.toMs ? "true" : undefined} disabled={busy || seeking || !playback || playback.recording.id !== selected || playback.mediaSha256 !== context.timeline.mediaSha256} onClick={() => void seekPosition(marker.timeMs, context.timeline.mediaSha256)}>{pointLabel(marker.event)} · 视频 {clock(marker.fromMs)}–{clock(marker.toMs)}</button></div>)}
