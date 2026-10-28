@@ -40,3 +40,5 @@
 后续兼容测试固定使用官方 `@modelcontextprotocol/client` 2.4.0 的 `Client` 和 `StdioClientTransport`，分别采用默认 legacy 和自动协商模式。两者在组件实跑中均协商到 `2025-11-25`，完成五类数据、快照分页、禁止工具/参数及撤销后拒绝；这不表示网关实现了 `2026-07-28` 协议。官方客户端作为 devDependency 由包外验证控制器运行，应用的标准流入口仍使用随包运行时。增强的实际包验证须使用 `portableReadOnlyGateway=2` 的新候选，原 v1 包证据保留。
 
 SDK 使用方式依据 [官方客户端教程](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/get-started/first-client.md) 和本次安装的固定版本源码；[官方 SDK 列表](https://modelcontextprotocol.io/docs/2026-07-28/sdk) 将 TypeScript SDK 列为受维护实现。固定 SDK 的通过结果不代表所有桌面 Agent 或所有 MCP 功能都兼容。
+
+候选 `9dc9a84262fbe0823ea6a26fa1ffff4cc5522a1a` 的增强实包验证已通过，run `e1ed16a3-cc7b-4160-96a8-441bde93bb0c`。两次应用启动、八次官方SDK连接覆盖fresh/stale及两轮应用退出后的旧配置拒绝；两种协商模式均使用2025-11-25，SDK连接关闭、无stderr/协议错误，独立观察无所属映像残留。auto的探测进程不计作额外业务连接，也未据此声明SDK子进程退出码；原包/复制包哈希保持，真实模型/游戏调用为零。完整包包含120个Pi运行依赖包，官方SDK仅用于包外控制器；系统剪贴板和具体桌面Agent接入仍未实测。
