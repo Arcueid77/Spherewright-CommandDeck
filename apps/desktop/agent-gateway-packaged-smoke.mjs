@@ -5,15 +5,18 @@ import { gatewaySmokeUi, runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
 import { gatewayConnection } from "./agent-gateway-wire.mjs";
 
-export const packagedGatewayVersion = 1;
+export const packagedGatewayVersion = 2;
+export function assertGatewayFixtureConfig(config, command, script) {
+	assert.deepEqual(Object.keys(config).sort(), ["args", "command", "env"]); assert.equal(config.command, command); assert.deepEqual(config.args, [script]);
+	assert.deepEqual(Object.keys(config.env).sort(), ["COMMANDDECK_GATEWAY_KEY", "COMMANDDECK_GATEWAY_PIPE", "ELECTRON_RUN_AS_NODE"]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1");
+	gatewayConnection({ pipe: config.env.COMMANDDECK_GATEWAY_PIPE, key: config.env.COMMANDDECK_GATEWAY_KEY }); return config;
+}
 export async function readGatewayExitConfig(context, command, script) {
 	const file = join(context.root, "gateway-exit-config.private.json"), info = await lstat(file);
 	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size > 0 && info.size < 8192);
 	assert.equal((await realpath(file)).toLowerCase(), file.toLowerCase());
 	const config = JSON.parse(await readFile(file, "utf8"));
-	assert.deepEqual(Object.keys(config).sort(), ["args", "command", "env"]); assert.equal(config.command, command); assert.deepEqual(config.args, [script]);
-	assert.deepEqual(Object.keys(config.env).sort(), ["COMMANDDECK_GATEWAY_KEY", "COMMANDDECK_GATEWAY_PIPE", "ELECTRON_RUN_AS_NODE"]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1");
-	gatewayConnection({ pipe: config.env.COMMANDDECK_GATEWAY_PIPE, key: config.env.COMMANDDECK_GATEWAY_KEY }); return config;
+	return assertGatewayFixtureConfig(config, command, script);
 }
 
 export async function runPackagedGatewaySmoke(driver, manifest) {

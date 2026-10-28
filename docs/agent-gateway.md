@@ -36,3 +36,7 @@
 打包验证入口为 `npm run test:packaged-gateway -- --source artifacts/<明确候选目录>`。它要求清单明确支持该验证，将完整包复制到独立临时目录，连续两次启动同一包和隔离资料目录。第一轮在实际界面验证缓存、停用、重启和合成暂停后，带着已开启的网关正常退出；包外客户端随后使用原配置验证失效。第二轮确认默认关闭、无自动 MCP 连接，重新显式开启只返回不可用的空缓存，并再次拒绝旧配置。各阶段检查开发/游戏任务为空、模型请求为零、原包与复制包完整哈希不变及所属进程退出。控制文件只接受精确包内程序/脚本和固定环境字段，不能替换启动命令。新增入口不代表实际包已经通过；执行记录见 Roadmap。
 
 候选 `24afcc41a29d56ef1533ee0fe2e0b975e409ad95` 的上述实际包验证已通过，run `07db53c7-4844-4af8-af4e-c602b22b0a06`。两次应用与七次独立标准流客户端运行均正常退出，旧配置在整应用退出后和重开期间均失败，新配置只读当前缓存；源包/复制包哈希保持，模型与真实游戏调用均为零。此处验证独立的有限 MCP 客户端，不扩大到任意第三方客户端、实际系统剪贴板或真实 OS 休眠；准确候选 CI 仍单独跟踪。
+
+后续兼容测试固定使用官方 `@modelcontextprotocol/client` 2.4.0 的 `Client` 和 `StdioClientTransport`，分别采用默认 legacy 和自动协商模式。两者在组件实跑中均协商到 `2025-11-25`，完成五类数据、快照分页、禁止工具/参数及撤销后拒绝；这不表示网关实现了 `2026-07-28` 协议。官方客户端作为 devDependency 由包外验证控制器运行，应用的标准流入口仍使用随包运行时。增强的实际包验证须使用 `portableReadOnlyGateway=2` 的新候选，原 v1 包证据保留。
+
+SDK 使用方式依据 [官方客户端教程](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/get-started/first-client.md) 和本次安装的固定版本源码；[官方 SDK 列表](https://modelcontextprotocol.io/docs/2026-07-28/sdk) 将 TypeScript SDK 列为受维护实现。固定 SDK 的通过结果不代表所有桌面 Agent 或所有 MCP 功能都兼容。

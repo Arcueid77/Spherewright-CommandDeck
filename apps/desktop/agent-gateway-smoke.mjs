@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GatewaySmokeClient } from "./agent-gateway-smoke-client.mjs";
+import { gatewaySdkHandoff } from "./agent-gateway-sdk-case.mjs";
 
 export function gatewaySmokeUi(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source }), state = () => driver.api("gateway", { action: "snapshot" });
@@ -26,9 +27,11 @@ export async function runGatewaySmoke(driver) {
 		await open(); await click("开启只读网关"); await until(async () => (await state()).enabled, "ENABLED");
 		const firstConfig = await copy(), firstPeer = await peerFor(firstConfig), listed = await firstPeer.request("tools/list"); assert.equal(listed.result.tools.length, 1); assert.equal(listed.result.tools[0].annotations.readOnlyHint, true);
 		const fresh = (await firstPeer.observe({ section: "production", limit: 1 })).result.structuredContent; assert.equal(fresh.state, "observed"); assert.equal(fresh.planets[0].production[0].actualProductionPerMinute, 24);
+		await gatewaySdkHandoff(driver, "fresh", firstConfig);
 		assert.ok((await firstPeer.request("tools/call", { name: "commit", arguments: {} })).error);
 		await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);
 		const before = (await driver.api("bridge", { action: "snapshot" })).requestPerformance.started;
+		await gatewaySdkHandoff(driver, "stale", firstConfig);
 		for (const section of ["status", "research", "production", "power", "logistics"]) {
 			const reply = await firstPeer.observe({ section }); assert.equal(reply.result.isError, false); const value = reply.result.structuredContent;
 			assert.equal(value.cachedOnly, true); assert.equal(value.connected, false); assert.ok(!JSON.stringify(value).includes("PRIVATE_SYNTHETIC")); if (section !== "status") assert.equal(value.state, "stale");
