@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { captureWorkbenchDiagnostics } from "./diagnostic-snapshot.mjs";
 import { journalFacts } from "./journal-format.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
+import { developmentContextInfo, prepareDevelopmentContext } from "./development-context.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_OPERATION_FAILED";
 const record = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -93,7 +94,7 @@ export class Workbench {
 		}
 		return { executable: program, args, cwd: root.path, label: check.label };
 	}
-	async start({ rootId, kind, prompt = "", provider, model, parentId }, action) {
+	async start({ rootId, kind, prompt = "", provider, model, parentId, contextRequest }, action) {
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
 		if (!this.gameWritesFrozen) throw new Error("GAME_EXECUTION_OWNS_RUNTIME");
 		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
@@ -109,7 +110,13 @@ export class Workbench {
 		if (kind === "agent") {
 			this.workspace.protectCurrentChanges(rootId);
 		}
-		const task = this.store.createTask({ rootId, kind, prompt, provider, model, parentId });
+		const contextPlan = kind === "agent" && contextRequest ? await prepareDevelopmentContext(this, rootId, contextRequest) : null;
+		if (this.closing || generation !== this.admissionGeneration) throw new Error("WORKBENCH_ADMISSION_EXPIRED");
+		if (!this.gameWritesFrozen) throw new Error("GAME_EXECUTION_OWNS_RUNTIME");
+		if (this.configurationBlocked) throw new Error("MODEL_CONFIGURATION_BUSY");
+		if (this.operation || this.store.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");
+		if (kind === "agent" && this.store.ui("execution-blocked")) throw new Error("DEVELOPMENT_EXECUTION_BLOCKED");
+		const task = this.store.createTask({ rootId, kind, prompt, provider, model, parentId: contextPlan?.sourceTaskId ?? parentId, contextPlan });
 		const controller = new AbortController();
 		this.store.setTaskState(task.id, "running");
 		// Install the running operation synchronously before allowing another request to start.
@@ -164,6 +171,7 @@ export class Workbench {
 		if (this.closing) throw new Error("WORKBENCH_CLOSING");
 		if (action === "state") return this.state();
 		if (action === "usage-data") return usageSample(this.store.usageRows().map(row => ({ ...row, usage: decodeUsageJson(row.usage), context: decodeUsageJson(row.context) })));
+		if (action === "context-info") return developmentContextInfo(this, args.rootId, args.taskId);
 		if (action === "diagnostics") return captureWorkbenchDiagnostics(this.store, { active: Boolean(this.operation || this.store.activeTask()), executionBlocked: !this.gameWritesFrozen || Boolean(this.store.ui("execution-blocked")), configurationBlocked: this.configurationBlocked });
 		if (action === "add") return this.add(args);
 		if (action === "refresh") { await this.workspace.refresh(args.rootId); return this.state(); }
@@ -235,8 +243,11 @@ export class Workbench {
 		if (action === "ui-get") { if (!["layout", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); return this.store.ui(args.key); }
 		if (action === "ui-save") { if (!["layout", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); this.store.saveUi(args.key, args.value); return { saved: true }; }
 		if (action === "agent") {
+			if (args.parentId !== undefined || args.contextMode !== undefined && !["new", "continue", "compact"].includes(args.contextMode)) throw new Error("INVALID_DEVELOPMENT_CONTEXT_REQUEST");
+			const usesContext = ["continue", "compact"].includes(args.contextMode);
+			if (!usesContext && (args.sourceTaskId !== undefined || args.sourceSha256 !== undefined)) throw new Error("INVALID_DEVELOPMENT_CONTEXT_REQUEST");
 			const { runDevelopmentAgent } = await import("./development-agent.mjs");
-			return this.start({ rootId: args.rootId, kind: "agent", prompt: args.prompt, provider: args.providerId, model: args.modelId, parentId: args.parentId }, (task, signal) => runDevelopmentAgent({ workbench: this, task, signal }));
+			return this.start({ rootId: args.rootId, kind: "agent", prompt: args.prompt, provider: args.providerId, model: args.modelId, ...(usesContext ? { contextRequest: { mode: args.contextMode, sourceTaskId: args.sourceTaskId, sourceSha256: args.sourceSha256 } } : {}) }, (task, signal) => runDevelopmentAgent({ workbench: this, task, signal }));
 		}
 		throw new Error("UNKNOWN_WORKBENCH_ACTION");
 	}

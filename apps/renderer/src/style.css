@@ -27,6 +27,8 @@ textarea {
 }
 .files-panel { padding: 16px; }
 .files-panel > select, .development-panel > select { width: 100%; }
+.development-panel > label { display: block; margin: 12px 0; }
+.development-panel > label select { display: block; width: 100%; margin-top: 7px; }
 .repository-path { overflow-wrap: anywhere; font-size: 10px; }
 .permissions { display: flex; flex-wrap: wrap; gap: 12px; }
 .permissions label { display: flex; align-items: center; gap: 5px; margin: 5px 0 14px; }

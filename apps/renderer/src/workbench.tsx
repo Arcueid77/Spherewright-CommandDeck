@@ -5,7 +5,7 @@ import { ModelUsage, type Usage, type ModelContext } from "./model-usage";
 
 type Root = { id: string; label: string; path: string; canWrite: boolean; canExecute: boolean; metadata: { branch: string | null; sha: string | null; submodule: boolean; dirtyCount: number; protectedCount: number; changes: { path: string; code: string }[] } };
 type TaskReference = { id: string; taskId: string; rootId: string; path: string; revision: string; sha256: string; label: string };
-type Task = { id: string; rootId: string; prompt: string; response?: string; kind: string; state: string; error?: string; result?: unknown; usage?: Usage | null; context?: ModelContext; events?: { sequence: number; kind: string; value: { text?: string; stream?: string } }[]; changes?: { id: string; path: string; state: string; afterHash: string; beforeHash: string | null }[]; references?: TaskReference[] };
+type Task = { id: string; rootId: string; parentId?: string | null; scope?: { context?: { mode: string; sourceTaskId: string; sourceSha256: string } }; prompt: string; response?: string; kind: string; state: string; error?: string; result?: unknown; usage?: Usage | null; context?: ModelContext; events?: { sequence: number; kind: string; value: { text?: string; stream?: string } }[]; changes?: { id: string; path: string; state: string; afterHash: string; beforeHash: string | null }[]; references?: TaskReference[] };
 type State = { roots: Root[]; tasks: Task[]; activeTask: string | null; executionBlocked: boolean; observationOnly?: boolean };
 type Document = { rootId: string; path: string; sha256: string | null; text: string; diskText: string };
 type HistoryView = { kind: "change" | "reference"; taskId: string; rootId: string; path: string; text: string; label: string; revision?: string | null; beforeHash?: string | null; afterHash?: string; state?: string };
@@ -146,6 +146,7 @@ export function EditorPanel() {
 }
 export function DevelopmentPanel() {
 	const c = useWorkbench(), [profiles, setProfiles] = useState<Profile[]>([]), [model, setModel] = useState(""), [prompt, setPrompt] = useState("");
+	const [contextMode, setContextMode] = useState("new"), [contextInfo, setContextInfo] = useState<{ sourceTaskId: string; sourceSha256: string; sourceBytes: number; messages: number; canCompact: boolean } | null>(null), [contextError, setContextError] = useState(false);
 	const [task, setTask] = useState<Task | null>(null), [checks, setChecks] = useState<{ id: string; label: string }[]>([]), [checkId, setCheckId] = useState("");
 	useEffect(() => {
 		async function refreshProfiles() { setProfiles(await window.deck.profiles()); }
@@ -165,16 +166,35 @@ export function DevelopmentPanel() {
 		const timer = setInterval(() => void refresh(), 800);
 		return () => { current = false; clearInterval(timer); };
 	}, [c.taskId, c.runtimeUnavailable]);
+	useEffect(() => { setContextMode("new"); }, [c.rootId]);
+	useEffect(() => {
+		let current = true; setContextInfo(null); setContextError(false);
+		if (contextMode !== "new" && c.taskId && c.rootId && !c.activeTask && !c.runtimeUnavailable) void wb<NonNullable<typeof contextInfo>>("context-info", { rootId: c.rootId, taskId: c.taskId }).then(value => { if (current) setContextInfo(value); }).catch(() => { if (current) setContextError(true); });
+		return () => { current = false; };
+	}, [contextMode, c.taskId, c.rootId, c.activeTask, c.runtimeUnavailable]);
 	function draft(text: string, selectedModel = model) { setPrompt(text); setModel(selectedModel); void wb("ui-save", { key: "draft", value: { prompt: text, model: selectedModel } }).catch(c.report); }
-	async function start() { const selected = profiles.find((profile) => profileToken(profile) === model); if (!selected) return; const task = await wb<Task>("agent", { rootId: c.rootId, prompt, providerId: selected.providerId, modelId: selected.modelId }); c.selectTask(task.id); await c.refresh(); }
+	async function start() {
+		const selected = profiles.find((profile) => profileToken(profile) === model); if (!selected) return;
+		const source = contextMode === "new" ? {} : contextInfo?.sourceTaskId === c.taskId ? { contextMode, sourceTaskId: contextInfo.sourceTaskId, sourceSha256: contextInfo.sourceSha256 } : null;
+		if (!source) return;
+		const task = await wb<Task>("agent", { rootId: c.rootId, prompt, providerId: selected.providerId, modelId: selected.modelId, ...source }); setContextMode("new"); c.selectTask(task.id); await c.refresh();
+	}
+	const management = task?.result && typeof task.result === "object" ? (task.result as { contextManagement?: { compacted?: boolean; compactionRequests?: number; tokensBefore?: number | null; estimatedTokensAfter?: number | null } }).contextManagement : null;
+	const estimate = (value: number | null | undefined) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString("zh-CN") : "未知";
 	return <div className="panel development-panel">
 		<div className="eyebrow">PI · DEVELOPMENT</div><h2>开发 Agent</h2><p>当前仓库：{c.root?.label ?? "未选择"}。每项任务最多 5 分钟。</p>
 		<select aria-label="开发模型" value={model} disabled={Boolean(c.activeTask) || c.runtimeUnavailable} onChange={(event) => draft(prompt, event.target.value)}><option value="">选择模型</option>{profiles.map((profile) => <option key={profileToken(profile)} value={profileToken(profile)}>{profile.label ? `${profile.label} · ` : ""}{profile.modelId}</option>)}</select>
 		<textarea aria-label="开发任务" disabled={c.runtimeUnavailable} className="task-input" maxLength={16000} placeholder="描述一个有限改动，或让 Agent 先检查代码…" value={prompt} onChange={(event) => draft(event.target.value)} />
-		<div className="actions"><button className="accent" disabled={!c.rootId || !profiles.some((profile) => profileToken(profile) === model) || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask || c.runtimeUnavailable} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
+		<label>上下文<select aria-label="开发上下文模式" value={contextMode} disabled={Boolean(c.activeTask) || c.runtimeUnavailable} onChange={event => setContextMode(event.target.value)}><option value="new">全新任务</option><option value="continue">保留选中任务的历史继续</option><option value="compact">压缩选中任务的历史后继续</option></select></label>
+		{contextMode !== "new" && <p className="muted">历史对话会发送给上方选中的模型。新任务重新检查当前权限、文件与仓库规则；原任务和回执保留。压缩会使用模型请求额度，失败或取消后不会自动继续。</p>}
+		{contextMode !== "new" && contextInfo && <p>来源 {contextInfo.sourceTaskId.slice(0, 8)} · {contextInfo.messages} 条原始消息 · {(contextInfo.sourceBytes / 1024).toFixed(1)} KiB{contextMode === "compact" && !contextInfo.canCompact ? "。Pi 尚未找到可压缩片段；可改为保留历史继续。" : ""}</p>}
+		{contextMode !== "new" && (contextError || !c.taskId) && <p className="notice">请选择同仓库中已结束、结果已确定且会话完整的开发任务。</p>}
+		<div className="actions"><button className="accent" disabled={!c.rootId || !profiles.some((profile) => profileToken(profile) === model) || !prompt.trim() || Boolean(c.activeTask) || c.executionBlocked || contextMode !== "new" && (!contextInfo || contextInfo.sourceTaskId !== c.taskId || contextMode === "compact" && !contextInfo.canCompact)} onClick={() => void start().catch(c.report)}>开始任务</button><button disabled={!c.activeTask || c.runtimeUnavailable} onClick={() => void wb("cancel", { taskId: c.activeTask }).catch(c.report)}>停止任务</button></div>
 		<div className="check-row"><select aria-label="仓库检查" value={checkId} onChange={(event) => setCheckId(event.target.value)}>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}</select><button disabled={!checkId || !c.root?.canExecute || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void wb<Task>("check", { rootId: c.rootId, checkId }).then((task) => { c.selectTask(task.id); return c.refresh(); }).catch(c.report)}>运行检查</button></div>
 		<p className="muted">构建和测试会运行该仓库代码。开发任务不持有游戏工具。</p>
 		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{taskText(task)}</pre>{task.kind === "agent" && <ModelUsage value={task.usage} context={task.context} />}</>}
+		{task?.scope?.context && <p className="muted">此任务{task.scope.context.mode === "compact" ? "压缩后续接" : "保留历史续接"}自 {task.scope.context.sourceTaskId.slice(0, 8)}，源摘要 {task.scope.context.sourceSha256.slice(0, 12)}。压缩效果与原始回执分开核对。</p>}
+		{management?.compacted && <p>压缩使用 {estimate(management.compactionRequests)} 次模型请求，已含在本任务用量中。Pi 压缩前估计 {estimate(management.tokensBefore)} → 压缩后估计 {estimate(management.estimatedTokensAfter)} tokens；不保证实际减少或为下一请求预留额度。</p>}
 		{c.notice && <p className="notice">{c.notice}</p>}
 	</div>;
 }

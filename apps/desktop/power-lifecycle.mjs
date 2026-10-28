@@ -66,7 +66,7 @@ export class PowerLifecycle {
 		if (action === "video" && ["snapshot", "context", "open", "bookmark", "read", "close"].includes(args?.action)) return;
 		if (action === "journal" && ["snapshot", "read", "start", "stop", "bookmark"].includes(args?.action)) return;
 		if (["status", "snapshot", "targets", "profiles", "viewport", "focus-ui", "close", "detach", "abort", "resume-system", "diagnostics-preview", "diagnostics-begin-save", "diagnostics-write", "diagnostics-cancel-save", "diagnostics-discard"].includes(action)) return;
-		if (action === "workbench" && ["state", "task", "ui-get", "ui-save", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action)) return;
+		if (action === "workbench" && ["state", "task", "context-info", "ui-get", "ui-save", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action)) return;
 		if (action === "bridge" && args?.action === "snapshot" || action === "game" && ["snapshot", "stop"].includes(args?.action) || action === "profiles-manage" && ["list", "describe"].includes(args?.action)) return;
 		throw new Error("SYSTEM_POWER_PAUSED");
 	}

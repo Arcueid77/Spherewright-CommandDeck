@@ -21,7 +21,7 @@ export function assertObservationAction(policy, action, args) {
 	const denied = action === 'game' && args?.action !== 'snapshot'
 		|| action === 'recording' && !['snapshot', 'cancel', 'closed'].includes(args?.action)
 		|| ['game-confirmation', 'game-confirmed', 'probe', 'attach', 'start-fixture'].includes(action)
-		|| action === 'workbench' && !['state', 'task', 'refresh', 'list', 'read', 'diff', 'change-diff', 'read-reference', 'search', 'checks', 'ui-get', 'ui-save'].includes(args?.action)
+		|| action === 'workbench' && !['state', 'task', 'context-info', 'refresh', 'list', 'read', 'diff', 'change-diff', 'read-reference', 'search', 'checks', 'ui-get', 'ui-save'].includes(args?.action)
 		|| action === 'profiles-manage' && !['list', 'describe'].includes(args?.action);
 	if (denied) throw new Error('READ_ONLY_OBSERVATION_MODE');
 }

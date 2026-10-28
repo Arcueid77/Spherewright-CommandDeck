@@ -458,7 +458,7 @@ async function api(action, args, source) {
 		return bridge.connect();
 	}
 	if (action === "workbench") {
-		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "change-diff", "attach-reference", "read-reference", "search", "save", "revert", "checks", "check", "task", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
+		if (!workbenchReady || !args || !["state", "add", "refresh", "grants", "list", "read", "diff", "change-diff", "attach-reference", "read-reference", "search", "save", "revert", "checks", "check", "task", "context-info", "cancel", "ui-get", "ui-save", "agent"].includes(args.action)) throw new Error("INVALID_WORKBENCH_ACTION");
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent", "attach-reference"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
 		if (developmentUsageCase && args.action === "agent") developmentUsageStarted = true;

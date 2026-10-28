@@ -112,14 +112,14 @@ export class WorkbenchStore {
 		const row = this.db.prepare("SELECT id FROM tasks WHERE state IN ('queued','running','cancelling') LIMIT 1").get();
 		return row ? this.task(row.id) : null;
 	}
-	createTask({ rootId, kind, prompt = "", provider, model, parentId }) {
+	createTask({ rootId, kind, prompt = "", provider, model, parentId, contextPlan }) {
 		if (!["agent", "check", "edit", "revert"].includes(kind) || typeof prompt !== "string" || prompt.length > 16000) throw new Error("INVALID_DEVELOPMENT_TASK");
 		const root = this.root(rootId);
 		if (!root.enabled) throw new Error("WORKSPACE_ROOT_DISABLED");
 		return this.transaction(() => {
 			if (this.activeTask()) throw new Error("DEVELOPMENT_TASK_ALREADY_RUNNING");
 			const id = randomUUID();
-			this.db.prepare("INSERT INTO tasks(id,root_id,kind,state,prompt,provider,model,parent_id,scope,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)").run(id, rootId, kind, prompt, provider ?? null, model ?? null, parentId ?? null, json({ branch: root.metadata.branch ?? null, sha: root.metadata.sha ?? null }), now());
+			this.db.prepare("INSERT INTO tasks(id,root_id,kind,state,prompt,provider,model,parent_id,scope,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)").run(id, rootId, kind, prompt, provider ?? null, model ?? null, parentId ?? null, json({ branch: root.metadata.branch ?? null, sha: root.metadata.sha ?? null, ...(contextPlan ? { context: contextPlan } : {}) }), now());
 			this.event(id, "task", { state: "queued" });
 			return this.task(id);
 		});

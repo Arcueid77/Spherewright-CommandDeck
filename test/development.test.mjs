@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { devNull, tmpdir } from "node:os";
 import { Workbench } from "../apps/desktop/workbench.mjs";
 import { runDevelopmentAgent } from "../apps/desktop/development-agent.mjs";
+import { developmentContextInfo } from "../apps/desktop/development-context.mjs";
 
 const helperSource = fileURLToPath(new URL("../artifacts/commands", import.meta.url));
 const windows = { skip: process.platform !== "win32" };
@@ -246,4 +247,46 @@ test("the pinned Pi rejects injected scope and completes a bounded read/edit/che
 	const reopened = new Workbench({ directory: f.directory, helperSource });
 	try { assert.deepEqual((await reopened.request("task", { taskId: task.id, after: 999999 })).usage, result.usage); assert.deepEqual(reopened.store.invocations(task.id), result.invocations); }
 	finally { await reopened.close(); }
+});
+
+test("Pi continuation and compaction fork original history, renew grants and stop on failed or cancelled summaries", { ...windows, timeout: 60000 }, async t => {
+	const f = await fixture(t), calls = [], errors = []; let summaryMode = "normal", releaseSummary, summaryEntered;
+	const server = createServer(async (request, response) => {
+		try {
+			let body = ""; for await (const part of request) body += part; const data = JSON.parse(body), encoded = JSON.stringify(data.messages), tools = (data.tools ?? []).map(tool => tool.function.name); calls.push({ tools, summary: !tools.length });
+			let delta, input = 4000;
+			if (!tools.length) {
+				assert.ok(encoded.includes("CONTEXT_SEED_MARKER")); input = 5000;
+				if (summaryMode === "fail") { response.writeHead(503); response.end("Synthetic summary failure"); return; }
+				if (summaryMode === "hold") { summaryEntered(); await new Promise(resolve => { releaseSummary = resolve; }); if (response.destroyed) return; }
+				delta = { content: "HISTORICAL_CONTEXT_SUMMARY: seed completed, follow-up answered. Inspect current files and permissions before new work." };
+			} else if (encoded.includes("CONTEXT_AFTER_COMPACT")) {
+				assert.deepEqual(tools.sort(), ["workspace_diff", "workspace_list", "workspace_read", "workspace_search"]); assert.ok(encoded.includes("HISTORICAL_CONTEXT_SUMMARY")); input = 400;
+				delta = data.messages.some(message => message.role === "tool" && message.tool_call_id === "fresh-context-read") ? { content: "CONTEXT_COMPACT_DONE" } : { tool_calls: [{ index: 0, id: "fresh-context-read", type: "function", function: { name: "workspace_read", arguments: JSON.stringify({ path: "code.mjs" }) } }] };
+			} else if (encoded.includes("CONTEXT_CONTINUE")) { assert.ok(encoded.includes("CONTEXT_SEED_DONE")); assert.ok(!tools.includes("workspace_edit")); input = 5000; delta = { content: "CONTEXT_CONTINUE_DONE" }; }
+			else { assert.ok(encoded.includes("CONTEXT_SEED_MARKER")); assert.ok(tools.includes("workspace_edit")); delta = { content: "CONTEXT_SEED_DONE" }; }
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			for (const choice of [{ delta: { role: "assistant", ...delta } }, { delta: {}, finish_reason: delta.tool_calls ? "tool_calls" : "stop" }]) response.write(`data: ${JSON.stringify({ id: "synthetic-context", model: "fixture", choices: [{ index: 0, ...choice }] })}\n\n`);
+			response.write(`data: ${JSON.stringify({ id: "synthetic-context", choices: [], usage: { prompt_tokens: input, completion_tokens: 20 } })}\n\n`); response.end("data: [DONE]\n\n");
+		} catch (error) { errors.push(error); response.writeHead(500); response.end("Synthetic fixture assertion failed"); }
+	});
+	await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); t.after(() => { releaseSummary?.(); server.closeAllConnections(); server.close(); });
+	const modelsPath = join(f.base, "context-models.json"); await writeFile(modelsPath, JSON.stringify({ providers: { "commanddeck-fixture": { baseUrl: `http://127.0.0.1:${server.address().port}/v1`, api: "openai-completions", apiKey: "synthetic", models: [{ id: "fixture", contextWindow: 32768, maxTokens: 2048, cost: { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 } }] } } }));
+	async function start(prompt, contextRequest) { return f.workbench.start({ rootId: f.rootId, kind: "agent", prompt, provider: "commanddeck-fixture", model: "fixture", contextRequest }, (task, signal) => runDevelopmentAgent({ workbench: f.workbench, task, signal, testModelsPath: modelsPath })); }
+	async function finish(task) { await f.workbench.operation.done; return f.workbench.request("task", { taskId: task.id }); }
+	const seed = await finish(await start("CONTEXT_SEED_MARKER " + "Historical synthetic detail. ".repeat(450))); assert.equal(seed.state, "succeeded", seed.error);
+	const seedFile = f.workbench.store.task(seed.id, { privateFields: true }).sessionFile, seedBytes = await readFile(seedFile), info = await developmentContextInfo(f.workbench, f.rootId, seed.id);
+	await f.workbench.request("grants", { rootId: f.rootId, canWrite: false, canExecute: false });
+	const continued = await finish(await start("CONTEXT_CONTINUE " + "Recent synthetic detail. ".repeat(450), { mode: "continue", sourceTaskId: seed.id, sourceSha256: info.sourceSha256 }));
+	assert.equal(continued.state, "succeeded", continued.error); assert.equal(continued.parentId, seed.id); assert.equal(continued.response, "CONTEXT_CONTINUE_DONE"); assert.equal(continued.result.contextManagement.compacted, false); assert.equal(continued.invocations.length, 0);
+	const continuedFile = f.workbench.store.task(continued.id, { privateFields: true }).sessionFile, continuedBytes = await readFile(continuedFile), next = await developmentContextInfo(f.workbench, f.rootId, continued.id); assert.equal(next.canCompact, true);
+	const contextRequest = { mode: "compact", sourceTaskId: continued.id, sourceSha256: next.sourceSha256 }, compacted = await finish(await start("CONTEXT_AFTER_COMPACT", contextRequest));
+	assert.equal(compacted.state, "succeeded", compacted.error); assert.equal(compacted.parentId, continued.id); assert.equal(compacted.response, "CONTEXT_COMPACT_DONE"); assert.equal(compacted.result.contextManagement.compacted, true); assert.ok(compacted.result.contextManagement.estimatedTokensAfter < compacted.result.contextManagement.tokensBefore);
+	const summaryCalls = compacted.result.contextManagement.compactionRequests; assert.ok(summaryCalls >= 1 && summaryCalls <= 2); assert.equal(compacted.usage.requests, summaryCalls + 2); assert.equal(compacted.usage.reportedResponses, summaryCalls + 2); assert.equal(compacted.invocations.length, 1); assert.equal(compacted.invocations[0].name, "workspace_read"); assert.equal(compacted.result.toolCalls, 1);
+	summaryMode = "fail"; const beforeFail = calls.length, failed = await finish(await start("MUST_NOT_RUN_AFTER_FAILED_SUMMARY", contextRequest));
+	assert.equal(failed.state, "failed"); assert.equal(failed.error, "DEVELOPMENT_CONTEXT_COMPACTION_FAILED"); assert.equal(calls.length, beforeFail + 1); assert.deepEqual(failed.invocations, []); assert.equal(failed.usage.requests, 1);
+	summaryMode = "hold"; const entered = new Promise(resolve => { summaryEntered = resolve; }), cancelled = await start("MUST_NOT_RUN_AFTER_CANCELLED_SUMMARY", contextRequest); await entered;
+	await f.workbench.request("cancel", { taskId: cancelled.id }); releaseSummary?.(); const stopped = await finish(cancelled); assert.equal(stopped.state, "cancelled"); assert.deepEqual(stopped.invocations, []); assert.equal(stopped.usage.requests, 1);
+	assert.deepEqual(await readFile(seedFile), seedBytes); assert.deepEqual(await readFile(continuedFile), continuedBytes); assert.deepEqual(await f.workbench.request("task", { taskId: seed.id }), seed); assert.deepEqual(await f.workbench.request("task", { taskId: continued.id }), continued);
+	assert.deepEqual(errors, []); assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 1;\n"); await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
 });
