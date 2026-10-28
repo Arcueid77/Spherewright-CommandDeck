@@ -73,6 +73,7 @@ jobs:
       - run: npm run test:portable-desktop -- --source artifacts/portable-desktop --reopen-history
       - run: npm run test:packaged-journal-interruption -- --source artifacts/portable-desktop
       - run: npm run test:packaged-video-archive -- --source artifacts/portable-desktop
+      - run: npm run test:packaged-video-archive -- --source artifacts/portable-desktop --coarse-clock
       - run: npm run test:profile-lock -- --source artifacts/portable-desktop
       - run: npm run test:startup-failure -- --source artifacts/portable-desktop
       - run: npm run test:legacy-recovery -- --source artifacts/portable-desktop
@@ -127,6 +128,7 @@ jobs:
             .local/packaged-development-context-failures-smoke.json
             .local/packaged-journal-interruption-smoke.json
             .local/packaged-video-archive-smoke.json
+            .local/packaged-video-archive-coarse-smoke.json
             .local/desktop-smoke-game-mcp-accepted.json
             .local/desktop-smoke-game-mcp-lost-ack.json
             .local/desktop-smoke-runtime-loss.json

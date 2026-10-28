@@ -10,10 +10,11 @@ import { bundleExecutable, copyBundleTree, verifyBundle } from "./desktop-bundle
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { videoArchiveCaseFile } from "../apps/desktop/video-archive-smoke.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
-if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_VIDEO_ARCHIVE_REQUIRED");
+if (process.platform !== "win32" || ![2, 3].includes(args.length) || args[0] !== "--source" || args.length === 3 && args[2] !== "--coarse-clock") throw new Error("EXPLICIT_PACKAGED_VIDEO_ARCHIVE_REQUIRED");
+const clockCase = args.length === 3 ? "delayed" : "normal";
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source); assert.equal(manifest.portableVideoArchive, 1, "PACKAGED_VIDEO_ARCHIVE_REBUILD_REQUIRED"); assert.equal(manifest.videoPlaybackUi, 1, "PACKAGED_VIDEO_PLAYBACK_UI_REBUILD_REQUIRED"); assert.equal(manifest.encodedPrivacyFixture, 2, "PACKAGED_PRIVACY_FIXTURE_REBUILD_REQUIRED"); assert.equal(manifest.nativeProcessObserver, 1);
 assert.equal(manifest.videoAnnotations, 1, "PACKAGED_VIDEO_ANNOTATIONS_REBUILD_REQUIRED");
-assert.equal(manifest.videoEventTimeline, 2, "PACKAGED_VIDEO_TIMELINE_REBUILD_REQUIRED");
+assert.equal(manifest.videoEventTimeline, 3, "PACKAGED_VIDEO_TIMELINE_REBUILD_REQUIRED");
 const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-desktop-smoke-"))), copy = join(directory, "bundle"), proofRoot = join(root, ".local/packaged-video-archive", runId); await mkdir(proofRoot, { recursive: true });
 await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, directory, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
 const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
@@ -23,7 +24,7 @@ let passed = false, original; const phases = [];
 try {
 	await copyBundleTree(source, copy); await verifyBundle(copy);
 	for (const phase of ["record", "reopen"]) {
-		assert.equal((await observer()).count, 0); await writeFile(join(directory, videoArchiveCaseFile), JSON.stringify({ version: 1, runId, phase }), { flag: "wx" });
+		assert.equal((await observer()).count, 0); await writeFile(join(directory, videoArchiveCaseFile), JSON.stringify({ version: 2, runId, phase, clockCase }), { flag: "wx" });
 		const child = spawn(join(copy, bundleExecutable), ["--portable-smoke"], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 		let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
 		const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 90000); let code, signal; try { [code, signal] = await once(child, "exit"); } finally { clearTimeout(timer); }
@@ -33,7 +34,14 @@ try {
 		const proof = JSON.parse(await readFile(join(directory, "video-archive-" + phase + ".json"), "utf8")); assert.equal(proof.runId, runId); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.phase, phase);
 		for (const field of ["encodedMediaArchivedAndDecoded", "decodedFrameContentChanges", "privacyMaskRetainedOnDecode", "privacyFirstDecodedFrameVerified", "readerReadOnly", "uiReloadRetainsRuntimeWithoutModel", "videoPlaybackUiVerified", "staleVideoUrlRefusedAfterReload", "videoUiExecutionMethodsRefused", "playbackReadersClosed", "movieBookmarkCreatedThroughUi", "manualJournalRelationVerified", "independentVideoAndJournalClocks", "movieBookmarkSeekVerified", "movieBookmarkDuplicateDoesNotAppend", "staleMovieAnnotationRefused", "originalJournalRetained"]) assert.equal(proof[field], true);
 		assert.equal(proof.generatedCanvasCoordinatorRoundtrip, phase === "record");
-		for (const field of ["encodedFrameTimingVerified", "automaticEventRangeSeekVerified", "timingEvidenceRetained", "syntheticClockEvents"]) assert.equal(proof[field], true);
+		for (const field of ["encodedFrameTimingVerified", "timelineBehaviorVerified", "timingEvidenceRetained", "syntheticClockEvents"]) assert.equal(proof[field], true);
+		assert.equal(proof.clockCase, clockCase); assert.equal(proof.timelineUncertaintyMs, proof.timing.originUpperMs - proof.timing.originLowerMs + 3);
+		assert.equal(proof.timelineStatus, proof.timelineUncertaintyMs > 1000 ? "coarse" : "bounded");
+		assert.equal(proof.coarseTimelineDisabled, proof.timelineStatus === "coarse");
+		assert.equal(proof.automaticEventRangeSeekVerified, proof.automaticSequence !== null);
+		if (proof.timelineStatus === "coarse") { assert.equal(proof.automaticEventRangeSeekVerified, false); assert.equal(proof.noCoveredEventConfirmed, false); }
+		else assert.equal(proof.noCoveredEventConfirmed, !proof.automaticEventRangeSeekVerified);
+		if (clockCase === "delayed") assert.equal(proof.coarseTimelineDisabled, true);
 		assert.equal(proof.source, "generated-canvas-only"); assert.equal(proof.modelRequests, 0); assert.equal(proof.gameCalls, 0); assert.equal(proof.nativeWindowCaptureVerified, false);
 		if (phase === "record") original = { sha256: proof.sha256, bytes: proof.encodedBytes, chunks: proof.chunks, bookmark: proof.bookmark, timing: proof.timing, encodedTiming: proof.encodedTiming, automaticSequence: proof.automaticSequence }; else { assert.equal(proof.originalRecordingRetained, true); assert.deepEqual({ sha256: proof.sha256, bytes: proof.encodedBytes, chunks: proof.chunks, bookmark: proof.bookmark, timing: proof.timing, encodedTiming: proof.encodedTiming, automaticSequence: proof.automaticSequence }, original); }
 		await writeFile(join(proofRoot, phase + "-application.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); phases.push(proof);
@@ -41,6 +49,7 @@ try {
 	}
 	await verifyBundle(source);
 	const proof = { packagedVideoArchive: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, applicationRuns: 2, phases, encodedClipRetainedAcrossApplicationRestart: true, videoPlaybackUiVerified: true, staleVideoUrlRefusedAfterReload: true, videoUiExecutionMethodsRefused: true, playbackReadersClosed: true, independentlyObservedOwnedImagesExited: true, completeBundlesUnchanged: true, source: "generated-canvas-only", nativeWindowCaptureVerified: false, wholeRecordingUiVerified: false, gameCalls: 0, modelRequests: 0, physicalInputVerified: false };
-	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-video-archive-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
+	Object.assign(proof, { clockCase, timelineBehaviorVerified: true, automaticEventRangeSeekVerified: phases.every(phase => phase.automaticEventRangeSeekVerified), coarseTimelineDisabled: phases.every(phase => phase.coarseTimelineDisabled) });
+	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, clockCase === "delayed" ? ".local/packaged-video-archive-coarse-smoke.json" : ".local/packaged-video-archive-smoke.json"), JSON.stringify(proof, null, 2)); passed = true;
 	console.log(JSON.stringify({ packagedVideoArchive: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: 2, gameCalls: 0, modelRequests: 0, nativeWindowCaptureVerified: false }));
 } finally { if (passed) { const canonical = await realpath(directory); assert.equal(canonical, directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-desktop-smoke-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } }
