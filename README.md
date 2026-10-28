@@ -369,6 +369,10 @@ Native input coordination, player takeover and real failure coverage remain acce
 - Game writes continue through Spherewright prepare/commit and original-action reconciliation. Unknown outcomes stop further writes; a resumed conversation never authorizes replay.
 - Native game-window embedding has one real DSP menu lifecycle check. Physical input, focus, DPI changes, docking and real failures still need acceptance. Agent game control remains on the structured MCP path.
 
+## External Agent observation
+
+The **外部 Agent** panel can explicitly enable a local read-only MCP gateway and copy its temporary client configuration. Its single `deck_observe` tool reads the existing shared status/research/production/power/logistics cache without new game polling, model calls or write permissions. Disabling it, suspending or exiting Deck revokes the configuration; a full restart does not enable it again. See [setup, scope and verification](docs/agent-gateway.md).
+
 ## Initial implementation priorities
 
 1. Prove native game-window hosting and safe window detachment in an isolated prototype.

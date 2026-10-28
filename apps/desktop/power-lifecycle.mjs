@@ -62,6 +62,7 @@ export class PowerLifecycle {
 	assertAction(action, args) {
 		if (this.ready) return;
 		if (action === "model-usage") return;
+		if (action === "gateway" && ["snapshot", "stop"].includes(args?.action)) return;
 		if (action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action)) return;
 		if (action === "video" && ["snapshot", "context", "open", "bookmark", "read", "close"].includes(args?.action)) return;
 		if (action === "journal" && ["snapshot", "read", "start", "stop", "bookmark"].includes(args?.action)) return;

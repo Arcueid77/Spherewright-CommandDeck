@@ -62,6 +62,7 @@ jobs:
       - run: npm run test:journal
       - run: npm run test:renamed-ui
       - run: npm run test:bridge
+      - run: npm run test:gateway
       - run: npm run test:observation
       - run: npm run test:game
       - run: npm run test:runtime-loss
@@ -156,6 +157,7 @@ jobs:
             .local/desktop-smoke-renamed-ui.json
             .local/credential-vault-smoke.json
             .local/desktop-smoke-bridge.json
+            .local/desktop-smoke-gateway.json
             .local/desktop-smoke-observation.json
             .local/desktop-smoke-game.json
             .local/portable-command-smoke.json

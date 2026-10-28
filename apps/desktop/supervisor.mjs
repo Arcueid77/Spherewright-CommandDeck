@@ -1,4 +1,4 @@
-import { app, utilityProcess, safeStorage, Tray, Menu, nativeImage, powerMonitor } from "electron";
+import { app, utilityProcess, safeStorage, Tray, Menu, nativeImage, powerMonitor, clipboard } from "electron";
 import { EventEmitter, once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,8 @@ import { CredentialVault, protectedProvider } from "./credential-vault.mjs";
 import { readPortableProfileCase, runProfileVaultFixture } from "./portable-profile.mjs";
 import { resolveTaskProfile } from "./profile-access.mjs";
 import { BridgeMonitor } from "./bridge-monitor.mjs";
+import { AgentGateway } from "./agent-gateway.mjs";
+import { runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
 import { settleShutdown } from "./shutdown-drain.mjs";
 import { GameTasks } from "./game-tasks.mjs";
@@ -58,6 +60,7 @@ let developmentUsageRootId, developmentUsageProfileId, developmentUsageStarted =
 let developmentContextTasks = [], developmentContextProfiles = [], developmentContextPending = false;
 let commandFixtureRootId;
 const smoke = process.argv.includes("--smoke") || portableSmoke;
+const gatewaySmoke = smoke && !portableSmoke && process.argv.includes("--smoke-gateway");
 const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
 const runtimeScenario = portableScenario ?? (smoke && process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
 const sourceMcpFlags = process.argv.filter(arg => arg.startsWith("--smoke-mcp-loss"));
@@ -86,7 +89,7 @@ const researchAuthority = {}, gameApprovalAuthority = {};
 const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(portableScenario && portableScenario !== "idle") || Boolean(portableMcpLoss) || Boolean(storageCase));
 const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope({ multipleApis: developmentUsageCase?.multipleProviders === true }) : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
@@ -113,6 +116,8 @@ let runtime,
 	restarts = 0;
 let runtimeExit, blockedWindow, desktopTray, journal, journalBuild, journalError, disposePowerMonitor, powerInspectionFault = false, initializingRuntime = true;
 let videoArchive, videoArchiveError;
+const agentGateway = new AgentGateway({ snapshot: () => bridge.snapshot() });
+let gatewayCopiedForSmoke = null;
 let recovering = false,
 	stopping = false,
 	allowQuit = false;
@@ -121,7 +126,7 @@ const state = {
 	currentProbeToolFinished: false,
 	probeText: "",
 	lastProbeResult: null,
-	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
+	layoutMode: smoke && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !gatewaySmoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
@@ -147,11 +152,12 @@ const diagnostics = new DiagnosticExports({
 });
 const systemPower = new PowerLifecycle({
 	quiesce: () => {
+		const gatewayDrain = agentGateway.stop();
 		void recording.interrupt("VIDEO_SYSTEM_PAUSED", "power_interrupted");
 		bridge.setSystemPaused(true);
 		if (runtime && !runtimeExit?.exited) runtime.postMessage({ type: "abort" });
 		const gameDrain = game.drain(), workbenchDrain = workbenchReady ? workbenchCall("drain") : Promise.resolve();
-		return settleShutdown([() => gameDrain, () => workbenchDrain]).then(async () => {
+		return settleShutdown([() => gameDrain, () => workbenchDrain, () => gatewayDrain]).then(async () => {
 			// Only UI/history access reopens here. Supervisor admission remains paused.
 			if (!stopping && workbenchReady && !runtimeExit?.exited) await workbenchCall("resume-after-close-failure");
 		});
@@ -194,7 +200,7 @@ const recording = new VideoRecording({ getArchive: () => videoArchive, getBuild:
 	isCurrent: (owner, generation) => owner === ui && owner?.registered && owner.documentGeneration === generation && !stopping && !recovering && systemPower.ready,
 	isLocked: () => !["active", "idle"].includes(powerMonitor.getSystemIdleState(30)), notify: value => send(ui, { type: "event", event: { type: "recording-changed", recording: value } }) });
 function emitPowerForSmoke(event) {
-	if (!(portableSmoke || smoke && process.argv.includes("--smoke-power")) || !["suspend", "resume"].includes(event)) throw new Error("POWER_FIXTURE_REQUIRED");
+	if (!(portableSmoke || gatewaySmoke || smoke && process.argv.includes("--smoke-power")) || !["suspend", "resume"].includes(event)) throw new Error("POWER_FIXTURE_REQUIRED");
 	powerMonitor.emit(event);
 }
 function failNextPowerCheckForSmoke() {
@@ -364,7 +370,7 @@ async function api(action, args, source) {
 		!["close", "status", "profiles", "targets", "snapshot"].includes(action)
 	)
 		throw new Error("SUPERVISOR_CLOSING");
-	const recoveryRead = action === "model-usage" || action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot" || action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action);
+	const recoveryRead = action === "model-usage" || action === "gateway" && ["snapshot", "stop"].includes(args?.action) || action === "workbench" && ["state", "task", "ui-get", "list", "read", "diff", "change-diff", "read-reference", "search", "checks"].includes(args?.action) || ["bridge", "game", "video"].includes(action) && args?.action === "snapshot" || action === "recording" && ["snapshot", "cancel", "closed"].includes(args?.action);
 	if (
 		recovering && !recoveryRead &&
 		![
@@ -378,6 +384,16 @@ async function api(action, args, source) {
 	)
 		throw new Error("UI_RECOVERY_PENDING");
 	if (action === "snapshot") return { ...state, runtimeAvailable: workbenchReady, power: systemPower.snapshot(), events: [...state.events] };
+	if (action === "gateway") {
+		if (!args || !["snapshot", "start", "stop", "copy"].includes(args.action) || Object.keys(args).some(key => !["action", "generation"].includes(key))) throw new Error("INVALID_GATEWAY_ACTION");
+		if (args.action === "snapshot") return agentGateway.snapshot();
+		if (source !== ui || !source?.registered || args.generation !== source.documentGeneration) throw new Error("TRUSTED_UI_REQUIRED");
+		if (args.action === "start") return agentGateway.start();
+		if (args.action === "stop") return agentGateway.stop();
+		const connection = agentGateway.connection(), config = { mcpServers: { "spherewright-commanddeck": { command: process.execPath, args: [join(root, "apps/desktop/agent-gateway-stdio.mjs")], env: { ELECTRON_RUN_AS_NODE: "1", COMMANDDECK_GATEWAY_PIPE: connection.pipe, COMMANDDECK_GATEWAY_KEY: connection.key } } } };
+		if (smoke) gatewayCopiedForSmoke = config; else clipboard.writeText(JSON.stringify(config, null, 2));
+		return { copied: true };
+	}
 	if (action === "model-usage") return readModelUsageSummary({
 		development: () => { if (!workbenchReady || runtimeExit?.exited) throw new Error("USAGE_SOURCE_UNAVAILABLE"); return workbenchCall("usage-data", {}, 12000); },
 		game: () => { if (!game.ledger.storageAvailable) throw new Error("USAGE_SOURCE_UNAVAILABLE"); return game.ledger.usageSample(); },
@@ -814,12 +830,13 @@ async function openWorkbench() {
 async function shutdown(exitCode = 0, { preserveApplication = false } = {}) {
 	if (stopping) return;
 	stopping = true;
+	const gatewayDrain = agentGateway.stop();
 	void recording.interrupt("VIDEO_APPLICATION_EXIT", "application_exit");
 	clearInterval(bridgeTimer);
 	if (!runtimeExit?.exited) runtime?.postMessage({ type: "abort" });
 	try {
 		// Drain game first so its retained original action can still use the same connection.
-		await settleShutdown([() => game.drain(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve(), () => diagnostics.drain()]);
+		await settleShutdown([() => game.drain(), () => workbenchReady ? workbenchCall("drain") : Promise.resolve(), () => diagnostics.drain(), () => gatewayDrain]);
 		await bridge.close();
 		await native.request("detach");
 		await native.request("close");
@@ -1018,7 +1035,7 @@ if (!app.hasSingleInstanceLock()) {
 				emit({ type: "native-state", text: "原生宿主替身已嵌入；不是 DSP。" });
 			}
 			if (smoke) {
-				const smokeRunner = process.argv.includes("--smoke-journal") ? runJournalSmoke : process.argv.includes("--smoke-power") ? runPowerSmoke : process.argv.includes("--smoke-tray") ? runTraySmoke : diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
+				const smokeRunner = gatewaySmoke ? runGatewaySmoke : process.argv.includes("--smoke-journal") ? runJournalSmoke : process.argv.includes("--smoke-power") ? runPowerSmoke : process.argv.includes("--smoke-tray") ? runTraySmoke : diagnosticSmoke ? runDiagnosticSmoke : process.argv.includes("--smoke-runtime-loss") && !gameSmoke ? runRuntimeLossSmoke : process.argv.includes("--smoke-observation") ? runObservationSmoke : gameSmoke ? runGameSmoke : process.argv.includes("--smoke-bridge") ? runBridgeSmoke : process.argv.includes("--smoke-workbench") ? runWorkbenchSmoke : process.argv.includes("--smoke-adapter") ? runAdapterDesktopSmoke : runDesktopSmoke;
 				await smokeRunner({
 					root,
 					runId: process.env.COMMANDDECK_SMOKE_RUN_ID ?? randomUUID(),
@@ -1039,6 +1056,7 @@ if (!app.hasSingleInstanceLock()) {
 					bridgeExitConfirmed: () => bridge.telemetry?.client.exitConfirmed === true,
 					getSyntheticCommitCount: async () => { if (!gameSmoke) throw new Error("GAME_SMOKE_ONLY"); return (await bridge.telemetry.client.read("spherewright_get_status")).status.syntheticCommitCount; },
 					getProbeSequence: () => probeSequence,
+					getGatewayConfigurationForSmoke: () => { if (!gatewaySmoke) throw new Error("GATEWAY_FIXTURE_REQUIRED"); return gatewayCopiedForSmoke; },
 					getState: () => state,
 					beginUiHang: () =>
 						send(ui, { type: "test", id: "hang", name: "hang-own-ui" }),

@@ -223,6 +223,10 @@ if (typeof process.send !== "function") {
 			}))
 				handle(channel, (args) => request(action, args));
 			handle("deck:model-usage", () => request("model-usage"));
+			handle("deck:gateway", args => {
+				if (!args || !["snapshot", "start", "stop", "copy"].includes(args.action) || Object.keys(args).length !== 1) throw new Error("INVALID_GATEWAY_ACTION");
+				return request("gateway", { action: args.action, generation: documentGeneration });
+			});
 			handle("deck:video", async args => {
 				if (!args || !["snapshot", "context", "open", "bookmark", "close"].includes(args.action)) throw new Error("INVALID_VIDEO_ACTION");
 				if (args.action === "snapshot") return request("video", { action: "snapshot" });

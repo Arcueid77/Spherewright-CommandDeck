@@ -118,6 +118,7 @@ export function assertPortableRuntimeAction(action, args, { scenario, internal =
 }
 
 export function assertPortableAction(action, args) {
+	if (action === "gateway" && args?.action === "snapshot") return;
 	if (action === "model-usage") return;
 	if (action === "recording" && args?.action === "snapshot") return;
 	if (action === "video" && ["snapshot", "context", "open", "bookmark", "read", "close"].includes(args?.action)) return;
