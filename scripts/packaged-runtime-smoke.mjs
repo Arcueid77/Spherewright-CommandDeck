@@ -14,16 +14,20 @@ import { modelUsageRecoveryFile, modelUsageRecoveryHash } from "../apps/desktop/
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
 import { prepareDevelopmentUsageCase, developmentWorkspaceState, developmentGitHash } from "./development-usage-case.mjs";
 import { readDevelopmentUsageOriginal } from "../apps/desktop/development-usage-smoke.mjs";
+import { readDevelopmentContextOriginal } from "../apps/desktop/development-context-recovery.mjs";
+import { modelUsageSnapshot } from "../apps/desktop/model-usage.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
-const developmentUsage = args[0] === "--development-usage"; if (developmentUsage) args.shift();
+const developmentContext = args[0] === "--development-context"; if (developmentContext) args.shift();
+const developmentUsage = developmentContext || args[0] === "--development-usage"; if (developmentUsage && !developmentContext) args.shift();
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
 if (developmentUsage && mcpLoss) throw new Error("PACKAGED_USAGE_MODE_CONFLICT");
-const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
+const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
 assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAGE_SUMMARY_REBUILD_REQUIRED");
+if (developmentContext) { assert.equal(manifest.portableDevelopmentContext, 1, "PACKAGED_CONTEXT_REBUILD_REQUIRED"); assert.equal(manifest.developmentContextManagement, 1); }
 assert.ok(manifest.files.some(file => file.path === "resources/app/test/fixtures/research-mcp-server.mjs"));
 const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
@@ -55,24 +59,34 @@ try {
 		if (developmentUsage) {
 			const toolchain = await prepareDevelopmentUsageCase(directory), workspaceBefore = await developmentWorkspaceState(directory);
 			caseEnvironment.PATH = [toolchain.gitDirectory, join(process.env.SystemRoot, "System32")].join(delimiter);
-			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=record"], "record-");
-			const original = await readDevelopmentUsageOriginal({ root: directory, runId: caseId }), before = await usageRecoveryState(directory, caseId, { role: "development" });
+			const phasePrefix = developmentContext ? "context-" : "";
+			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=" + phasePrefix + "record"], "record-");
+			const original = await (developmentContext ? readDevelopmentContextOriginal : readDevelopmentUsageOriginal)({ root: directory, runId: caseId }), before = await usageRecoveryState(directory, caseId, { role: "development" });
 			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED");
 			await writeFile(join(caseProof, "before-reopen.private.json"), JSON.stringify(before), { flag: "wx" });
-			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=reopen"], "reopen-");
+			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=" + phasePrefix + "reopen"], "reopen-");
 			const phases = [];
 			for (const phase of ["record", "reopen"]) {
-				const proof = JSON.parse(await readFile(join(directory, "development-usage-" + phase + "-proof.json"), "utf8"));
+				const proof = JSON.parse(await readFile(join(directory, (developmentContext ? "development-context-" : "development-usage-") + phase + "-proof.json"), "utf8"));
 				assert.equal(proof.runId, caseId); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.expectedSha256, original.sha256);
+				if (developmentContext) {
+					for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "originalTasksAndContextsRetained", "usageIncludesCompaction", "uiReloadDoesNotReplay", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
+					const usage = original.expected.records.map(task => modelUsageSnapshot(task.usage)), requests = usage.reduce((sum, value) => sum + value.requests, 0);
+					assert.equal(proof.totals.requests, requests); assert.equal(proof.totals.normalizedTokens, usage.reduce((sum, value) => sum + value.tokens.totalTokens, 0)); assert.ok(Math.abs(proof.totals.estimatedUsd - usage.reduce((sum, value) => sum + value.estimate.usd, 0)) < 1e-12);
+					assert.equal(proof.syntheticModelRequests, phase === "record" ? requests : 0); assert.equal(proof.actualToolCalls, phase === "record" ? 1 : 0); assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
+					if (phase === "record") { assert.equal(proof.exercise.uiContinuationVerified, true); assert.equal(proof.exercise.uiCompactionVerified, true); assert.equal(proof.exercise.copiedSourceHashesRetained, true); assert.equal(proof.exercise.originalTasksAndReceiptsRetained, true); assert.equal(proof.exercise.usageIncludesCompaction, true); assert.equal(proof.exercise.compactionRequests, original.expected.records[2].result.contextManagement.compactionRequests); }
+				} else {
 				for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "priceSnapshotSurvivesReconfiguration", "uiReloadRetainsUsage", "originalTaskRetained", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
 				assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? 2 : 0); assert.equal(proof.toolInvocations, 1); assert.equal(proof.normalizedTokens, 240); assert.equal(proof.reportedResponses, 2); assert.ok(Math.abs(proof.estimatedUsd - 0.00077) < 1e-12); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
 				assert.equal(proof.summary.readOnlySummaryVerified, true); assert.equal(proof.summary.normalizedTokens, 240); assert.equal(proof.summary.estimatedUsd, proof.estimatedUsd); assert.deepEqual(proof.summary.taskEndContext, original.expected.task.context);
+				}
 				await writeFile(join(caseProof, phase + "-application-proof.json"), JSON.stringify(proof), { flag: "wx" }); phases.push(proof);
 			}
+			if (developmentContext) assert.deepEqual(phases[1].totals, phases[0].totals);
 			const after = await usageRecoveryState(directory, caseId, { role: "development" }); assert.deepEqual(after, before, "DEVELOPMENT_USAGE_ORIGINAL_ROWS_OR_PI_CHANGED");
 			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED_AFTER_RESTART"); assert.equal(await developmentGitHash(toolchain.git), toolchain.gitSha256);
 			await writeFile(join(caseProof, "after-reopen.private.json"), JSON.stringify(after), { flag: "wx" });
-			cases.push({ ...phases[0], developmentUsageScenario: "read-file-and-reopen", developmentUsageRecovery: phases[1], noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
+			cases.push({ ...phases[0], developmentUsageScenario: developmentContext ? "continue-compact-and-reopen" : "read-file-and-reopen", developmentUsageRecovery: phases[1], noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
 			continue;
 		}
 		await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario]);

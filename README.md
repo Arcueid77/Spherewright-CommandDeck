@@ -250,6 +250,8 @@ In the development panel, **上下文** offers a new task, continuation from the
 
 Compaction uses Pi's own manual compaction and consumes the new task's six-request budget; the UI reports compaction requests and Pi's before/after estimates. Summarization has no tools. If Pi finds no eligible segment, choose continuation instead. Failed or cancelled compaction ends that attempt without running its follow-up or falling back to full history. This control is available only for development tasks and restores no game authorization. Source unit and Electron checks cover continuation, fresh read-only grants, compaction, cancellation and original-history preservation; whole-application restart and multi-endpoint acceptance for this new control remain open.
 
+Contributors can run `npm run test:packaged-development-context -- --source artifacts/portable-desktop` against a bundle declaring `portableDevelopmentContext: 1`. It reuses the isolated development-usage launcher and owned read-only Git workspace, permits only three fixed synthetic tasks, then exits and reopens the same profile with execution disabled. The controller compares original business rows, Pi files, encrypted configuration and workspace bytes, and checks task/summary UI after reload. This check requires the existing Git toolchain and proves only its tested package/profile pair; exact results and outstanding coverage are recorded in the roadmap.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

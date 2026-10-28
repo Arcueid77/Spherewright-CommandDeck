@@ -55,6 +55,7 @@ const storageCase = portableSmoke ? portableStorageCase(process.argv) : null;
 const commandCase = portableSmoke ? portableCommandCase(process.argv) : null;
 const developmentUsageCase = portableSmoke ? portableDevelopmentUsageCase(process.argv) : null;
 let developmentUsageRootId, developmentUsageProfileId, developmentUsageStarted = false;
+let developmentContextTasks = [], developmentContextPending = false;
 let commandFixtureRootId;
 const smoke = process.argv.includes("--smoke") || portableSmoke;
 const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
@@ -252,9 +253,10 @@ async function registerDevelopmentUsageWorkspace() {
 		if (current.roots.length || current.tasks.length) throw new Error("DEVELOPMENT_USAGE_REQUIRES_EMPTY_WORKSPACE");
 		registered = await workbenchCall("add", { path, label: "Synthetic development usage", canWrite: false, canExecute: false });
 	} else {
-		if (current.roots.length !== 1 || current.tasks.length !== 1 || current.roots[0].path !== path || current.roots[0].canWrite || current.roots[0].canExecute) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
+		if (current.roots.length !== 1 || current.tasks.length !== (developmentUsageCase.context ? 3 : 1) || current.roots[0].path !== path || current.roots[0].canWrite || current.roots[0].canExecute) throw new Error("DEVELOPMENT_USAGE_HISTORY_MISMATCH");
 		registered = current;
 		developmentUsageProfileId = current.tasks[0].provider;
+		if (developmentUsageCase.context) developmentContextTasks = current.tasks.map(task => task.id);
 	}
 	developmentUsageRootId = registered.roots[0].id; return registered;
 }
@@ -340,7 +342,7 @@ async function api(action, args, source) {
 	systemPower.assertAction(action, args);
 	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
 	if (portableSmoke && !diagnosticSmoke) {
-		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority });
+		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending });
 		else if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
 		else if (storageCase) assertPortableStorageAction(action, args, { internal: source === fixtureAuthority });
 		else if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });
@@ -462,7 +464,9 @@ async function api(action, args, source) {
 		if (ui?.nativeProbePending && ["add", "grants", "save", "revert", "check", "agent", "attach-reference"].includes(args.action)) throw new Error("UI_NATIVE_OPERATION_PENDING");
 		if (changingProfiles && ["agent", "check", "save", "revert"].includes(args.action)) throw new Error("MODEL_CONFIGURATION_BUSY");
 		if (developmentUsageCase && args.action === "agent") developmentUsageStarted = true;
+		if (developmentUsageCase?.context && args.action === "agent") developmentContextPending = true;
 		const result = await workbenchCall(args.action, args.args ?? {});
+		if (developmentUsageCase?.context && args.action === "agent") { developmentContextTasks.push(result.id); developmentContextPending = false; }
 		return args.action === "state" && (!systemPower.ready || observationPolicy) ? { ...result, ...(observationPolicy ? { observationOnly: true } : {}), executionBlocked: true } : result;
 	}
 	if (action === "profiles") {
