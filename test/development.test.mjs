@@ -293,20 +293,27 @@ test("Pi continuation and compaction fork original history, renew grants and sto
 	assert.deepEqual(errors, []); assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 1;\n"); await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
 });
 
-test("protected OpenAI and Anthropic context crosses both directions with current credentials, tools, prices and compaction", { ...windows, timeout: 60000 }, async t => {
-	const f = await fixture(t), providerFixture = await createProviderContextFixture("code.mjs"), records = [], infos = [], bytes = [];
+for (const summaryFailure of [null, "cancel", "http-error"]) test("protected OpenAI and Anthropic context with original sources and " + (summaryFailure ?? "successful compaction"), { ...windows, timeout: 60000 }, async t => {
+	const f = await fixture(t), providerFixture = await createProviderContextFixture("code.mjs", { summaryFailure }), records = [], infos = [], bytes = [];
 	t.after(() => providerFixture.close());
+	async function until(predicate) { const deadline = performance.now() + 10000; while (!predicate()) { assert.ok(performance.now() < deadline, "CONTEXT_FAILURE_REQUEST_NOT_OBSERVED"); await new Promise(resolve => setTimeout(resolve, 20)); } }
 	await f.workbench.request("grants", { rootId: f.rootId, canWrite: false, canExecute: false });
 	f.workbench.resolveProfile = async task => { const profile = providerFixture.profiles.find(profile => profile.id === task.provider); assert.ok(profile); return profile; };
 	for (const [index, step] of providerContextSteps.entries()) {
 		providerFixture.begin(index); const profile = providerFixture.profiles[step.provider];
 		const source = step.source === null ? {} : { contextMode: step.mode, sourceTaskId: records[step.source].id, sourceSha256: infos[step.source].sourceSha256 };
 		const task = await f.workbench.request("agent", { rootId: f.rootId, providerId: profile.id, modelId: profile.modelId, prompt: step.prompt, ...source });
-		await f.workbench.operation.done; const record = await f.workbench.request("task", { taskId: task.id }); assertProviderContextResult(record, index, providerFixture);
+		const done = f.workbench.operation.done;
+		if (summaryFailure === "cancel" && step.mode === "compact") {
+			await until(() => providerFixture.calls.some(call => call.step === index && call.summary)); assert.deepEqual(providerFixture.abortedSteps, index === 3 ? [] : [3]);
+			await f.workbench.request("cancel", { taskId: task.id }); await until(() => providerFixture.abortedSteps.includes(index));
+		}
+		await done; const record = await f.workbench.request("task", { taskId: task.id }); assertProviderContextResult(record, index, providerFixture);
 		assert.equal(record.parentId, step.source === null ? null : records[step.source].id); records.push(record); infos.push(await developmentContextInfo(f.workbench, f.rootId, task.id));
 		bytes.push(await readFile(f.workbench.store.task(task.id, { privateFields: true }).sessionFile));
+		if (summaryFailure && step.mode === "compact") { const entries = bytes.at(-1).toString("utf8").trim().split(/\r?\n/).map(line => JSON.parse(line)); assert.ok(entries.every(entry => entry.type !== "compaction")); assert.ok(!bytes.at(-1).includes(step.marker)); }
 		for (let previous = 0; previous <= index; previous++) { assert.deepEqual(await f.workbench.request("task", { taskId: records[previous].id }), records[previous]); assert.deepEqual(await readFile(f.workbench.store.task(records[previous].id, { privateFields: true }).sessionFile), bytes[previous]); }
 	}
-	assert.equal(providerFixture.calls.filter(call => call.summary).length, 2); assert.equal(providerFixture.calls.length, 12); assert.deepEqual(providerFixture.errors, []);
+	assert.equal(providerFixture.calls.filter(call => call.summary).length, 2); assert.equal(providerFixture.calls.length, summaryFailure ? 8 : 12); assert.deepEqual(providerFixture.errors, []); assert.deepEqual(providerFixture.abortedSteps, summaryFailure === "cancel" ? [3, 4] : []);
 	assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 1;\n"); await assert.rejects(readFile(join(f.repo, "check-count.txt")), { code: "ENOENT" });
 });

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, realpath, writeFile, readFile, rm } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { assertProviderContextTask, providerContextSteps, contextProviderApis, contextProviderSettings } from "../apps/desktop/development-provider-context-case.mjs";
+import { assertProviderContextTask, providerContextSteps, contextProviderApis, contextProviderSettings, providerContextFailures, providerContextPrefix } from "../apps/desktop/development-provider-context-case.mjs";
 import { createProviderContextFixture } from "../apps/desktop/development-provider-context-fixture.mjs";
 import { syntheticProviderScope } from "../apps/desktop/synthetic-scope.mjs";
 import { portableDevelopmentUsageCase, assertPortableDevelopmentUsageAction, preparePortableMode } from "../apps/desktop/portable-mode.mjs";
@@ -62,17 +62,37 @@ test("cross-provider package modes remain isolated and reopened profiles cannot 
 	await assert.rejects(preparePortableMode(app, ["--portable-smoke", "--portable-development-usage=context-providers-record", "--smoke-game"], env));
 });
 
-test("cross-provider original evidence binds branch sources, API families, prices and read-only receipts", async t => {
+test("summary cancellation is admitted only for the active fixture suffix and never on reopen or HTTP failure", async t => {
+	const context = await owned(t), env = { COMMANDDECK_PORTABLE_ROOT: context.root, COMMANDDECK_PORTABLE_RUN_ID: context.runId }, app = { isPackaged: true, setPath() {} }, tasks = providerContextSteps.map(() => randomUUID());
+	for (const summaryFailure of providerContextFailures) for (const phase of ["record", "reopen"]) {
+		const argv = ["--portable-smoke", "--portable-development-usage=" + providerContextPrefix(summaryFailure) + phase], mode = portableDevelopmentUsageCase(argv);
+		assert.deepEqual(mode, { phase, context: true, multipleProviders: true, summaryFailure }); await preparePortableMode(app, argv, env);
+		for (const count of [1, 2, 3, 4, 5]) {
+			const state = { ...mode, contextTasks: tasks.slice(0, count) }, request = { action: "cancel", args: { taskId: tasks[count - 1] } };
+			if (phase === "record" && summaryFailure === "cancel" && count >= 4) {
+				assertPortableDevelopmentUsageAction("workbench", request, state);
+				for (const patch of [{ contextPending: true }, { phase: "reopen" }, { summaryFailure: null }, { summaryFailure: "http-error" }, { multipleProviders: false }, { context: false }]) assert.throws(() => assertPortableDevelopmentUsageAction("workbench", request, { ...state, ...patch }));
+			} else assert.throws(() => assertPortableDevelopmentUsageAction("workbench", request, state));
+			for (const args of [{ taskId: randomUUID() }, { taskId: tasks[count - 1], command: "UNTRUSTED_TEXT" }, {}]) assert.throws(() => assertPortableDevelopmentUsageAction("workbench", { action: "cancel", args }, state));
+		}
+		assert.throws(() => portableDevelopmentUsageCase([...argv, "--portable-development-usage=context-record"]));
+	}
+	assert.throws(() => providerContextPrefix("arbitrary")); assert.throws(() => portableDevelopmentUsageCase(["--portable-smoke", "--portable-development-usage=context-cancel-recover"]));
+});
+
+for (const summaryFailure of [null, ...providerContextFailures]) test("cross-provider original evidence binds sources, API, unknown usage and " + (summaryFailure ?? "successful results"), async t => {
 	const context = await owned(t), rootId = randomUUID(), providers = ["deckvault-" + randomUUID(), "deckvault-" + randomUUID()], ids = providerContextSteps.map(() => randomUUID()), infos = ids.map((sourceTaskId, index) => ({ sourceTaskId, sourceSha256: String(index + 1).repeat(64) }));
 	const records = providerContextSteps.map((step, index) => {
 		const setting = contextProviderSettings[step.provider], usage = new ModelUsage({ pricing: setting.pricing, publish() {} });
-		for (let request = 0; request < (step.mode === "compact" ? 3 : 2); request++) usage.finish(usage.start(), { usage: { input: 20, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 25 } });
-		return { id: ids[index], rootId, parentId: step.source === null ? null : ids[step.source], kind: "agent", state: "succeeded", provider: providers[step.provider], model: "fixture", prompt: step.prompt, response: step.marker + "_DONE", scope: step.source === null ? {} : { context: { mode: step.mode, sourceTaskId: ids[step.source], sourceSha256: infos[step.source].sourceSha256 } }, changes: [], invocations: [{ name: "workspace_read", state: "completed", arguments: { path: "fixture.txt" } }], usage: usage.snapshot(), context: { contextWindow: setting.contextWindow }, result: { contextManagement: { compacted: step.mode === "compact", compactionRequests: 1, tokensBefore: 90, estimatedTokensAfter: 20 } } };
+		const failure = summaryFailure && step.mode === "compact";
+		for (let request = 0; request < (failure ? 1 : step.mode === "compact" ? 3 : 2); request++) usage.finish(usage.start(), failure ? null : { usage: { input: 20, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 25 } });
+		return { id: ids[index], rootId, parentId: step.source === null ? null : ids[step.source], kind: "agent", state: failure ? summaryFailure === "cancel" ? "cancelled" : "failed" : "succeeded", ...(failure ? { error: summaryFailure === "cancel" ? "DEVELOPMENT_TASK_CANCELLED" : "DEVELOPMENT_CONTEXT_COMPACTION_FAILED" } : {}), provider: providers[step.provider], model: "fixture", prompt: step.prompt, response: failure ? "" : step.marker + "_DONE", scope: step.source === null ? {} : { context: { mode: step.mode, sourceTaskId: ids[step.source], sourceSha256: infos[step.source].sourceSha256 } }, changes: [], events: [], invocations: failure ? [] : [{ name: "workspace_read", state: "completed", arguments: { path: "fixture.txt" } }], usage: usage.snapshot(), context: { contextWindow: setting.contextWindow }, result: failure ? { outcomeUnknown: false } : { contextManagement: { compacted: step.mode === "compact", compactionRequests: 1, tokensBefore: 90, estimatedTokensAfter: 20 } } };
 	});
 	const expected = { roots: [{ id: rootId, path: join(context.root, "development-usage-workspace"), canWrite: false, canExecute: false }], tasks: ids.map(id => ({ id })), records, infos, models: providers.map((providerId, index) => ({ providerId, modelId: "fixture", api: contextProviderApis[index] })), selection: { rootId, taskId: ids[4] }, draft: { prompt: providerContextSteps[4].prompt, model: JSON.stringify([providers[0], "fixture"]) } };
-	const value = { version: 1, kind: "synthetic-provider-context", runId: context.runId, expected, sha256: profileHash(expected) }, file = join(context.root, providerContextOriginalFile);
-	await writeFile(file, JSON.stringify(value), { flag: "wx" }); assert.deepEqual(await readProviderContextOriginal(context), value);
-	for (const change of [data => { data.expected.models[1].api = "openai-completions"; }, data => { data.expected.records[4].parentId = ids[3]; }, data => { data.expected.records[1].usage.pricing.input = 0; }, data => { data.expected.records[3].context.contextWindow = 32768; }, data => { data.expected.records[2].invocations[0].arguments.path = "outside.txt"; }, data => { data.expected.roots[0].canWrite = true; }, data => { data.command = "UNTRUSTED_TEXT"; }]) {
-		const broken = structuredClone(value); change(broken); broken.sha256 = profileHash(broken.expected); const bytes = JSON.stringify(broken); await writeFile(file, bytes); await assert.rejects(readProviderContextOriginal(context)); assert.equal(await readFile(file, "utf8"), bytes);
+	const value = { version: 1, kind: "synthetic-provider-context", runId: context.runId, expected, sha256: profileHash(expected), ...(summaryFailure ? { summaryFailure } : {}) }, file = join(context.root, providerContextOriginalFile);
+	await writeFile(file, JSON.stringify(value), { flag: "wx" }); assert.deepEqual(await readProviderContextOriginal(context, { summaryFailure }), value);
+	if (summaryFailure) await assert.rejects(readProviderContextOriginal(context));
+	for (const change of [data => { data.expected.models[1].api = "openai-completions"; }, data => { data.expected.records[4].parentId = ids[3]; }, data => { data.expected.records[1].usage.pricing.input = 0; }, data => { data.expected.records[3].context.contextWindow = 32768; }, data => { data.expected.records[2].invocations[0].arguments.path = "outside.txt"; }, data => { data.expected.roots[0].canWrite = true; }, data => { data.command = "UNTRUSTED_TEXT"; }, ...(summaryFailure ? [data => { data.expected.records[4].state = "succeeded"; }, data => { data.expected.records[3].result = { contextManagement: { compacted: true } }; }, data => { data.expected.records[4].usage.tokens = { totalTokens: 0 }; }, data => { data.expected.records[3].events.push({ kind: "assistant-text", value: { text: "invented" } }); }, data => { data.summaryFailure = summaryFailure === "cancel" ? "http-error" : "cancel"; }] : [])]) {
+		const broken = structuredClone(value); change(broken); broken.sha256 = profileHash(broken.expected); const bytes = JSON.stringify(broken); await writeFile(file, bytes); await assert.rejects(readProviderContextOriginal(context, { summaryFailure })); assert.equal(await readFile(file, "utf8"), bytes);
 	}
 });

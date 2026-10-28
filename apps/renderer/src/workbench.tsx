@@ -193,7 +193,7 @@ export function DevelopmentPanel() {
 		<div className="check-row"><select aria-label="仓库检查" value={checkId} onChange={(event) => setCheckId(event.target.value)}>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}</select><button disabled={!checkId || !c.root?.canExecute || Boolean(c.activeTask) || c.executionBlocked} onClick={() => void wb<Task>("check", { rootId: c.rootId, checkId }).then((task) => { c.selectTask(task.id); return c.refresh(); }).catch(c.report)}>运行检查</button></div>
 		<p className="muted">构建和测试会运行该仓库代码。开发任务不持有游戏工具。</p>
 		{task && <><div className="task-heading">{labels[task.state] ?? task.state} · {c.roots.find((root) => root.id === task.rootId)?.label}<span>{task.id.slice(0, 8)}</span></div><pre>{taskText(task)}</pre>{task.kind === "agent" && <ModelUsage value={task.usage} context={task.context} />}</>}
-		{task?.scope?.context && <p className="muted">此任务{task.scope.context.mode === "compact" ? "压缩后续接" : "保留历史续接"}自 {task.scope.context.sourceTaskId.slice(0, 8)}，源摘要 {task.scope.context.sourceSha256.slice(0, 12)}。压缩效果与原始回执分开核对。</p>}
+		{task?.scope?.context && <p className="muted">此任务{task.scope.context.mode === "compact" ? management?.compacted ? "压缩后续接" : "请求压缩后续接" : "保留历史续接"}自 {task.scope.context.sourceTaskId.slice(0, 8)}，源摘要 {task.scope.context.sourceSha256.slice(0, 12)}。压缩效果与原始回执分开核对。</p>}
 		{management?.compacted && <p>压缩使用 {estimate(management.compactionRequests)} 次模型请求，已含在本任务用量中。Pi 压缩前估计 {estimate(management.tokensBefore)} → 压缩后估计 {estimate(management.estimatedTokensAfter)} tokens；不保证实际减少或为下一请求预留额度。</p>}
 		{c.notice && <p className="notice">{c.notice}</p>}
 	</div>;

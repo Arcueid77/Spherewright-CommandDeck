@@ -258,6 +258,8 @@ The model form shows the base-address convention for the selected API: Chat Comp
 
 `npm run test:packaged-development-context-providers -- --source artifacts/portable-desktop` requires `portableDevelopmentProviderContext: 1`. Two separately bound loopback listeners exercise the protected Chat Completions and Anthropic Messages profiles in both directions. Five fixed read-only tasks cover continuation, compaction and branching from an earlier task, with four renderer model switches. It checks historical tool-call/result pairing, current tools and model limits, per-task price/cache-usage snapshots, and original rows/Pi/vault/workspace bytes after a full application restart. It grants no real-provider or game authority; hosted endpoints and real capacity still need separate acceptance.
 
+`npm run test:packaged-development-context-failures -- --source artifacts/portable-desktop` additionally requires `portableDevelopmentContextFailures: 1`. Two isolated cases reuse the five-task flow: both API families either hold each summary until the actual renderer Stop button cancels it, or return HTTP 503. The controller checks client disconnect before server cleanup, one summary attempt per failed task, no follow-up prompts/tools or invented compaction records, unknown missing usage, and unchanged business rows/Pi/vault/workspace after each full application restart. Four actual application starts are required; no real service or game is contacted.
+
 ## M1 development workspace
 
 Start without a game, then use **添加仓库**, or seed approved roots explicitly:

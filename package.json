@@ -28,6 +28,7 @@
 		"test:packaged-development-context": "node scripts/packaged-runtime-smoke.mjs --development-context",
 		"test:packaged-development-context-interruption": "node scripts/packaged-runtime-smoke.mjs --development-context-interruption",
 		"test:packaged-development-context-providers": "node scripts/packaged-runtime-smoke.mjs --development-context-providers",
+		"test:packaged-development-context-failures": "node scripts/packaged-runtime-smoke.mjs --development-context-failures",
 		"test:diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-diagnostics": "node scripts/diagnostic-smoke.mjs",
 		"test:packaged-storage": "node scripts/packaged-storage-smoke.mjs",

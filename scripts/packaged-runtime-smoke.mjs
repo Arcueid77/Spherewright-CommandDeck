@@ -18,15 +18,17 @@ import { readDevelopmentContextOriginal } from "../apps/desktop/development-cont
 import { modelUsageSnapshot } from "../apps/desktop/model-usage.mjs";
 import { runContextInterruptionCase } from "./development-context-interruption-case.mjs";
 import { readProviderContextOriginal } from "../apps/desktop/development-provider-context-smoke.mjs";
+import { providerContextFailures, providerContextPrefix, providerContextSteps } from "../apps/desktop/development-provider-context-case.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2);
 const contextInterruption = args[0] === "--development-context-interruption";
-const providerContext = args[0] === "--development-context-providers";
+const contextFailures = args[0] === "--development-context-failures";
+const providerContext = contextFailures || args[0] === "--development-context-providers";
 const developmentContext = providerContext || contextInterruption || args[0] === "--development-context"; if (developmentContext) args.shift();
 const developmentUsage = developmentContext || args[0] === "--development-usage"; if (developmentUsage && !developmentContext) args.shift();
 const mcpLoss = args[0] === "--mcp-loss"; if (mcpLoss) args.shift();
 if (developmentUsage && mcpLoss) throw new Error("PACKAGED_USAGE_MODE_CONFLICT");
-const scenarios = developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = providerContext ? "packaged-development-context-providers" : contextInterruption ? "packaged-development-context-interruption" : developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = providerContext ? "packagedDevelopmentProviderContextSmoke" : contextInterruption ? "packagedDevelopmentContextInterruptionSmoke" : developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
+const scenarios = contextFailures ? providerContextFailures : developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = contextFailures ? "packaged-development-context-failures" : providerContext ? "packaged-development-context-providers" : contextInterruption ? "packaged-development-context-interruption" : developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = contextFailures ? "packagedDevelopmentContextFailuresSmoke" : providerContext ? "packagedDevelopmentProviderContextSmoke" : contextInterruption ? "packagedDevelopmentContextInterruptionSmoke" : developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
 assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
@@ -34,6 +36,7 @@ if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAG
 if (developmentContext) { assert.equal(manifest.portableDevelopmentContext, 1, "PACKAGED_CONTEXT_REBUILD_REQUIRED"); assert.equal(manifest.developmentContextManagement, 1); }
 if (contextInterruption) assert.equal(manifest.portableDevelopmentContextInterruption, 1, "PACKAGED_CONTEXT_INTERRUPTION_REBUILD_REQUIRED");
 if (providerContext) assert.equal(manifest.portableDevelopmentProviderContext, 1, "PACKAGED_PROVIDER_CONTEXT_REBUILD_REQUIRED");
+if (contextFailures) assert.equal(manifest.portableDevelopmentContextFailures, 1, "PACKAGED_CONTEXT_FAILURES_REBUILD_REQUIRED");
 assert.ok(manifest.files.some(file => file.path === "resources/app/test/fixtures/research-mcp-server.mjs"));
 const proofRoot = join(root, ".local", proofFolder, runId); await mkdir(proofRoot, { recursive: true });
 const directories = [], cases = []; let passed = false;
@@ -72,22 +75,36 @@ try {
 			const toolchain = await prepareDevelopmentUsageCase(directory), workspaceBefore = await developmentWorkspaceState(directory);
 			caseEnvironment.PATH = [toolchain.gitDirectory, join(process.env.SystemRoot, "System32")].join(delimiter);
 			if (contextInterruption) { cases.push(await runContextInterruptionCase({ directory, caseId, caseProof, caseEnvironment, manifest, toolchain, workspaceBefore, launch })); continue; }
-			const phasePrefix = providerContext ? "context-providers-" : developmentContext ? "context-" : "";
+			const summaryFailure = contextFailures ? scenario : null, phasePrefix = providerContext ? providerContextPrefix(summaryFailure) : developmentContext ? "context-" : "";
 			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=" + phasePrefix + "record"], "record-");
-			const original = await (providerContext ? readProviderContextOriginal : developmentContext ? readDevelopmentContextOriginal : readDevelopmentUsageOriginal)({ root: directory, runId: caseId }), before = await usageRecoveryState(directory, caseId, { role: "development" });
+			const original = await (providerContext ? readProviderContextOriginal : developmentContext ? readDevelopmentContextOriginal : readDevelopmentUsageOriginal)({ root: directory, runId: caseId }, { summaryFailure }), before = await usageRecoveryState(directory, caseId, { role: "development" });
+			if (contextFailures) {
+				assert.deepEqual(before.workbench.tasks.map(task => task.state), ["succeeded", "succeeded", "succeeded", ...Array(2).fill(summaryFailure === "cancel" ? "cancelled" : "failed")]); assert.equal(before.workbench.invocations.length, 3); assert.equal(before.workbench.changes.length, 0); assert.equal(before.pi.length, 9);
+				for (const entry of before.pi) {
+					assert.ok(entry.path.endsWith(".jsonl"));
+					const bytes = await readFile(join(directory, "supervisor-profile/supervisor", entry.path), "utf8"), entries = bytes.trim().split(/\r?\n/).map(line => JSON.parse(line));
+					assert.ok(entries.length >= 2 && entries.every(value => value.type !== "compaction"), "FAILED_COMPACTION_RESULT_INVENTED");
+					assert.ok(providerContextSteps.slice(3).every(step => !bytes.includes(step.marker)), "FOLLOWUP_AFTER_FAILED_COMPACTION");
+				}
+			}
 			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED");
 			await writeFile(join(caseProof, "before-reopen.private.json"), JSON.stringify(before), { flag: "wx" });
 			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", "--portable-development-usage=" + phasePrefix + "reopen"], "reopen-");
 			const phases = [];
 			for (const phase of ["record", "reopen"]) {
-				const proof = JSON.parse(await readFile(join(directory, (providerContext ? "development-context-providers-" : developmentContext ? "development-context-" : "development-usage-") + phase + "-proof.json"), "utf8"));
+				const proof = JSON.parse(await readFile(join(directory, (providerContext ? "development-" + phasePrefix : developmentContext ? "development-context-" : "development-usage-") + phase + "-proof.json"), "utf8"));
 				assert.equal(proof.runId, caseId); assert.equal(proof.phase, phase); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit); assert.equal(proof.expectedSha256, original.sha256);
 				if (providerContext) {
-					for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "originalTasksAndContextsRetained", "originalPricesAndModelLimitsRetained", "bidirectionalContinuationAndCompaction", "uiReloadDoesNotReplay", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
-					assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? 12 : 0); assert.equal(proof.actualToolCalls, phase === "record" ? 5 : 0); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
-					assert.deepEqual(proof.apis, ["openai-completions", "anthropic-messages"]); assert.equal(proof.totals.tasks, 5); assert.equal(proof.totals.knownRequests, 12); assert.equal(proof.totals.missingResponses, 0);
-					const snapshots = original.expected.records.map(task => modelUsageSnapshot(task.usage)); assert.equal(proof.totals.tokens.totalTokens, snapshots.reduce((sum, usage) => sum + usage.tokens.totalTokens, 0)); assert.ok(Math.abs(proof.totals.estimatedUsd - snapshots.reduce((sum, usage) => sum + usage.estimate.usd, 0)) < 1e-12);
+					for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "originalTasksAndContextsRetained", "originalPricesAndModelLimitsRetained", "uiReloadDoesNotReplay", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
+					assert.equal(proof.bidirectionalContinuationAndCompaction, !contextFailures);
+					assert.equal(proof.wholeApplicationRestartVerified, phase === "reopen"); assert.equal(proof.syntheticModelRequests, phase === "record" ? contextFailures ? 8 : 12 : 0); assert.equal(proof.actualToolCalls, phase === "record" ? contextFailures ? 3 : 5 : 0); assert.equal(proof.realModelRequests, 0); assert.equal(proof.gameCalls, 0);
+					assert.deepEqual(proof.apis, ["openai-completions", "anthropic-messages"]); assert.equal(proof.totals.tasks, 5); assert.equal(proof.totals.knownRequests, contextFailures ? 8 : 12); assert.equal(proof.totals.missingResponses, contextFailures ? 2 : 0);
+					const snapshots = original.expected.records.map(task => modelUsageSnapshot(task.usage)); assert.equal(proof.totals.tokens.totalTokens, snapshots.reduce((sum, usage) => sum + (usage.tokens?.totalTokens ?? 0), 0)); assert.ok(Math.abs(proof.totals.estimatedUsd - snapshots.reduce((sum, usage) => sum + (usage.estimate.usd ?? 0), 0)) < 1e-12);
 					if (phase === "record") { assert.equal(proof.exercise.uiModelSwitches, 4); assert.equal(proof.exercise.compactionRequests, 2); assert.equal(proof.exercise.crossProviderToolPairsVerified, true); assert.equal(proof.exercise.independentCredentialsAndPrices, true); assert.equal(proof.exercise.currentReadOnlyTools, true); }
+					if (contextFailures) {
+						assert.equal(proof.summaryFailure, scenario); assert.equal(proof.summaryFailureDoesNotContinue, true); assert.equal(proof.missingUsageRemainsUnknown, true); assert.equal(proof.totals.unpricedTasks, 2); assert.equal(proof.totals.reportedResponses, 6);
+						if (phase === "record") { assert.equal(proof.exercise.summaryFailure, scenario); assert.equal(proof.exercise.completedCompactions, 0); assert.equal(proof.exercise.noFollowupAfterSummaryFailure, true); assert.deepEqual(proof.exercise.cancelledByUi, scenario === "cancel" ? [3, 4] : []); assert.deepEqual(proof.exercise.clientAbortedBeforeCleanup, scenario === "cancel" ? [3, 4] : []); }
+					}
 				} else if (developmentContext) {
 					for (const key of ["packaged", "syntheticOnly", "readOnlyWorkspace", "originalTasksAndContextsRetained", "usageIncludesCompaction", "uiReloadDoesNotReplay", "newExecutionRejected", "noMcpSelected", "noProbeAllocated"]) assert.equal(proof[key], true);
 					const usage = original.expected.records.map(task => modelUsageSnapshot(task.usage)), requests = usage.reduce((sum, value) => sum + value.requests, 0);
@@ -105,7 +122,7 @@ try {
 			const after = await usageRecoveryState(directory, caseId, { role: "development" }); assert.deepEqual(after, before, "DEVELOPMENT_USAGE_ORIGINAL_ROWS_OR_PI_CHANGED");
 			assert.deepEqual(await developmentWorkspaceState(directory), workspaceBefore, "DEVELOPMENT_USAGE_SOURCE_CHANGED_AFTER_RESTART"); assert.equal(await developmentGitHash(toolchain.git), toolchain.gitSha256);
 			await writeFile(join(caseProof, "after-reopen.private.json"), JSON.stringify(after), { flag: "wx" });
-			cases.push({ ...phases[0], developmentUsageScenario: providerContext ? "cross-protocol-continue-compact-and-reopen" : developmentContext ? "continue-compact-and-reopen" : "read-file-and-reopen", developmentUsageRecovery: phases[1], noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
+			cases.push({ ...phases[0], developmentUsageScenario: contextFailures ? "cross-protocol-" + scenario + "-and-reopen" : providerContext ? "cross-protocol-continue-compact-and-reopen" : developmentContext ? "continue-compact-and-reopen" : "read-file-and-reopen", developmentUsageRecovery: phases[1], ...(contextFailures ? { noCompactionResultOrFollowupInvented: true } : {}), noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
 			continue;
 		}
 		await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario]);

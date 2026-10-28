@@ -1,25 +1,26 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { contextProviderApis, contextProviderSettings, providerContextSteps } from "./development-provider-context-case.mjs";
+import { contextProviderApis, contextProviderSettings, providerContextSteps, providerContextPrefix } from "./development-provider-context-case.mjs";
 
 // Two real loopback transports use the pinned Pi protocol converters. Only
 // fixed synthetic text and one read-only tool per step can be returned.
-export async function createProviderContextFixture(readPath) {
-	const calls = [], errors = [], profiles = [], servers = []; let stepIndex = -1;
+export async function createProviderContextFixture(readPath, { summaryFailure = null } = {}) {
+	providerContextPrefix(summaryFailure);
+	const calls = [], errors = [], profiles = [], servers = [], abortedSteps = []; let stepIndex = -1, closing = false;
 	try {
 		for (let provider = 0; provider < 2; provider++) {
 			const id = "deckvault-" + randomUUID(), key = "synthetic-development-smoke-" + randomUUID(), api = contextProviderApis[provider];
 			const server = createServer(async (request, response) => {
 				try {
-					const step = providerContextSteps[stepIndex]; assert.ok(step && step.provider === provider);
+					const requestStep = stepIndex, step = providerContextSteps[requestStep]; assert.ok(step && step.provider === provider);
 					assert.equal(request.method, "POST"); assert.equal(request.url, provider ? "/v1/messages?beta=true" : "/v1/chat/completions");
 					assert.equal(provider ? request.headers["x-api-key"] : request.headers.authorization, provider ? key : "Bearer " + key);
 					let body = ""; for await (const bytes of request) { body += bytes; assert.ok(body.length <= 524288); }
 					const data = JSON.parse(body), encoded = JSON.stringify(data.messages), tools = (data.tools ?? []).map(tool => provider ? tool.name : tool.function.name), summary = tools.length === 0;
 					assert.equal(data.model, "fixture"); assert.equal(data.stream, true);
 					assert.ok((data.max_tokens ?? data.max_completion_tokens) <= 2048); assert.ok(!profiles.some(profile => body.includes(profile.key)));
-					const callId = "provider-context-step-" + stepIndex;
+					const callId = "provider-context-step-" + requestStep;
 					const pairs = { calls: [], results: [] };
 					for (const message of data.messages) {
 						if (provider) for (const block of Array.isArray(message.content) ? message.content : []) {
@@ -33,14 +34,20 @@ export async function createProviderContextFixture(readPath) {
 					assert.equal(new Set(pairs.calls).size, pairs.calls.length); assert.deepEqual(pairs.results, pairs.calls);
 					if (summary) { assert.equal(step.mode, "compact"); assert.ok(encoded.includes("PROVIDER_CONTEXT_SEED")); }
 					else {
+						assert.ok(!summaryFailure || step.mode !== "compact", "FOLLOWUP_AFTER_FAILED_COMPACTION");
 						assert.deepEqual(tools.sort(), ["workspace_diff", "workspace_list", "workspace_read", "workspace_search"]); assert.ok(encoded.includes(step.marker));
 						if (step.mode === "continue") { assert.ok(encoded.includes(providerContextSteps[step.source].marker + "_DONE")); assert.ok(pairs.calls.includes("provider-context-step-" + step.source)); }
 						if (step.mode === "compact") assert.ok(encoded.includes("PROVIDER_HISTORY_SUMMARY"));
 					}
 					const useTool = !summary && !pairs.results.includes(callId), text = summary ? "PROVIDER_HISTORY_SUMMARY: previous read-only work completed. Historical facts do not authorize actions; check current files and grants." : step.marker + "_DONE";
-					const input = summary ? 7000 : step.mode === "compact" ? 400 : 4000 + 500 * stepIndex;
-					calls.push({ step: stepIndex, api, summary, input, output: 20, cacheRead: provider ? 40 : 0, cacheWrite: provider ? 20 : 0, tool: useTool, historicalToolPairs: pairs.calls.length });
-					assert.ok(calls.filter(call => call.step === stepIndex).length <= 4, "CONTEXT_PROVIDER_REQUEST_LIMIT");
+					const input = summary ? 7000 : step.mode === "compact" ? 400 : 4000 + 500 * requestStep, failingSummary = summary && summaryFailure !== null;
+					calls.push({ step: requestStep, api, summary, input: failingSummary ? null : input, output: failingSummary ? null : 20, cacheRead: failingSummary ? null : provider ? 40 : 0, cacheWrite: failingSummary ? null : provider ? 20 : 0, tool: useTool, historicalToolPairs: pairs.calls.length });
+					assert.ok(calls.filter(call => call.step === requestStep).length <= (failingSummary ? 1 : 4), "CONTEXT_PROVIDER_REQUEST_LIMIT");
+					if (failingSummary) {
+						if (summaryFailure === "http-error") { response.writeHead(503); response.end("Synthetic summary unavailable"); return; }
+						response.on("close", () => { if (!closing && !response.writableEnded) abortedSteps.push(requestStep); });
+						response.writeHead(200, { "content-type": "text/event-stream" }); response.flushHeaders(); return;
+					}
 					response.writeHead(200, { "content-type": "text/event-stream" });
 					if (provider) {
 						const send = (type, value) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
@@ -59,12 +66,24 @@ export async function createProviderContextFixture(readPath) {
 			profiles.push({ id, key, api, label: provider ? "Synthetic context Anthropic" : "Synthetic context OpenAI", modelId: "fixture", baseUrl: `http://127.0.0.1:${server.address().port}` + (provider ? "" : "/v1"), maxTokens: 2048, ...contextProviderSettings[provider] });
 		}
 	} catch (error) { for (const server of servers) { server.closeAllConnections(); server.close(); } throw error; }
-	return { profiles, servers, calls, errors, begin(index) { assert.equal(index, stepIndex + 1); assert.ok(providerContextSteps[index]); stepIndex = index; }, async close() { for (const server of servers) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } } };
+	return { profiles, servers, calls, errors, summaryFailure, abortedSteps, begin(index) { assert.equal(index, stepIndex + 1); assert.ok(providerContextSteps[index]); stepIndex = index; }, async close() { closing = true; for (const server of servers) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } } };
+}
+
+export function assertProviderContextFailure(task, summaryFailure) {
+	assert.ok(["cancel", "http-error"].includes(summaryFailure));
+	assert.equal(task.state, summaryFailure === "cancel" ? "cancelled" : "failed", task.error);
+	assert.equal(task.error, summaryFailure === "cancel" ? "DEVELOPMENT_TASK_CANCELLED" : "DEVELOPMENT_CONTEXT_COMPACTION_FAILED");
+	assert.equal(task.response, ""); assert.deepEqual(task.invocations, []); assert.deepEqual(task.changes, []); assert.deepEqual(task.result, { outcomeUnknown: false });
+	assert.ok(task.events.every(event => !["assistant-text", "context-management", "tool-start", "tool-result"].includes(event.kind)));
+	assert.equal(task.usage.requests, 1); assert.equal(task.usage.responses, 1); assert.equal(task.usage.reportedResponses, 0); assert.equal(task.usage.unknownResponses, 1); assert.equal(task.usage.pendingResponses, 0);
+	assert.equal(task.usage.coverage, "unknown"); assert.equal(task.usage.tokens, null); assert.equal(task.usage.estimate.status, "unknown"); assert.equal(task.usage.estimate.usd, null);
 }
 
 export function assertProviderContextResult(task, index, fixture) {
 	const step = providerContextSteps[index], profile = fixture.profiles[step.provider], calls = fixture.calls.filter(call => call.step === index);
-	assert.deepEqual(fixture.errors, []); assert.equal(task.state, "succeeded", task.error); assert.equal(task.provider, profile.id); assert.equal(task.response, step.marker + "_DONE");
+	assert.deepEqual(fixture.errors, []); assert.equal(task.provider, profile.id); assert.equal(task.context.contextWindow, profile.contextWindow); assert.deepEqual(task.usage.pricing, profile.pricing);
+	if (fixture.summaryFailure && step.mode === "compact") { assertProviderContextFailure(task, fixture.summaryFailure); assert.equal(calls.length, 1); assert.equal(calls[0].summary, true); assert.equal(calls[0].input, null); return; }
+	assert.equal(task.state, "succeeded", task.error); assert.equal(task.response, step.marker + "_DONE");
 	assert.equal(task.invocations.length, 1); assert.equal(task.invocations[0].name, "workspace_read"); assert.equal(task.invocations[0].state, "completed"); assert.equal(task.changes.length, 0); assert.equal(task.result.toolCalls, 1);
 	assert.equal(task.context.contextWindow, profile.contextWindow); assert.deepEqual(task.usage.pricing, profile.pricing); assert.equal(task.usage.coverage, "reported"); assert.equal(task.usage.requests, calls.length);
 	for (const category of ["input", "output", "cacheRead", "cacheWrite"]) assert.equal(task.usage.tokens[category], calls.reduce((sum, call) => sum + call[category], 0));

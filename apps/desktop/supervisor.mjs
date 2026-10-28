@@ -348,7 +348,7 @@ async function api(action, args, source) {
 	systemPower.assertAction(action, args);
 	if (diagnosticSmoke) assertDiagnosticSmokeAction(action, args);
 	if (portableSmoke && !diagnosticSmoke) {
-		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending, interruption: developmentUsageCase.interruption === true, multipleProviders: developmentUsageCase.multipleProviders === true, contextProfiles: developmentContextProfiles });
+		if (developmentUsageCase) assertPortableDevelopmentUsageAction(action, args, { phase: developmentUsageCase.phase, rootId: developmentUsageRootId, profileId: developmentUsageProfileId, started: developmentUsageStarted, internal: source === fixtureAuthority, context: developmentUsageCase.context === true, contextTasks: developmentContextTasks, contextPending: developmentContextPending, interruption: developmentUsageCase.interruption === true, multipleProviders: developmentUsageCase.multipleProviders === true, contextProfiles: developmentContextProfiles, summaryFailure: developmentUsageCase.summaryFailure });
 		else if (commandCase) assertPortableCommandAction(action, args, { rootId: commandFixtureRootId });
 		else if (storageCase) assertPortableStorageAction(action, args, { internal: source === fixtureAuthority });
 		else if (portableScenario || portableMcpLoss) assertPortableRuntimeAction(action, args, { scenario: portableScenario ?? "confirmation", internal: source === fixtureAuthority });

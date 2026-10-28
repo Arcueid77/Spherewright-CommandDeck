@@ -1,4 +1,9 @@
 export const contextProviderApis = Object.freeze(["openai-completions", "anthropic-messages"]);
+export const providerContextFailures = Object.freeze(["cancel", "http-error"]);
+export function providerContextPrefix(summaryFailure = null) {
+	if (summaryFailure !== null && !providerContextFailures.includes(summaryFailure)) throw new Error("INVALID_CONTEXT_FAILURE_CASE");
+	return summaryFailure ? "context-" + summaryFailure + "-" : "context-providers-";
+}
 export const providerContextSteps = Object.freeze([
 	{ provider: 0, source: null, mode: "new", marker: "PROVIDER_CONTEXT_SEED" },
 	{ provider: 1, source: 0, mode: "continue", marker: "PROVIDER_CONTEXT_TO_ANTHROPIC" },
