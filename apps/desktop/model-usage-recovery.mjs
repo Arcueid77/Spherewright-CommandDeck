@@ -37,6 +37,7 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 		const game = await api("game", { action: "snapshot" }), work = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual({ tasks: game.tasks, events: game.events }, value.expected, "MODEL_USAGE_TASK_CHANGED_AFTER_RESTART");
 		assert.equal(game.busy, false); assert.equal(game.syntheticOnly, true); assert.equal(game.developmentFrozen, !settled); assert.equal(game.unresolved.length, settled ? 0 : 1);
+		if (expected.runtimeFailure) assert.equal(game.runtimeAvailable, true);
 		if (noIntent) { assert.equal(game.phase, "idle"); assert.equal(game.tasks[0].intent, null); }
 		if (expected.storageFailure) { assert.equal(game.storageAvailable, true); assert.equal(game.tasks[0].state, "intent_recorded"); assert.equal(game.unresolved[0].state, "recorded"); }
 		if (!settled) { assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.unresolved[0].actionId, expected.hasActionId ? "synthetic-action" : null); }
@@ -57,6 +58,7 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 	const summary = manifest.modelUsageSummary === 1 ? await verifyUsageSummary(driver, { domain: "game", usage: value.expected.tasks[0].details.usage, context: value.expected.tasks[0].details.context }) : null;
 	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !expected.hasActionId && !noIntent && !expected.storageFailure, recordedIntentRemainsBlocked: Boolean(expected.storageFailure), mismatchRemainsBlocked: Boolean(expected.error && !expected.nativeOutcome), nativeOutcomeRemainsBlocked: Boolean(expected.nativeOutcome), noIntentRemainsUnallocated: noIntent, modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
 	if (summary) proof.summary = summary;
+	if (expected.runtimeFailure) { proof.newRuntimeAvailableAfterRestart = true; proof.developmentGateReleasedAfterHealthyRestart = true; }
 	await writeFile(join(driver.context.root, "model-usage-recovery-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	return proof;
 }

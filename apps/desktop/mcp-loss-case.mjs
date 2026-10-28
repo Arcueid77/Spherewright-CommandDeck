@@ -1,10 +1,12 @@
-export const packagedMcpLossVersion = 8;
+export const packagedMcpLossVersion = 9;
+export const mcpRuntimeLossProof = Object.freeze({ originalMcpExitedBeforeRuntime: true, runtimeExitObserved: true, originalAcceptedIntentRetained: true, originalActionReconciledWithoutRuntime: true, developmentRemainsFrozenAfterReconciliation: true, runtimeRemainsUnavailable: true });
 export const mcpLostAckStorageProof = Object.freeze({ fault: "sqlite-query-only", unknownWriteAttempts: 1, unknownWriteRejected: true, durableIntentRetained: true, restoredWritabilityDoesNotUnlock: true, uiReloadRetainsFreeze: true, newGameExecutionRejected: true });
 export const mcpTimeoutReceiptProof = Object.freeze({ transportStopReason: "MCP_REQUEST_TIMEOUT", acceptedReplyBufferedBeforeTimeout: true, acceptedReplyDeliveredAfterClosure: true, originalIntentRemainsUnknown: true, acceptedReplyMatchesOriginalRequest: true, lateReplyDoesNotCompleteRequest: true, newTransportRequests: 0 });
 const beforeIntent = stage => Object.freeze({ mode: "mcp-before-intent-" + stage, hasIntent: false, beforeIntent: stage, preIntentError: stage === "revalidation" ? "MCP_EXITED" : "MCP_READ_NOT_SUPPORTED", hasActionId: false, taskState: "cancelled", intentState: null, resultReads: 0, error: null, commits: 0, commitRequests: 0 });
 const nativeOutcome = (mode, state, recoveryRequired, succeeded = false) => Object.freeze({ mode, hasActionId: true, taskState: "blocked", intentState: "unknown", resultReads: 2, error: "INDEPENDENT_GAME_AUDIT_REQUIRED", auditReason: "NATIVE_OUTCOME_REQUIRES_AUDIT", nativeOutcome: Object.freeze({ state, terminal: true, succeeded, recoveryRequired }) });
 const cases = Object.freeze({
 	accepted: Object.freeze({ mode: "mcp-drop-after-accept", hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null }),
+	"accepted-runtime": Object.freeze({ mode: "mcp-drop-after-accept", runtimeFailure: true, hasActionId: true, taskState: "completed", intentState: "completed", resultReads: 2, error: null }),
 	"preview-disconnect": beforeIntent("preview"),
 	"confirmation-disconnect": beforeIntent("confirmation"),
 	"revalidation-disconnect": beforeIntent("revalidation"),
@@ -23,7 +25,7 @@ const cases = Object.freeze({
 	"recovery-flag": nativeOutcome("mcp-drop-after-accept-recovery-flag", "completed", true, true),
 });
 export const portableMcpScenarios = Object.freeze(Object.keys(cases));
-export const mcpLossModes = Object.freeze(Object.values(cases).map(value => value.mode));
+export const mcpLossModes = Object.freeze([...new Set(Object.values(cases).map(value => value.mode))]);
 export function mcpLossCase(scenario) {
 	if (!Object.hasOwn(cases, scenario)) throw new Error("UNKNOWN_MCP_LOSS_SCENARIO");
 	return cases[scenario];

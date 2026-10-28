@@ -106,6 +106,21 @@ test("accepted MCP exit can explicitly reconnect and reconcile only the original
 	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 2); assert.equal(world.launches, 2);
 });
 
+test("an accepted action survives both MCP exit and runtime loss without releasing development until a healthy reopen", async t => {
+	const f = await fixture(t), original = await f.submitted(), blocked = f.host.snapshot(); assert.equal(f.clients[0].exitConfirmed, true); assert.equal(original.state, "accepted");
+	f.host.runtimeUnavailable(); const unavailable = f.host.snapshot();
+	assert.equal(unavailable.runtimeAvailable, false); assert.equal(unavailable.phase, blocked.phase); assert.equal(unavailable.error, blocked.error); assert.equal(unavailable.developmentFrozen, true);
+	assert.deepEqual(unavailable.unresolved, blocked.unresolved); assert.deepEqual(unavailable.tasks, blocked.tasks); assert.deepEqual(unavailable.events, blocked.events);
+	for (const operation of [() => f.start(), () => f.host.catalog(), () => f.host.reprepare()]) assert.throws(operation, /GAME_RUNTIME_UNAVAILABLE/);
+	f.host.reconcile(original.intentId); const completed = await f.host.settled();
+	assert.equal(completed.phase, "completed"); assert.equal(completed.runtimeAvailable, false); assert.equal(completed.unresolved.length, 0); assert.equal(completed.developmentFrozen, true); assert.equal(f.frozen(), true);
+	assert.equal(completed.tasks[0].intent.idempotencyKey, original.idempotencyKey); assert.equal(completed.tasks[0].intent.actionId, original.actionId); assert.deepEqual(completed.tasks[0].intent.acceptance, original.acceptance);
+	const calls = f.clients[1].stats.requests; assert.throws(() => f.host.reconcile(original.intentId), /ORIGINAL_GAME_INTENT_REQUIRED/); assert.throws(() => f.start(), /GAME_RUNTIME_UNAVAILABLE/); assert.equal(f.clients[1].stats.requests, calls);
+	await f.host.drain(); f.host.close(); const reopened = f.open(); await reopened.initialize(); const healthy = reopened.snapshot();
+	assert.equal(healthy.runtimeAvailable, true); assert.equal(healthy.developmentFrozen, false); assert.deepEqual(healthy.tasks, completed.tasks); assert.deepEqual(healthy.events, completed.events); assert.equal(f.clients.length, 2); assert.equal(f.modelRequests(), 1);
+	const world = await f.world(); assert.equal(world.commits, 1); assert.equal(world.commitRequests, 1); assert.equal(world.prepares, 1); assert.equal(world.resultReads, 2); assert.equal(world.launches, 2);
+});
+
 for (const [mode, commits] of [["mcp-lost-ack", 1], ["mcp-drop-before-accept", 0]]) test(mode + " remains blocked without allocating a replacement MCP or inventing an action ID, including restart", async t => {
 	const f = await fixture(t, mode), original = await f.submitted(commits); assert.equal(original.state, "unknown"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null);
 	assert.throws(() => f.host.reconcile(original.intentId), /UNKNOWN_COMMIT_HAS_NO_ACTION_ID/); assert.throws(() => f.start(), /GAME_TASK_START_BLOCKED/);

@@ -240,7 +240,8 @@ function workbenchCall(action, args = {}, timeoutMs = 25000) {
 }
 async function stopRuntimeForSmoke() {
 	const runtimeStorageFixture = portableSmoke && storageCase && !storageCase.resume && runtimeStorageScenarios.includes(storageCase.scenario);
-	if (!smoke || !runtimeScenario && !diagnosticSmoke && !commandCase && !runtimeStorageFixture || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
+	const runtimeMcpFixture = mcpLossScenario && mcpLossCase(mcpLossScenario).runtimeFailure === true;
+	if (!smoke || !runtimeScenario && !diagnosticSmoke && !commandCase && !runtimeStorageFixture && !runtimeMcpFixture || runtimeExit.exited) throw new Error("RUNTIME_LOSS_SMOKE_ONLY");
 	const pid = runtime.pid; await runtimeExit.stop(); return { pid, exitObserved: runtimeExit.exited };
 }
 async function registerCommandWorkspace() {

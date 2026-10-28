@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
-import { mcpLossCase, portableMcpScenarios, mcpTimeoutReceiptProof, mcpLostAckStorageProof } from "../apps/desktop/mcp-loss-case.mjs";
+import { mcpLossCase, portableMcpScenarios, mcpTimeoutReceiptProof, mcpLostAckStorageProof, mcpRuntimeLossProof } from "../apps/desktop/mcp-loss-case.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
@@ -87,6 +87,7 @@ else if (args.includes("--smoke-adapter"))
 else if (args.includes("--smoke-host-exit"))
 	assert.equal(result.hostExit.hostNotRelaunched, true);
 else assert.equal(result.supervision.inFlightProbeCompletedAfterUiExit, true);
+if (mcpLoss) { const expected = mcpLossCase(mcpScenario); assert.equal(result.runtimeRetained, !expected.runtimeFailure); if (expected.runtimeFailure) assert.deepEqual(result.runtimeFailure, mcpRuntimeLossProof); }
 if (controlledFault || traySmoke || powerSmoke || journalSmoke || gatewaySmoke) {
 	const proofRoot = join(root, gatewaySmoke ? ".local/gateway-smoke" : journalSmoke ? ".local/journal-smoke" : powerSmoke ? ".local/power-smoke" : traySmoke ? ".local/tray-smoke" : mcpLoss ? ".local/mcp-loss" : ".local/runtime-loss", runId); await mkdir(proofRoot, { recursive: true });
 	await writeFile(join(proofRoot, "application-proof.private.json"), JSON.stringify(result), { flag: "wx" });
