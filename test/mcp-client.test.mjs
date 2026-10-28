@@ -42,6 +42,24 @@ test("MCP timeouts and malformed frames end only the owned server and never retr
 		await c.close(); assert.equal(c.exitConfirmed, true);
 	}
 });
+test("a real buffered pipe reply delivered after timeout cannot complete or revive the original request", async t => {
+	const c = client(t, "normal", 2000); await c.discover(); const stream = c.child.stdout, delivered = [];
+	stream.pause(); stream.on("data", bytes => delivered.push({ closed: c.closed, bytes: bytes.toString() }));
+	const requests = c.stats.requests, pending = c.read("spherewright_get_status"), refused = assert.rejects(pending, { message: "MCP_REQUEST_TIMEOUT" });
+	while (!stream.readableLength && !c.closed) await new Promise(resolve => setTimeout(resolve, 5));
+	assert.ok(stream.readableLength > 0, "LATE_REPLY_NOT_BUFFERED_BEFORE_TIMEOUT");
+	assert.equal(c.closed, false); assert.equal(c.requestPerformance().pending, 1);
+	await refused; assert.equal(c.closed, true); stream.resume();
+	const deliveryDeadline = performance.now() + 1000;
+	while (!delivered.length) { assert.ok(performance.now() < deliveryDeadline, "BUFFERED_REPLY_NOT_DELIVERED"); await new Promise(resolve => setTimeout(resolve, 5)); }
+	assert.ok(delivered.every(part => part.closed));
+	const replies = delivered.map(part => part.bytes).join("").trim().split(/\r?\n/).map(line => JSON.parse(line));
+	assert.equal(replies.length, 1); assert.equal(replies[0].result.structuredContent.success, true);
+	assert.equal(c.requestPerformance().byKind.tool.responses, 0); assert.equal(c.requestPerformance().byKind.tool.aborted, 1); assert.equal(c.requestPerformance().pending, 0);
+	await assert.rejects(c.read("spherewright_get_status"), { message: "MCP_READ_NOT_SUPPORTED" }); assert.equal(c.stats.requests, requests + 1);
+	await c.close(); assert.equal(c.exitConfirmed, true);
+});
+
 test("the discovery budget bounds the whole metadata sequence rather than each page separately", async (t) => {
 	const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url)), "slow-metadata"], { windowsHide: true, stdio: "pipe" });
 	const c = new ReadOnlyMcpClient(child, { timeoutMs: 5000, discoveryTimeoutMs: 2000 }); t.after(() => c.close());
