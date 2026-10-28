@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
+import { mcpLossCase, portableMcpScenarios } from "../apps/desktop/mcp-loss-case.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
@@ -22,7 +23,7 @@ if (powerSmoke && args.length !== 1) throw new Error("EXPLICIT_POWER_SMOKE_REQUI
 if (traySmoke && args.length !== 1) throw new Error("EXPLICIT_TRAY_SMOKE_REQUIRED");
 const runtimeLoss = args.includes("--smoke-runtime-loss");
 const mcpFlags = args.filter(arg => arg.startsWith("--smoke-mcp-loss")), mcpLoss = mcpFlags.length > 0;
-if (mcpLoss && (mcpFlags.length !== 1 || renamedElectron || !args.includes("--smoke-game") || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(mcpFlags[0]) || args.some(arg => !["--smoke-game", mcpFlags[0]].includes(arg)))) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
+if (mcpLoss && (mcpFlags.length !== 1 || renamedElectron || !args.includes("--smoke-game") || !portableMcpScenarios.map(value => "--smoke-mcp-loss=" + value).includes(mcpFlags[0]) || args.some(arg => !["--smoke-game", mcpFlags[0]].includes(arg)))) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
 const mcpScenario = mcpLoss ? mcpFlags[0].slice("--smoke-mcp-loss=".length) : null, controlledFault = runtimeLoss || mcpLoss;
 const file = gatewaySmoke ? "desktop-smoke-gateway.json" : journalSmoke ? "desktop-smoke-journal.json" : powerSmoke ? "desktop-smoke-power.json" : traySmoke ? "desktop-smoke-tray.json" : mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
@@ -75,7 +76,7 @@ if (gatewaySmoke) { for (const field of ["readOnlyGateway", "copiedConfiguration
 else if (journalSmoke) { for (const field of ["localEventJournal", "recordingRowsRetained", "bookmarkNavigation", "historicalReplayReadOnly", "replayExecutionActionsRejected", "uiReloadRetainsJournal", "noModelOrTaskReplay", "originalNativeStateRetained", "knownProbeToolNamesRecorded"]) assert.equal(result[field], true, field); assert.equal(result.syntheticModelRequests, 2); }
 else if (powerSmoke) { for (const field of ["rejectedAdmissionWhileSuspended", "reloadRetainsPowerGate", "wakeCheckFailureStaysBlockedUntilUiRetry", "noModelOrTaskReplay", "originalNativeBindingRetained", "sameMcpProcessRetained", "cachedReadsInvalidated", "ownServerExitConfirmed"]) assert.equal(result[field], true, field); assert.equal(result.cycles.length, 2); assert.equal(result.actualOsSleepVerified, false); }
 else if (traySmoke) { for (const key of ["nativeTrayCreated", "nativeMenuOpenRestoresMinimizedUi", "uiReloadRetainsOriginalTray", "originalUiAndRuntimeRetained", "noProbeReplay", "ownFixtureEmbeddedAndDetached", "exitRequestedThroughTray"]) assert.equal(result[key], true, key); assert.equal(result.syntheticModelRequests, 2); assert.equal(result.gameCalls, 0); assert.equal(result.realModelRequests, 0); }
-else if (mcpLoss) { assert.equal(result.originalMcpExitObserved, true); assert.equal(result.mcpLossScenario, mcpScenario); assert.equal(result.syntheticGameCommits, 1); assert.equal(result.replacementMcpCount, mcpScenario === "accepted" ? 1 : 0); assert.equal(result.noModelOrCommitReplay, true); assert.equal(result.ownServerExitConfirmed, true); }
+else if (mcpLoss) { assert.equal(result.originalMcpExitObserved, true); assert.equal(result.mcpLossScenario, mcpScenario); assert.equal(result.syntheticGameCommits, 1); assert.equal(result.replacementMcpCount, mcpLossCase(mcpScenario).hasActionId ? 1 : 0); assert.equal(result.mismatchRemainsBlocked, Boolean(mcpLossCase(mcpScenario).error)); assert.equal(result.noModelOrCommitReplay, true); assert.equal(result.ownServerExitConfirmed, true); }
 else if (runtimeLoss) { assert.equal(result.runtimeExitObserved, true); if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, args.includes("--smoke-runtime-accepted") ? 1 : 0); assert.equal(result.ownServerExitConfirmed, true); } else assert.equal(result.noProbeAllocated, true); }
 else if (args.includes("--smoke-observation")) { assert.equal(result.readOnlyEnforced,true); assert.equal(result.toolRequests,12); assert.equal(result.ownServerExitConfirmed,true); }
 else if (args.includes("--smoke-game")) { assert.equal(result.syntheticGameCommits, 1); assert.equal(result.ownServerExitConfirmed, true); }
@@ -91,7 +92,7 @@ if (controlledFault || traySmoke || powerSmoke || journalSmoke || gatewaySmoke) 
 	await writeFile(join(proofRoot, "application-proof.private.json"), JSON.stringify(result), { flag: "wx" });
 	if (mcpLoss) {
 		const base = join(mcpTemporary, "runtime-fixtures/m3-smoke", runId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8"));
-		assert.equal(world.runId, runId); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, mcpScenario === "accepted" ? 2 : 1);
+		assert.equal(world.runId, runId); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, mcpLossCase(mcpScenario).hasActionId ? 2 : 1); assert.equal(world.resultReads, mcpLossCase(mcpScenario).resultReads);
 		await writeFile(join(proofRoot, "mcp-loss.private.json"), await readFile(join(base, "mcp-loss.private.json")), { flag: "wx" });
 	}
 	const observation = await observePackagedProcesses({ executable: join(root, "artifacts/native/CommandDeck.NativeHost.exe"), roots: [dirname(executable), ...(mcpTemporary ? [mcpTemporary] : [])], env: process.env, timeoutMs: 20000 });

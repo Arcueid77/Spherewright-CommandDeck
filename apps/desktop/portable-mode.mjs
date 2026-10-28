@@ -3,9 +3,10 @@ import { basename, dirname, join, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { assertContextFixtureTask } from "./development-context-case.mjs";
 import { assertProviderContextTask, providerContextPrefix } from "./development-provider-context-case.mjs";
+import { portableMcpScenarios } from "./mcp-loss-case.mjs";
+export { portableMcpScenarios } from "./mcp-loss-case.mjs";
 
 export const portableRuntimeScenarios = Object.freeze(["idle", "confirmation", "accepted", "planning"]);
-export const portableMcpScenarios = Object.freeze(["accepted", "lost-ack"]);
 export const portableStorageScenarios = Object.freeze(["before-send", "receipt", "terminal"]);
 export const portableCommandScenarios = Object.freeze(["reload", "runtime", "helper", "exit"]);
 export const developmentUsagePrompt = "Read fixture.txt and report its synthetic content. Do not edit files or run commands.";

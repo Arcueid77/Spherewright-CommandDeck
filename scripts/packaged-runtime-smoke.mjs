@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { verifyBundle, copyBundleTree, bundleExecutable } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { portableRuntimeScenarios, portableMcpScenarios } from "../apps/desktop/portable-mode.mjs";
+import { mcpLossCase, packagedMcpLossVersion } from "../apps/desktop/mcp-loss-case.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 import { modelUsageRecoveryFile, modelUsageRecoveryHash } from "../apps/desktop/model-usage-recovery.mjs";
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
@@ -31,7 +32,7 @@ if (developmentUsage && mcpLoss) throw new Error("PACKAGED_USAGE_MODE_CONFLICT")
 const scenarios = contextFailures ? providerContextFailures : developmentUsage ? ["development"] : mcpLoss ? portableMcpScenarios : portableRuntimeScenarios, proofFolder = contextFailures ? "packaged-development-context-failures" : providerContext ? "packaged-development-context-providers" : contextInterruption ? "packaged-development-context-interruption" : developmentContext ? "packaged-development-context" : developmentUsage ? "packaged-development-usage" : mcpLoss ? "packaged-mcp-loss" : "packaged-runtime-loss", proofKind = contextFailures ? "packagedDevelopmentContextFailuresSmoke" : providerContext ? "packagedDevelopmentProviderContextSmoke" : contextInterruption ? "packagedDevelopmentContextInterruptionSmoke" : developmentContext ? "packagedDevelopmentContextSmoke" : developmentUsage ? "packagedDevelopmentUsageSmoke" : mcpLoss ? "packagedMcpLossSmoke" : "packagedRuntimeLossSmoke";
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_WINDOWS_RUNTIME_FAULT_BUNDLE_REQUIRED");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source), runId = randomUUID();
-assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
+assert.equal(manifest.nativeProcessObserver, 1); assert.equal(manifest[developmentUsage ? "portableDevelopmentUsage" : mcpLoss ? "portableMcpFaults" : "portableRuntimeFaults"], mcpLoss ? packagedMcpLossVersion : 1, "PACKAGED_FAULT_MODE_UNSUPPORTED_REBUILD_REQUIRED");
 if (developmentUsage) assert.equal(manifest.modelUsageSummary, 1, "PACKAGED_USAGE_SUMMARY_REBUILD_REQUIRED");
 if (developmentContext) { assert.equal(manifest.portableDevelopmentContext, 1, "PACKAGED_CONTEXT_REBUILD_REQUIRED"); assert.equal(manifest.developmentContextManagement, 1); }
 if (contextInterruption) assert.equal(manifest.portableDevelopmentContextInterruption, 1, "PACKAGED_CONTEXT_INTERRUPTION_REBUILD_REQUIRED");
@@ -131,10 +132,11 @@ try {
 		for (const key of ["packaged", "visibleRenderer", "rendererNodeDisabled", "externalProviderAndDevelopmentRejected", "syntheticFactoryOnly"]) assert.equal(proof[key], true, key);
 		assert.equal(proof.gameCalls, 0); assert.equal(proof.realModelRequests, 0);
 		if (mcpLoss) {
+			const expected = mcpLossCase(scenario);
 			if (manifest.modelUsage === 1) { assert.equal(proof.modelUsage?.normalizedTokens, 360); assert.equal(proof.modelUsage?.reportedResponses, 3); assert.ok(Math.abs(proof.modelUsage?.estimatedUsd - 0.001155) < 1e-12); assert.equal(proof.modelUsage?.retainedAcrossUiReloadAndMcpLoss, true); }
 			for (const key of ["originalMcpExitObserved", "originalIdentityRetained", "newExecutionDisabledDuringLoss", "explicitOriginalReconciliationOnly", "noModelOrCommitReplay", "runtimeRetained", "ownServerExitConfirmed"]) assert.equal(proof[key], true, key);
-			assert.equal(proof.originalAcceptedActionReconciled, scenario === "accepted"); assert.equal(proof.unknownCommitRemainsBlocked, scenario === "lost-ack"); assert.equal(proof.syntheticGameCommits, 1); assert.equal(proof.syntheticPrepareCalls, 1); assert.equal(proof.syntheticModelRequests, 3); assert.equal(proof.replacementMcpCount, scenario === "accepted" ? 1 : 0);
-			const base = join(directory, "runtime-fixtures/m3-smoke", caseId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(world.runId, caseId); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, scenario === "accepted" ? 2 : 1); assert.equal(world.resultReads, scenario === "accepted" ? 2 : 0);
+			assert.equal(proof.originalAcceptedActionReconciled, scenario === "accepted"); assert.equal(proof.unknownCommitRemainsBlocked, !expected.hasActionId); assert.equal(proof.mismatchRemainsBlocked, Boolean(expected.error)); assert.equal(proof.recoveryError, expected.error); assert.equal(proof.repeatedIsolatedReconciliationMakesNoRequests, scenario === "receipt-mismatch"); assert.equal(proof.syntheticGameCommits, 1); assert.equal(proof.syntheticPrepareCalls, 1); assert.equal(proof.syntheticModelRequests, 3); assert.equal(proof.replacementMcpCount, expected.hasActionId ? 1 : 0);
+			const base = join(directory, "runtime-fixtures/m3-smoke", caseId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(world.runId, caseId); assert.equal(world.commits, 1); assert.equal(world.prepares, 1); assert.equal(world.launches, expected.hasActionId ? 2 : 1); assert.equal(world.resultReads, expected.resultReads);
 			await writeFile(join(caseProof, "mcp-loss.private.json"), await readFile(join(base, "mcp-loss.private.json")), { flag: "wx" });
 		} else {
 		assert.equal(proof.runtimeExitObserved, true);
@@ -156,7 +158,7 @@ try {
 			modelUsageRecovery = JSON.parse(await readFile(join(directory, "model-usage-recovery-proof.json"), "utf8"));
 			assert.equal(modelUsageRecovery.runId, caseId); assert.equal(modelUsageRecovery.scenario, scenario); assert.equal(modelUsageRecovery.sourceRevision, manifest.sourceRevision); assert.equal(modelUsageRecovery.piCommit, manifest.piCommit); assert.equal(modelUsageRecovery.expectedSha256, marker.sha256);
 			for (const key of ["packaged", "syntheticOnly", "wholeApplicationRestartVerified", "originalTaskAndUsageRetained", "usageVisibleAfterRestartAndUiReload", "noMcpSelected", "noProbeAllocated", "newExecutionRejected"]) assert.equal(modelUsageRecovery[key], true);
-			assert.equal(modelUsageRecovery.unknownCommitRemainsBlocked, scenario === "lost-ack"); assert.equal(modelUsageRecovery.modelUsage.normalizedTokens, 360); assert.equal(modelUsageRecovery.modelUsage.reportedResponses, 3); assert.ok(Math.abs(modelUsageRecovery.modelUsage.estimatedUsd - 0.001155) < 1e-12);
+			assert.equal(modelUsageRecovery.unknownCommitRemainsBlocked, scenario === "lost-ack"); assert.equal(modelUsageRecovery.mismatchRemainsBlocked, Boolean(mcpLossCase(scenario).error)); assert.equal(modelUsageRecovery.modelUsage.normalizedTokens, 360); assert.equal(modelUsageRecovery.modelUsage.reportedResponses, 3); assert.ok(Math.abs(modelUsageRecovery.modelUsage.estimatedUsd - 0.001155) < 1e-12);
 			if (manifest.modelUsageSummary === 1) { assert.equal(modelUsageRecovery.summary.readOnlySummaryVerified, true); assert.equal(modelUsageRecovery.summary.normalizedTokens, 360); assert.equal(modelUsageRecovery.summary.estimatedUsd, modelUsageRecovery.modelUsage.estimatedUsd); assert.deepEqual(modelUsageRecovery.summary.taskEndContext, marker.expected.tasks[0].details.context); }
 			assert.equal(modelUsageRecovery.gameCalls, 0); assert.equal(modelUsageRecovery.realModelRequests, 0);
 			const after = await usageRecoveryState(directory, caseId); assert.deepEqual(after, before, "MODEL_USAGE_RESTART_CHANGED_ORIGINAL_ROWS_OR_PI");

@@ -30,6 +30,7 @@ import { syntheticProviderScope } from "./synthetic-scope.mjs";
 import { trackOwnedRuntimeExit } from "./owned-runtime.mjs";
 import { startupFailureCode } from "./startup-failure.mjs";
 import { runRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
+import { mcpLossCase, portableMcpScenarios } from "./mcp-loss-case.mjs";
 import { DiagnosticExports, readDiagnosticBuild } from "./diagnostic-export.mjs";
 import { diagnosticCode } from "./diagnostic-snapshot.mjs";
 import { assertDiagnosticSmokeAction } from "./diagnostic-smoke-scope.mjs";
@@ -65,7 +66,7 @@ const gatewaySmoke = Boolean(gatewayCase) || smoke && !portableSmoke && process.
 const diagnosticSmoke = portableDiagnostics || smoke && process.argv.includes("--smoke-diagnostics");
 const runtimeScenario = portableScenario ?? (smoke && process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
 const sourceMcpFlags = process.argv.filter(arg => arg.startsWith("--smoke-mcp-loss"));
-if (sourceMcpFlags.length && (!smoke || !process.argv.includes("--smoke-game") || sourceMcpFlags.length !== 1 || !["--smoke-mcp-loss=accepted", "--smoke-mcp-loss=lost-ack"].includes(sourceMcpFlags[0]) || runtimeScenario)) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
+if (sourceMcpFlags.length && (!smoke || !process.argv.includes("--smoke-game") || sourceMcpFlags.length !== 1 || !portableMcpScenarios.map(value => "--smoke-mcp-loss=" + value).includes(sourceMcpFlags[0]) || runtimeScenario)) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
 const mcpLossScenario = portableMcpLoss ?? sourceMcpFlags[0]?.slice("--smoke-mcp-loss=".length) ?? null;
 const portableContext = portableSmoke ? { root: process.env.COMMANDDECK_PORTABLE_ROOT, runId: process.env.COMMANDDECK_PORTABLE_RUN_ID } : null;
 const gameFixtureContext = mcpLossScenario ? portableContext ?? { root: process.env.COMMANDDECK_MCP_FIXTURE_ROOT, runId: process.env.COMMANDDECK_SMOKE_RUN_ID } : portableContext;
@@ -91,7 +92,7 @@ const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(por
 const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope({ multipleApis: developmentUsageCase?.multipleProviders === true }) : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const gatewayFixtureDirectory = gatewayCase ? join(portableContext.root, "runtime-fixtures/gateway", portableContext.runId) : undefined;
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossScenario === "accepted" ? "mcp-drop-after-accept" : "mcp-lost-ack" : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },

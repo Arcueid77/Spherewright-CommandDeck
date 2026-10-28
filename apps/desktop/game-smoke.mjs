@@ -8,16 +8,17 @@ import { join } from "node:path";
 import { ReadOnlyMcpClient } from "./mcp-client.mjs";
 import { runGameRuntimeLossSmoke } from "./runtime-loss-smoke.mjs";
 import { runGameMcpLossSmoke } from "./mcp-loss-smoke.mjs";
+import { mcpLossModes } from "./mcp-loss-case.mjs";
 import { runGameStorageFaultSmoke } from "./storage-fault-smoke.mjs";
 import { preparePortableFixtureDirectory, createSyntheticResearchWorld, syntheticMcpEnvironment } from "./synthetic-scope.mjs";
 
 export function gameFixtureOptions(root, runId, { mode = "normal", directory = join(root, ".local/m3-smoke", runId) } = {}) {
 	if (!/^[0-9a-f-]{36}$/.test(runId ?? "")) throw new Error("EXPLICIT_GAME_SMOKE_REQUIRED");
-	assert.ok(["normal", "pending", "mcp-drop-after-accept", "mcp-lost-ack", "storage-normal"].includes(mode));
+	assert.ok(["normal", "pending", "storage-normal", ...mcpLossModes].includes(mode));
 	const marker = join(directory, "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M3_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
-		launch(_selection, { researchAuthority }) { const persistent = ["mcp-drop-after-accept", "mcp-lost-ack", "storage-normal"].includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
+		launch(_selection, { researchAuthority }) { const persistent = mode === "storage-normal" || mcpLossModes.includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
 	};
 }
 

@@ -8,6 +8,7 @@ import { readPortableRecovery, runPortableRecoverySmoke } from "./portable-recov
 import { runGameSmoke } from "./game-smoke.mjs";
 import { runRuntimeLossSmoke, runtimeLossProofName } from "./runtime-loss-smoke.mjs";
 import { mcpLossProofName } from "./mcp-loss-smoke.mjs";
+import { packagedMcpLossVersion } from "./mcp-loss-case.mjs";
 import { runDiagnosticSmoke } from "./diagnostic-smoke.mjs";
 import { runStorageResumeSmoke } from "./storage-fault-smoke.mjs";
 import { runCommandFaultSmoke } from "./command-fault-smoke.mjs";
@@ -88,7 +89,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 		return;
 	}
 	if (driver.runtimeScenario || driver.mcpLossScenario) {
-		assert.equal(manifest[driver.mcpLossScenario ? "portableMcpFaults" : "portableRuntimeFaults"], 1);
+		assert.equal(manifest[driver.mcpLossScenario ? "portableMcpFaults" : "portableRuntimeFaults"], driver.mcpLossScenario ? packagedMcpLossVersion : 1);
 		assert.equal(await readPortableRecovery(context), null); assert.equal(await readPortableHistory(context), null);
 		const work = await api("workbench", { action: "state" }), game = await api("game", { action: "snapshot" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.executionBlocked, false);

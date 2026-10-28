@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { modelUsageSnapshot } from "./model-usage.mjs";
 import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
+import { mcpLossCase } from "./mcp-loss-case.mjs";
 
 export const modelUsageRecoveryFile = "model-usage-recovery.private.json";
 export const modelUsageRecoveryHash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -17,25 +18,25 @@ export async function readModelUsageRecovery(context) {
 	const value = JSON.parse(await readFile(file, "utf8"));
 	assert.deepEqual(Object.keys(value).sort(), ["expected", "kind", "runId", "scenario", "sha256", "version"]);
 	assert.equal(value.version, 1); assert.equal(value.kind, "synthetic-model-usage-recovery"); assert.equal(value.runId, context.runId);
-	assert.ok(["accepted", "lost-ack"].includes(value.scenario));
+	const expected = mcpLossCase(value.scenario);
 	assert.deepEqual(Object.keys(value.expected).sort(), ["events", "tasks"]); assert.ok(Array.isArray(value.expected.tasks) && value.expected.tasks.length === 1); assert.ok(Array.isArray(value.expected.events) && value.expected.events.length <= 100);
-	const task = value.expected.tasks[0], accepted = value.scenario === "accepted";
+	const task = value.expected.tasks[0];
 	assert.match(task.id, /^[a-f0-9-]{36}$/); assert.equal(task.intent.taskId, task.id);
 	assert.equal(task.scope.techId, 100); assert.equal(task.details.model, "fixture"); assert.equal(task.details.mode, "assist");
-	assert.equal(task.state, accepted ? "completed" : "blocked"); assert.equal(task.intent.state, accepted ? "completed" : "unknown");
-	assert.equal(task.intent.actionId, accepted ? "synthetic-action" : null);
+	assert.equal(task.state, expected.taskState); assert.equal(task.intent.state, expected.intentState);
+	assert.equal(task.intent.actionId, expected.hasActionId ? "synthetic-action" : null);
 	const usage = modelUsageSnapshot(task.details.usage);
 	assert.equal(usage.reportedResponses, 3); assert.equal(usage.requests, 3); assert.equal(usage.tokens.totalTokens, 360); assert.equal(usage.estimate.status, "estimated"); assert.ok(Math.abs(usage.estimate.usd - 0.001155) < 1e-12);
 	assert.equal(value.sha256, modelUsageRecoveryHash(value.expected)); return value;
 }
 
 export async function runModelUsageRecovery(driver, value, manifest) {
-	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), accepted = value.scenario === "accepted";
+	const { api, testCommand } = driver, runtimePid = driver.getRuntimePid(), accepted = value.scenario === "accepted", expected = mcpLossCase(value.scenario);
 	async function compare() {
 		const game = await api("game", { action: "snapshot" }), work = await api("workbench", { action: "state" }), bridge = await api("bridge", { action: "snapshot" });
 		assert.deepEqual({ tasks: game.tasks, events: game.events }, value.expected, "MODEL_USAGE_TASK_CHANGED_AFTER_RESTART");
 		assert.equal(game.busy, false); assert.equal(game.syntheticOnly, true); assert.equal(game.developmentFrozen, !accepted); assert.equal(game.unresolved.length, accepted ? 0 : 1);
-		if (!accepted) { assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.unresolved[0].actionId, null); }
+		if (!accepted) { assert.equal(game.phase, "blocked"); assert.equal(game.error, "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"); assert.equal(game.unresolved[0].actionId, expected.hasActionId ? "synthetic-action" : null); }
 		assert.deepEqual(work.roots, []); assert.deepEqual(work.tasks, []); assert.equal(work.activeTask, null); assert.equal(work.executionBlocked, !accepted);
 		assert.equal(bridge.selected, null); assert.equal(bridge.observation, null); assert.equal(driver.getProbeSequence(), 0); assert.equal(driver.getRuntimePid(), runtimePid);
 	}
@@ -51,7 +52,7 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 	const denied = await testCommand("evaluate", { source: "(async()=>{let count=0;for(const call of [()=>window.deck.game('start',{}),()=>window.deck.game('reconcile',{}),()=>window.deck.manageProfiles('save',{}),()=>window.deck.workbench('agent',{}),()=>window.deck.workbench('check',{}),()=>window.deck.probe({mode:'live'})])try{await call()}catch{count++}return count})()" }); assert.equal(denied, 6);
 	await testCommand("reload"); await showUsage(); await compare();
 	const summary = manifest.modelUsageSummary === 1 ? await verifyUsageSummary(driver, { domain: "game", usage: value.expected.tasks[0].details.usage, context: value.expected.tasks[0].details.context }) : null;
-	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !accepted, modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
+	const proof = { version: 1, runId: driver.context.runId, scenario: value.scenario, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, expectedSha256: value.sha256, packaged: true, syntheticOnly: true, wholeApplicationRestartVerified: true, originalTaskAndUsageRetained: true, usageVisibleAfterRestartAndUiReload: true, unknownCommitRemainsBlocked: !expected.hasActionId, mismatchRemainsBlocked: Boolean(expected.error), modelUsage: { normalizedTokens: 360, reportedResponses: 3, estimatedUsd: value.expected.tasks[0].details.usage.estimate.usd }, noMcpSelected: true, noProbeAllocated: true, newExecutionRejected: true, gameCalls: 0, realModelRequests: 0, physicalInputVerified: false, fullRecoveryMatrixVerified: false };
 	if (summary) proof.summary = summary;
 	await writeFile(join(driver.context.root, "model-usage-recovery-proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" });
 	return proof;
