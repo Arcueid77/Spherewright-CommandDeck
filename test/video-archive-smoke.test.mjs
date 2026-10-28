@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readVideoArchiveCase, videoArchiveCaseFile, videoTimelineFixtureEvidence } from "../apps/desktop/video-archive-smoke.mjs";
@@ -27,7 +27,7 @@ test("video fixture rejects changed precision labels, fabricated automatic links
 });
 
 test("video fixture binds its explicit clock case to the current run without expanding capture authority", async t => {
-	const root = await mkdtemp(join(tmpdir(), "deck-video-case-")), runId = randomUUID(), file = join(root, videoArchiveCaseFile);
+	const root = await realpath(await mkdtemp(join(tmpdir(), "deck-video-case-"))), runId = randomUUID(), file = join(root, videoArchiveCaseFile);
 	t.after(() => rm(root, { recursive: true, force: true }));
 	assert.equal(await readVideoArchiveCase({ root, runId }), null);
 	for (const clockCase of ["normal", "delayed"]) {
