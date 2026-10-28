@@ -98,7 +98,7 @@ export class ReadOnlyMcpClient {
 	}
 	#fail(code) {
 		if (this.closed) return; this.closed = true;
-		if (this.#observation) this.#stopReason = code;
+		this.#stopReason = code;
 		this.#clearObservationTimer();
 		for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(new Error(code)); }
 		this.#pending.clear(); if (!this.exitConfirmed) this.child.kill();
@@ -119,7 +119,7 @@ export class ReadOnlyMcpClient {
 			try { this.#send({ jsonrpc: "2.0", id, method, params }); } catch { this.#fail("MCP_SEND_FAILED"); }
 		});
 	}
-	requestPerformance() { return { ...this.#performance.snapshot(), pendingCapacity, transportClosed: this.closed, duplicateReplies: this.stats.duplicateReplies, rejectedBeforeAdmission: this.stats.rejectedCalls, ...(this.#observation ? { observationLimit: { ...this.#observation, toolRequests: this.#observationTools, remainingToolRequests: this.#observation.maxToolRequests - this.#observationTools, stopReason: this.#stopReason } } : {}) }; }
+	requestPerformance() { return { ...this.#performance.snapshot(), pendingCapacity, transportClosed: this.closed, transportStopReason: this.#stopReason, duplicateReplies: this.stats.duplicateReplies, rejectedBeforeAdmission: this.stats.rejectedCalls, ...(this.#observation ? { observationLimit: { ...this.#observation, toolRequests: this.#observationTools, remainingToolRequests: this.#observation.maxToolRequests - this.#observationTools, stopReason: this.#stopReason } } : {}) }; }
 	async discover() {
 		if (this.#stage !== "new") throw new Error("MCP_DISCOVERY_ALREADY_STARTED");
 		this.#stage = "discovering";
@@ -186,7 +186,7 @@ export class ReadOnlyMcpClient {
 		return reply.structuredContent;
 	}
 	async close() {
-		if (this.#observation && !this.#stopReason) this.#stopReason = 'MCP_OBSERVATION_DISCONNECTED';
+		if (!this.#stopReason) this.#stopReason = this.#observation ? 'MCP_OBSERVATION_DISCONNECTED' : 'MCP_DISCONNECTED';
 		this.#clearObservationTimer();
 		if (!this.closed) { this.closed = true; for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("MCP_DISCONNECTED")); } this.#pending.clear(); this.child.stdin.end(); }
 		let timer;

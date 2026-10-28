@@ -3,7 +3,20 @@ import { Server } from "node:http";
 import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { realpathSync } from "node:fs";
+import { realpathSync, lstatSync } from "node:fs";
+
+export function syntheticCommitReceiptReleaseFile(runId) {
+	assert.match(runId, /^[a-f0-9-]{36}$/);
+	return runId + ".commit-receipt-release.private";
+}
+export function syntheticCommitReceiptReleased(directory, runId) {
+	const file = join(directory, syntheticCommitReceiptReleaseFile(runId)); let info;
+	try { info = lstatSync(file); } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+	assert.equal(realpathSync.native(directory).toLowerCase(), directory.toLowerCase());
+	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size === 0);
+	assert.equal(realpathSync.native(file).toLowerCase(), file.toLowerCase());
+	return true;
+}
 
 export function syntheticMcpEnvironment(source = process.env) {
 	// Match async realpath: the native Windows resolver expands DOS aliases.

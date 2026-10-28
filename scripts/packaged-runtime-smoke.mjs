@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { verifyBundle, copyBundleTree, bundleExecutable } from "./desktop-bundle-files.mjs";
 import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { portableRuntimeScenarios, portableMcpScenarios } from "../apps/desktop/portable-mode.mjs";
-import { mcpLossCase, packagedMcpLossVersion } from "../apps/desktop/mcp-loss-case.mjs";
+import { mcpLossCase, packagedMcpLossVersion, mcpTimeoutReceiptProof } from "../apps/desktop/mcp-loss-case.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 import { modelUsageRecoveryFile, modelUsageRecoveryHash } from "../apps/desktop/model-usage-recovery.mjs";
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
@@ -135,6 +135,7 @@ try {
 		assert.equal(proof.gameCalls, 0); assert.equal(proof.realModelRequests, 0);
 		if (mcpLoss) {
 			const expected = mcpLossCase(scenario);
+			if (expected.commitTimeout) assert.deepEqual(proof.timeoutReceipt, mcpTimeoutReceiptProof);
 			if (manifest.modelUsage === 1) { assert.equal(proof.modelUsage?.normalizedTokens, 360); assert.equal(proof.modelUsage?.reportedResponses, 3); assert.ok(Math.abs(proof.modelUsage?.estimatedUsd - 0.001155) < 1e-12); assert.equal(proof.modelUsage?.retainedAcrossUiReloadAndMcpLoss, true); }
 			for (const key of ["originalMcpExitObserved", "originalIdentityRetained", "noModelOrCommitReplay", "runtimeRetained", "ownServerExitConfirmed"]) assert.equal(proof[key], true, key);
 			for (const key of ["newExecutionDisabledDuringLoss", "explicitOriginalReconciliationOnly"]) assert.equal(proof[key], expected.hasIntent !== false, key);
@@ -142,6 +143,7 @@ try {
 			assert.equal(proof.originalAcceptedActionReconciled, expected.taskState === "completed"); assert.equal(proof.unknownCommitRemainsBlocked, !expected.hasActionId && expected.hasIntent !== false); assert.equal(proof.mismatchRemainsBlocked, Boolean(expected.error && !expected.nativeOutcome)); assert.equal(proof.recoveryError, expected.error); assert.equal(proof.repeatedIsolatedReconciliationMakesNoRequests, Boolean(expected.auditReason)); assert.equal(proof.syntheticGameCommits, expected.commits ?? 1); assert.equal(proof.syntheticCommitRequests, expected.commitRequests ?? 1); assert.equal(proof.duplicateRepliesIgnored, expected.duplicateReplies ?? 0); assert.equal(proof.duplicateDelivery, expected.duplicateDelivery ?? null); assert.equal(proof.syntheticPrepareCalls, 1); assert.equal(proof.syntheticModelRequests, 3); assert.equal(proof.replacementMcpCount, expected.hasActionId ? 1 : 0);
 			assert.equal(proof.nativeOutcomeRemainsBlocked, Boolean(expected.nativeOutcome)); assert.deepEqual(proof.nativeOutcome, expected.nativeOutcome ?? null);
 			const base = join(directory, "runtime-fixtures/m3-smoke", caseId), world = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(world.runId, caseId); assert.equal(world.commits, expected.commits ?? 1); assert.equal(world.commitRequests ?? 0, expected.commitRequests ?? 1); assert.equal(world.duplicateRepliesSent ?? 0, expected.duplicateReplies ?? 0); assert.equal(world.duplicateDelivery ?? null, expected.duplicateDelivery ?? null); assert.equal(world.prepares, 1); assert.equal(world.launches, expected.hasActionId ? 2 : 1); assert.equal(world.resultReads, expected.resultReads); assert.deepEqual(world.nativeOutcome ?? null, expected.nativeOutcome ?? null);
+			if (expected.commitTimeout) { assert.equal(world.commitReceiptWaiting, true); assert.equal(world.commitReceiptWritten, true); }
 			await writeFile(join(caseProof, "mcp-loss.private.json"), await readFile(join(base, "mcp-loss.private.json")), { flag: "wx" });
 		} else {
 		assert.equal(proof.runtimeExitObserved, true);

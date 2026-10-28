@@ -49,7 +49,7 @@ test("a real buffered pipe reply delivered after timeout cannot complete or revi
 	while (!stream.readableLength && !c.closed) await new Promise(resolve => setTimeout(resolve, 5));
 	assert.ok(stream.readableLength > 0, "LATE_REPLY_NOT_BUFFERED_BEFORE_TIMEOUT");
 	assert.equal(c.closed, false); assert.equal(c.requestPerformance().pending, 1);
-	await refused; assert.equal(c.closed, true); stream.resume();
+	await refused; assert.equal(c.closed, true); assert.equal(c.requestPerformance().transportStopReason, "MCP_REQUEST_TIMEOUT"); stream.resume();
 	const deliveryDeadline = performance.now() + 1000;
 	while (!delivered.length) { assert.ok(performance.now() < deliveryDeadline, "BUFFERED_REPLY_NOT_DELIVERED"); await new Promise(resolve => setTimeout(resolve, 5)); }
 	assert.ok(delivered.every(part => part.closed));
@@ -57,7 +57,7 @@ test("a real buffered pipe reply delivered after timeout cannot complete or revi
 	assert.equal(replies.length, 1); assert.equal(replies[0].result.structuredContent.success, true);
 	assert.equal(c.requestPerformance().byKind.tool.responses, 0); assert.equal(c.requestPerformance().byKind.tool.aborted, 1); assert.equal(c.requestPerformance().pending, 0);
 	await assert.rejects(c.read("spherewright_get_status"), { message: "MCP_READ_NOT_SUPPORTED" }); assert.equal(c.stats.requests, requests + 1);
-	await c.close(); assert.equal(c.exitConfirmed, true);
+	await c.close(); assert.equal(c.exitConfirmed, true); assert.equal(c.requestPerformance().transportStopReason, "MCP_REQUEST_TIMEOUT");
 });
 
 test("the discovery budget bounds the whole metadata sequence rather than each page separately", async (t) => {

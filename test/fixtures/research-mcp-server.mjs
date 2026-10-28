@@ -4,8 +4,9 @@ import { lstatSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
+import { syntheticCommitReceiptReleased } from "../../apps/desktop/synthetic-scope.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
-const persistent = ["mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
+const persistent = ["mcp-commit-timeout", "mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "storage-normal"].includes(mode);
 let world, worldPath;
 if (persistent) {
 	let stage = "ARGUMENTS";
@@ -25,7 +26,7 @@ if (persistent) {
 	stage = "SAVE"; world.launches++; writeFileSync(worldPath, JSON.stringify(world));
 	} catch { process.stderr.write("SYNTHETIC_WORLD_INIT_" + stage + "\n", () => process.exit(2)); await new Promise(() => {}); }
 }
-const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+const send = (id, result, done) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n", done);
 const field = (type) => ({ type });
 const tool = (name, fields, readOnly = true, destructive = false, optional = []) => ({ name, annotations: { readOnlyHint: readOnly, destructiveHint: destructive }, inputSchema: { type: "object", properties: Object.fromEntries(Object.entries(fields).map(([key, type]) => [key, field(type)])), required: Object.keys(fields).filter((key) => !optional.includes(key)) } });
 const scope = { sessionId: "synthetic-session", planetId: 1 }, local = { sessionId: "string", planetId: "integer" };
@@ -75,6 +76,18 @@ input.on("line", (line) => {
 		if (world) { world.commitRequests = (world.commitRequests ?? 0) + 1; world.lastCommitRequestKey = args.idempotencyKey; persist(); }
 		if (mode === "mcp-drop-before-accept") { world.lossInjected = true; persist(); process.exit(0); return; }
 		commits++; tick = 1201; key = args.idempotencyKey; persist(); if (mode === "lost-ack" || mode === "mcp-lost-ack") { process.exit(0); return; } value = { accepted: true, actionKind: "select-research", actionId: "synthetic-action", idempotencyKey: key, state: "queued", syntheticCommitCount: commits };
+		if (mode === "mcp-commit-timeout") {
+			world.commitReceiptWaiting = true; world.lossInjected = true; persist();
+			const receipt = value, deadline = performance.now() + 15000;
+			const timer = setInterval(() => {
+				try {
+					if (syntheticCommitReceiptReleased(dirname(worldPath), world.runId)) {
+						clearInterval(timer); send(request.id, { structuredContent: { success: true, result: receipt } }, () => { world.commitReceiptWritten = true; persist(); });
+					} else if (performance.now() >= deadline) throw new Error("RELEASE_TIMEOUT");
+				} catch { clearInterval(timer); process.stderr.write("SYNTHETIC_COMMIT_RELEASE_FAILED\n", () => process.exit(2)); }
+			}, 10);
+			return;
+		}
 	}
 	if (name === "spherewright_get_action_result") { resultReads++; if (world && !world.lossInjected && mode.startsWith("mcp-drop-after-accept")) { world.lossInjected = true; persist(); process.exit(0); return; } persist(); const pending = mode === "pending" && resultReads < 2, unknown = mode === "native-unknown" || mode === "native-unknown-context-failure" && resultReads === 1; value = { ...scope, actionId: "synthetic-action", actionKind: "select-research", idempotencyKey: mode === "mcp-drop-after-accept-key" && world.launches > 1 ? "different-native-key" : key, state: unknown ? "outcome_unknown" : pending ? "executing" : "completed", terminal: !pending, succeeded: !unknown && !pending, completedAtGameTick: 1201, recoveryRequired: unknown, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: mode === "wrong-queue" ? [99, 101] : [99, preparedTech], inventoryPreserved: true, researchProgressPreserved: true }, flightCheckpointReloadToken: "PRIVATE_FLIGHT_MUST_NOT_ESCAPE", syntheticCommitCount: commits }; }
 	if (name === "spherewright_get_action_result" && resultReads === 2 && world?.launches > 1) {

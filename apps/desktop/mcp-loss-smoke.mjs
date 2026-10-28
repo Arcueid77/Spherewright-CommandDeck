@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { mcpLossCase } from "./mcp-loss-case.mjs";
+import { syntheticCommitReceiptReleaseFile } from "./synthetic-scope.mjs";
 
 export function mcpLossProofName(scenario) {
 	mcpLossCase(scenario);
@@ -33,7 +34,9 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 	}
 	const disabledExecution = () => evaluate("(()=>{const panel=document.querySelector('.game-tasks-panel');return ['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()");
 	await driver.testCommand("answer-game-confirmation", { response: 1 }); await evaluate(`window.deck.confirmResearch(${JSON.stringify(taskId)})`);
-	await until(async () => { const value = await state(); return !value.busy && value.phase === "blocked" && value.unresolved.length === 1 && originalClient.exitConfirmed; }, "ORIGINAL_MCP_EXITED");
+	const buffered = expected.commitTimeout ? await bufferCommitReceipt(driver, { client: originalClient, state, world, until, base }) : null;
+	await until(async () => { const value = await state(); return !value.busy && value.phase === "blocked" && value.unresolved.length === 1 && originalClient.exitConfirmed; }, "ORIGINAL_MCP_EXITED", expected.commitTimeout ? originalClient.timeoutMs + 5000 : 12000);
+	const timeoutReceipt = buffered ? await verifyTimedOutCommitReceipt(originalClient, buffered, { state, until }) : null;
 	const blocked = await state(), original = structuredClone(blocked.unresolved[0]), before = await world();
 	assert.equal(original.state, expected.hasActionId ? "accepted" : "unknown"); assert.equal(original.actionId, expected.hasActionId ? "synthetic-action" : null);
 	assert.equal(blocked.developmentFrozen, true); assert.equal(before.commits, commits); assert.equal(before.commitRequests, 1); assert.equal(before.lastCommitRequestKey, original.idempotencyKey); assert.equal(before.prepares, 1); assert.equal(before.launches, 1); assert.equal(requests(), 3);
@@ -91,7 +94,33 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		syntheticModelRequests: requests(), syntheticGameCommits: commits, syntheticCommitRequests: 1, syntheticPrepareCalls: 1, duplicateRepliesIgnored: duplicateReplies, duplicateDelivery: after.duplicateDelivery ?? null, ownServerExitConfirmed: true,
 		modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true },
 		gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false,
+		timeoutReceipt,
 	}), { flag: "wx" });
+}
+
+async function bufferCommitReceipt(driver, { client, state, world, until, base }) {
+	await until(async () => (await world()).commitReceiptWaiting === true, "COMMIT_RECEIPT_WAITING");
+	const snapshot = await state(), original = structuredClone(snapshot.unresolved[0]);
+	assert.equal(snapshot.phase, "confirming"); assert.equal(snapshot.busy, true); assert.equal(original.state, "recorded"); assert.equal(original.actionId, null); assert.equal(original.acceptance, null);
+	const stream = client.child.stdout, delivered = [], performanceBefore = client.requestPerformance(), requests = client.stats.requests;
+	assert.equal(performanceBefore.pending, 1); assert.equal(client.closed, false);
+	stream.pause(); stream.on("data", bytes => delivered.push({ closed: client.closed, reason: client.requestPerformance().transportStopReason, text: bytes.toString() }));
+	await writeFile(join(base, syntheticCommitReceiptReleaseFile(driver.runId)), "", { flag: "wx" });
+	await until(async () => (await world()).commitReceiptWritten === true && stream.readableLength > 0, "ACCEPTED_REPLY_BUFFERED");
+	assert.equal(client.closed, false); assert.equal((await state()).unresolved[0].state, "recorded");
+	return { original, stream, delivered, performanceBefore, requests };
+}
+
+async function verifyTimedOutCommitReceipt(client, buffered, { state, until }) {
+	assert.equal(client.closed, true); assert.equal(client.requestPerformance().transportStopReason, "MCP_REQUEST_TIMEOUT"); buffered.stream.resume();
+	await until(() => buffered.delivered.map(part => part.text).join("").endsWith("\n"), "POST_TIMEOUT_ACCEPTED_REPLY_DELIVERED");
+	assert.ok(buffered.delivered.every(part => part.closed && part.reason === "MCP_REQUEST_TIMEOUT"));
+	const replies = buffered.delivered.map(part => part.text).join("").trim().split(/\r?\n/).map(line => JSON.parse(line));
+	assert.equal(replies.length, 1); assert.equal(replies[0].id, "deck-read:" + buffered.requests); assert.equal(replies[0].result.structuredContent.success, true);
+	const receipt = replies[0].result.structuredContent.result; assert.equal(receipt.accepted, true); assert.equal(receipt.idempotencyKey, buffered.original.idempotencyKey); assert.equal(receipt.actionId, "synthetic-action");
+	const current = (await state()).unresolved[0]; assert.deepEqual(current, { ...buffered.original, state: "unknown" }); assert.equal(current.acceptance, null); assert.equal(current.terminal, null);
+	const after = client.requestPerformance(); assert.equal(after.byKind.tool.responses, buffered.performanceBefore.byKind.tool.responses); assert.equal(after.byKind.tool.aborted, buffered.performanceBefore.byKind.tool.aborted + 1); assert.equal(after.pending, 0); assert.equal(client.stats.requests, buffered.requests);
+	return { transportStopReason: after.transportStopReason, acceptedReplyBufferedBeforeTimeout: true, acceptedReplyDeliveredAfterClosure: true, originalIntentRemainsUnknown: true, acceptedReplyMatchesOriginalRequest: true, lateReplyDoesNotCompleteRequest: true, newTransportRequests: 0 };
 }
 
 async function runBeforeIntentLoss(driver, { evaluate, state, until, requests, base }) {
