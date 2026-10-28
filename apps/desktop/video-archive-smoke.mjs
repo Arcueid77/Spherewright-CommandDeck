@@ -49,8 +49,9 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive, j
 		if (fixture.phase === "record") {
 			assert.equal(archive.snapshot().recordings.length, 0);
 			const journalId = (await driver.api("journal", { action: "start" })).activeId; assert.ok(journalId);
-			await driver.testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true" });
 			const waitUi = async (source, label) => { const deadline = performance.now() + 10000; while (!await driver.testCommand("evaluate", { source })) { assert.ok(performance.now() < deadline, label); await new Promise(resolve => setTimeout(resolve, 25)); } };
+			await waitUi("[...document.querySelectorAll('header button')].some(button=>button.textContent==='录像'&&!button.disabled)", "RECORDING_PANEL_ENTRY_NOT_READY");
+			await driver.testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true" });
 			await waitUi("document.querySelector('.videos-panel')?.getAttribute('data-video-ready')==='true'", "RECORDING_PANEL_NOT_READY");
 			// Synthetic ports exercise the actual coordinator/archive with generated
 			// canvas bytes. They never invoke OS capture or the production UI grant.
