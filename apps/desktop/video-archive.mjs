@@ -4,12 +4,15 @@ import { open } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { bookmarkTags } from "./journal-format.mjs";
+import { WebmTiming } from "./webm-timing.mjs";
+import { VideoTimeline, timelineReasons } from "./video-timeline.mjs";
 
 export const videoArchiveLimits = Object.freeze({ recordings: 32, recordingBytes: 134217728, chunkBytes: 2097152, readBytes: 1048576 });
 export const videoMime = "video/webm;codecs=vp8";
 export const videoBookmarkLimits = Object.freeze({ perRecording: 128, timeMs: 2147483647 });
 const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const bookmarkSchema = "CREATE TABLE video_bookmarks(id TEXT PRIMARY KEY,recording_id TEXT NOT NULL REFERENCES recordings(id),media_sha256 TEXT NOT NULL,time_ms INTEGER NOT NULL,tag TEXT NOT NULL,created_at TEXT NOT NULL,journal_id TEXT,journal_sequence INTEGER,journal_point_sha256 TEXT); CREATE INDEX video_bookmark_time ON video_bookmarks(recording_id,time_ms,id);";
+const timingSchema = "CREATE TABLE video_timing(recording_id TEXT PRIMARY KEY REFERENCES recordings(id),journal_id TEXT NOT NULL,origin_lower_ms INTEGER NOT NULL,origin_upper_ms INTEGER,sampled_elapsed_ms INTEGER NOT NULL,media_through_ms REAL NOT NULL,frames INTEGER NOT NULL,event_count INTEGER NOT NULL,journal_sha256 TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,media_sha256 TEXT NOT NULL,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL);";
 const webmHeader = Buffer.from("1a45dfa3", "hex");
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const revision = value => typeof value === "string" && /^[a-f0-9]{40}$/.test(value) ? value : null;
@@ -36,17 +39,17 @@ export class VideoArchive {
 		this.db = new DatabaseSync(file);
 		try {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version, tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name);
-			if (version > 2) throw new Error("VIDEO_ARCHIVE_SCHEMA_TOO_NEW");
-			if (![0, 1, 2].includes(version) || version === 0 && (!created || tables.length) || version === 1 && JSON.stringify(tables) !== '["recordings"]' || version === 2 && JSON.stringify(tables) !== '["recordings","video_bookmarks"]') throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN");
-			if (version > 0) try { this.db.prepare("SELECT id,state,started_at,stopped_at,bytes,chunks,elapsed_ms,mime,width,height,frame_rate,source_revision,pi_commit,journal_id,reason,sha256 FROM recordings LIMIT 0").all(); if (version === 2) this.db.prepare("SELECT id,recording_id,media_sha256,time_ms,tag,created_at,journal_id,journal_sequence,journal_point_sha256 FROM video_bookmarks LIMIT 0").all(); } catch { throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN"); }
-			if (version === 0) this.db.exec("BEGIN IMMEDIATE; CREATE TABLE recordings(id TEXT PRIMARY KEY,state TEXT NOT NULL,started_at TEXT NOT NULL,stopped_at TEXT,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,frame_rate INTEGER NOT NULL,source_revision TEXT,pi_commit TEXT,journal_id TEXT,reason TEXT,sha256 TEXT); CREATE UNIQUE INDEX one_recording ON recordings((1)) WHERE state='recording'; " + bookmarkSchema + " PRAGMA user_version=2; COMMIT;");
+			if (version > 3) throw new Error("VIDEO_ARCHIVE_SCHEMA_TOO_NEW");
+			if (![0, 1, 2, 3].includes(version) || version === 0 && (!created || tables.length) || version === 1 && JSON.stringify(tables) !== '["recordings"]' || version === 2 && JSON.stringify(tables) !== '["recordings","video_bookmarks"]' || version === 3 && JSON.stringify(tables) !== '["recordings","video_bookmarks","video_timing"]') throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN");
+			if (version > 0) try { this.db.prepare("SELECT id,state,started_at,stopped_at,bytes,chunks,elapsed_ms,mime,width,height,frame_rate,source_revision,pi_commit,journal_id,reason,sha256 FROM recordings LIMIT 0").all(); if (version >= 2) this.db.prepare("SELECT id,recording_id,media_sha256,time_ms,tag,created_at,journal_id,journal_sequence,journal_point_sha256 FROM video_bookmarks LIMIT 0").all(); if (version === 3) this.db.prepare("SELECT recording_id,journal_id,origin_lower_ms,origin_upper_ms,sampled_elapsed_ms,media_through_ms,frames,event_count,journal_sha256,status,reason,media_sha256,bytes,chunks FROM video_timing LIMIT 0").all(); } catch { throw new Error("VIDEO_ARCHIVE_SCHEMA_UNKNOWN"); }
+			if (version === 0) this.db.exec("BEGIN IMMEDIATE; CREATE TABLE recordings(id TEXT PRIMARY KEY,state TEXT NOT NULL,started_at TEXT NOT NULL,stopped_at TEXT,bytes INTEGER NOT NULL,chunks INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,frame_rate INTEGER NOT NULL,source_revision TEXT,pi_commit TEXT,journal_id TEXT,reason TEXT,sha256 TEXT); CREATE UNIQUE INDEX one_recording ON recordings((1)) WHERE state='recording'; " + bookmarkSchema + timingSchema + " PRAGMA user_version=3; COMMIT;");
 			const rows = this.rows();
 			const allowed = new Set(["videos.sqlite", "videos.sqlite-wal", "videos.sqlite-shm", "videos.sqlite.presence", ...rows.map(row => row.id + ".webm")]);
 			if (readdirSync(directory).some(name => !allowed.has(name))) throw new Error("VIDEO_ARCHIVE_EVIDENCE_INVALID");
 			for (const row of rows) if (regular(this.path(row.id)).size !== row.bytes) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
-			if (version === 2) this.bookmarkRows();
+			if (version >= 2) this.bookmarkRows(); if (version === 3) this.timingRows();
 			this.db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-			if (version === 1) { this.db.exec("BEGIN IMMEDIATE"); try { this.db.exec(bookmarkSchema + " PRAGMA user_version=2; COMMIT;"); } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
+			if (version === 1 || version === 2) { this.db.exec("BEGIN IMMEDIATE"); try { this.db.exec((version === 1 ? bookmarkSchema : "") + timingSchema + " PRAGMA user_version=3; COMMIT;"); } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
 			this.db.prepare("UPDATE recordings SET state='interrupted',reason='application_interrupted' WHERE state='recording'").run();
 			if (!existsSync(marker)) { const fd = openSync(marker, "wx", 0o600); try { writeSync(fd, markerText); fsyncSync(fd); } finally { closeSync(fd); } }
 		} catch (error) { this.db.close(); throw error; }
@@ -69,11 +72,23 @@ export class VideoArchive {
 			if (!uuid(row.id) || !parent || parent.state === "recording" || parent.bytes < 4 || count > videoBookmarkLimits.perRecording || !digest(row.media_sha256) || parent.sha256 !== null && parent.sha256 !== row.media_sha256 || !Number.isSafeInteger(row.time_ms) || row.time_ms < 0 || row.time_ms > videoBookmarkLimits.timeMs || !bookmarkTags.includes(row.tag) || !stamp(row.created_at) || !emptyLink && (!uuid(row.journal_id) || parent.journal_id !== row.journal_id || !Number.isSafeInteger(row.journal_sequence) || row.journal_sequence < 1 || row.journal_sequence > 4096 || !digest(row.journal_point_sha256))) throw new Error("VIDEO_BOOKMARK_EVIDENCE_INVALID");
 		} return rows;
 	}
+	timingRows() {
+		const parents = new Map(this.rows().map(row => [row.id, row])), rows = this.db.prepare("SELECT * FROM video_timing LIMIT ?").all(this.limits.recordings + 1);
+		if (rows.length > this.limits.recordings) throw new Error("VIDEO_TIMING_EVIDENCE_INVALID");
+		for (const row of rows) {
+			const parent = parents.get(row.recording_id), integer = value => Number.isSafeInteger(value) && value >= 0 && value <= 2147483647;
+			if (!parent || parent.journal_id !== row.journal_id || !integer(row.origin_lower_ms) || !integer(row.sampled_elapsed_ms) || row.sampled_elapsed_ms < row.origin_lower_ms || !Number.isFinite(row.media_through_ms) || row.media_through_ms < 0 || row.media_through_ms > 2147483647 || !Number.isSafeInteger(row.frames) || row.frames < 0 || row.frames > 1048576 || !Number.isSafeInteger(row.event_count) || row.event_count < 1 || row.event_count > 4096 || !digest(row.journal_sha256) || !digest(row.media_sha256) || row.bytes !== parent.bytes || row.chunks !== parent.chunks || parent.sha256 !== null && parent.sha256 !== row.media_sha256 || !["pending", "bounded", "unsupported"].includes(row.status) || row.status === "bounded" && (!row.frames || !integer(row.origin_upper_ms) || row.origin_upper_ms < row.origin_lower_ms || row.origin_upper_ms > row.sampled_elapsed_ms + 2 || row.reason !== null) || row.status === "pending" && (row.origin_upper_ms !== null || row.reason !== null) || row.status === "unsupported" && (!timelineReasons.includes(row.reason) || row.origin_upper_ms !== null || row.frames !== 0 || row.media_through_ms !== 0)) throw new Error("VIDEO_TIMING_EVIDENCE_INVALID");
+		} return rows;
+	}
+	publicTiming(row) { return row ? { journalId: row.journal_id, originLowerMs: row.origin_lower_ms, originUpperMs: row.origin_upper_ms, sampledElapsedMs: row.sampled_elapsed_ms, mediaThroughMs: row.media_through_ms, frames: row.frames, eventCount: row.event_count, journalSha256: row.journal_sha256, status: row.status, reason: row.reason, mediaSha256: row.media_sha256 } : null; }
+	writeTiming(id, value, hash, bytes, chunks) {
+		this.db.prepare("INSERT INTO video_timing VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(recording_id) DO UPDATE SET origin_upper_ms=excluded.origin_upper_ms,sampled_elapsed_ms=excluded.sampled_elapsed_ms,media_through_ms=excluded.media_through_ms,frames=excluded.frames,event_count=excluded.event_count,journal_sha256=excluded.journal_sha256,status=excluded.status,reason=excluded.reason,media_sha256=excluded.media_sha256,bytes=excluded.bytes,chunks=excluded.chunks").run(id, value.journalId, value.originLowerMs, value.originUpperMs, value.sampledElapsedMs, value.mediaThroughMs, value.frames, value.eventCount, value.journalSha256, value.status, value.reason, hash, bytes, chunks);
+	}
 	annotations(id) {
 		if (!uuid(id)) throw new Error("VIDEO_RECORDING_INVALID"); if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE");
 		try {
 			this.assertDirectory(); const row = this.rows().find(row => row.id === id); if (!row) throw new Error("VIDEO_RECORDING_NOT_FOUND");
-			return { recording: this.publicRow(row), bookmarks: this.bookmarkRows().filter(row => row.recording_id === id).map(row => ({ id: row.id, timeMs: row.time_ms, tag: row.tag, createdAt: row.created_at, mediaSha256: row.media_sha256, relation: row.journal_id === null ? null : { journalId: row.journal_id, sequence: row.journal_sequence, pointSha256: row.journal_point_sha256 } })), limits: videoBookmarkLimits, executionAuthority: false };
+			return { recording: this.publicRow(row), bookmarks: this.bookmarkRows().filter(row => row.recording_id === id).map(row => ({ id: row.id, timeMs: row.time_ms, tag: row.tag, createdAt: row.created_at, mediaSha256: row.media_sha256, relation: row.journal_id === null ? null : { journalId: row.journal_id, sequence: row.journal_sequence, pointSha256: row.journal_point_sha256 } })), timing: this.publicTiming(this.timingRows().find(row => row.recording_id === id)), limits: videoBookmarkLimits, executionAuthority: false };
 		} catch (error) { if (error?.message === "VIDEO_RECORDING_NOT_FOUND") throw error; this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 	}
 	addBookmark(id, mediaSha256, timeMs, tag, relation, guard) {
@@ -99,9 +114,9 @@ export class VideoArchive {
 			}
 		});
 	}
-	snapshot() { let recordings = []; try { this.bookmarkRows(); recordings = this.rows().map(row => this.publicRow(row)); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; } return { available: !this.closed && !this.closing && !this.error, error: this.error, activeId: this.error ? null : this.active?.id ?? null, limits: this.limits, recordings }; }
+	snapshot() { let recordings = []; try { this.bookmarkRows(); this.timingRows(); recordings = this.rows().map(row => this.publicRow(row)); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; } return { available: !this.closed && !this.closing && !this.error, error: this.error, activeId: this.error ? null : this.active?.id ?? null, limits: this.limits, recordings }; }
 	assertDirectory() { const info = lstatSync(this.directory); if (info.isSymbolicLink() || info.ino !== this.directoryIdentity.ino || info.dev !== this.directoryIdentity.dev || realpathSync(this.directory).toLowerCase() !== this.directory.toLowerCase()) throw new Error("VIDEO_ARCHIVE_PATH_UNSAFE"); }
-	assertWritable() { if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); try { this.assertDirectory(); this.bookmarkRows(); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); } }
+	assertWritable() { if (this.closed || this.error) throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); try { this.assertDirectory(); this.bookmarkRows(); this.timingRows(); } catch { this.error = "VIDEO_ARCHIVE_UNAVAILABLE"; this.notice(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); } }
 	queue(action) {
 		if (this.closed || this.closing) return Promise.reject(new Error("VIDEO_ARCHIVE_UNAVAILABLE"));
 		if (this.pending >= 3) return Promise.reject(new Error("VIDEO_ARCHIVE_BACKPRESSURE")); this.pending++;
@@ -113,14 +128,18 @@ export class VideoArchive {
 		return this.queue(async () => {
 			this.assertWritable(); if (this.active) throw new Error("VIDEO_ALREADY_RECORDING");
 			if (this.rows().length >= this.limits.recordings) throw new Error("VIDEO_RECORDING_LIMIT");
-			if (!metadata || Object.keys(metadata).some(key => !["width", "height", "frameRate", "sourceRevision", "piCommit", "journalId"].includes(key)) || !Number.isInteger(metadata.width) || metadata.width < 1 || metadata.width > 1920 || !Number.isInteger(metadata.height) || metadata.height < 1 || metadata.height > 1080 || !Number.isInteger(metadata.frameRate) || metadata.frameRate < 1 || metadata.frameRate > 30 || metadata.journalId != null && !uuid(metadata.journalId)) throw new Error("VIDEO_METADATA_INVALID");
-			const id = randomUUID(); let file;
-			try { file = await open(this.path(id), "wx", 0o600); this.db.prepare("INSERT INTO recordings VALUES(?,'recording',?,NULL,0,0,0,?,?,?,?,?,?,?,NULL,NULL)").run(id, this.utc(), videoMime, metadata.width, metadata.height, metadata.frameRate, revision(metadata.sourceRevision), revision(metadata.piCommit), metadata.journalId ?? null); }
-			catch { await file?.close().catch(() => {}); await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
-			this.active = { id, file, bytes: 0, chunks: 0, elapsed: 0, header: Buffer.alloc(0), started: this.now(), hash: createHash("sha256"), last: null }; this.notice(); return this.snapshot();
+			if (!metadata || Object.keys(metadata).some(key => !["width", "height", "frameRate", "sourceRevision", "piCommit", "journalId", "clock"].includes(key)) || !Number.isInteger(metadata.width) || metadata.width < 1 || metadata.width > 1920 || !Number.isInteger(metadata.height) || metadata.height < 1 || metadata.height > 1080 || !Number.isInteger(metadata.frameRate) || metadata.frameRate < 1 || metadata.frameRate > 30 || metadata.journalId != null && !uuid(metadata.journalId)) throw new Error("VIDEO_METADATA_INVALID");
+			const timeline = metadata.clock == null ? null : new VideoTimeline(metadata.clock); if (timeline && timeline.value.journalId !== metadata.journalId) throw new Error("VIDEO_METADATA_INVALID");
+			const id = randomUUID(), hash = createHash("sha256"); let file, transaction = false;
+			try {
+				file = await open(this.path(id), "wx", 0o600); this.db.exec("BEGIN IMMEDIATE"); transaction = true;
+				this.db.prepare("INSERT INTO recordings(id,state,started_at,stopped_at,bytes,chunks,elapsed_ms,mime,width,height,frame_rate,source_revision,pi_commit,journal_id,reason,sha256) VALUES(?,'recording',?,NULL,0,0,0,?,?,?,?,?,?,?,NULL,NULL)").run(id, this.utc(), videoMime, metadata.width, metadata.height, metadata.frameRate, revision(metadata.sourceRevision), revision(metadata.piCommit), metadata.journalId ?? null);
+				if (timeline) this.writeTiming(id, timeline.snapshot(), hash.copy().digest("hex"), 0, 0); this.db.exec("COMMIT"); transaction = false;
+			} catch { if (transaction) try { this.db.exec("ROLLBACK"); } catch {} await file?.close().catch(() => {}); await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
+			this.active = { id, file, bytes: 0, chunks: 0, elapsed: 0, header: Buffer.alloc(0), started: this.now(), hash, timeline, last: null }; this.notice(); return this.snapshot();
 		});
 	}
-	append(id, sequence, data) {
+	append(id, sequence, data, clock = null) {
 		if (!(data instanceof Uint8Array) || data.byteLength < 1 || data.byteLength > this.limits.chunkBytes) return Promise.reject(new Error("VIDEO_CHUNK_INVALID"));
 		if (this.pending >= 3) return Promise.reject(new Error("VIDEO_ARCHIVE_BACKPRESSURE")); const bytes = Buffer.from(data);
 		return this.queue(async () => {
@@ -137,9 +156,10 @@ export class VideoArchive {
 				this.db.prepare("UPDATE recordings SET bytes=bytes WHERE id=? AND state='recording'").run(id);
 				for (let offset = 0; offset < bytes.length;) { const written = await active.file.write(bytes, offset, bytes.length - offset, active.bytes + offset); if (!written.bytesWritten) throw new Error("VIDEO_WRITE_INCOMPLETE"); offset += written.bytesWritten; }
 				await active.file.sync(); const elapsed = this.elapsed();
+				if (active.timeline) this.writeTiming(id, active.timeline.append(bytes, clock), active.hash.copy().update(bytes).digest("hex"), active.bytes + bytes.length, sequence);
 				this.db.prepare("UPDATE recordings SET bytes=?,chunks=?,elapsed_ms=? WHERE id=? AND state='recording'").run(active.bytes + bytes.length, sequence, elapsed, id); this.db.exec("COMMIT"); transaction = false;
 				active.bytes += bytes.length; active.chunks = sequence; active.elapsed = elapsed; active.header = header; active.hash.update(bytes);
-				const receipt = { id, sequence, bytes: active.bytes }; active.last = { hash, receipt }; this.notice(); return receipt;
+				const receipt = { id, sequence, bytes: active.bytes, clockCount: active.timeline?.value.eventCount ?? 0 }; active.last = { hash, receipt }; this.notice(); return receipt;
 			} catch { if (transaction) try { this.db.exec("ROLLBACK"); } catch {} await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 		});
 	}
@@ -147,14 +167,16 @@ export class VideoArchive {
 		return this.queue(async () => {
 			this.assertWritable(); if (!this.active || this.active.id !== id) throw new Error("VIDEO_RECORDING_CHANGED"); const active = this.active;
 			if (active.header.length < 4) { await this.interruptActive("no_data"); return this.snapshot(); }
-			try { await active.file.sync(); this.db.prepare("UPDATE recordings SET state='complete',stopped_at=?,elapsed_ms=?,reason='user_stopped',sha256=? WHERE id=? AND state='recording'").run(this.utc(), this.elapsed(), active.hash.digest("hex"), id); await active.file.close(); this.active = null; this.notice(); return this.snapshot(); }
-			catch { await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
+			let transaction = false;
+			try { await active.file.sync(); const hash = active.hash.digest("hex"); this.db.exec("BEGIN IMMEDIATE"); transaction = true; this.db.prepare("UPDATE recordings SET state='complete',stopped_at=?,elapsed_ms=?,reason='user_stopped',sha256=? WHERE id=? AND state='recording'").run(this.utc(), this.elapsed(), hash, id); if (active.timeline) this.writeTiming(id, active.timeline.finish(true), hash, active.bytes, active.chunks); this.db.exec("COMMIT"); transaction = false; await active.file.close(); this.active = null; this.notice(); return this.snapshot(); }
+			catch { if (transaction) try { this.db.exec("ROLLBACK"); } catch {} await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 		});
 	}
 	async interruptActive(reason) {
 		const active = this.active; if (!active) return;
-		try { await active.file.sync(); this.db.prepare("UPDATE recordings SET state='interrupted',stopped_at=?,elapsed_ms=?,reason=? WHERE id=? AND state='recording'").run(this.utc(), this.elapsed(), reason, active.id); await active.file.close(); this.active = null; this.notice(); }
-		catch { await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
+		let transaction = false;
+		try { await active.file.sync(); this.db.exec("BEGIN IMMEDIATE"); transaction = true; this.db.prepare("UPDATE recordings SET state='interrupted',stopped_at=?,elapsed_ms=?,reason=? WHERE id=? AND state='recording'").run(this.utc(), this.elapsed(), reason, active.id); if (active.timeline) this.writeTiming(active.id, active.timeline.finish(false), active.hash.copy().digest("hex"), active.bytes, active.chunks); this.db.exec("COMMIT"); transaction = false; await active.file.close(); this.active = null; this.notice(); }
+		catch { if (transaction) try { this.db.exec("ROLLBACK"); } catch {} await this.fault(); throw new Error("VIDEO_ARCHIVE_UNAVAILABLE"); }
 	}
 	interrupt(reason) { return this.queue(async () => { this.assertWritable(); if (!reasons.includes(reason) || ["user_stopped", "application_interrupted", "no_data"].includes(reason)) throw new Error("VIDEO_INTERRUPT_REASON_INVALID"); await this.interruptActive(reason); return this.snapshot(); }); }
 	async openReader(id) {
@@ -167,12 +189,13 @@ export class VideoArchive {
 		const reader = { close: () => { closed = true; return closing ??= file.close().then(() => { this.readers.delete(reader); }, error => { closing = null; throw error; }); } }; this.readers.add(reader);
 		try {
 			if (!current.isFile() || current.nlink !== 1 || current.ino !== info.ino || current.dev !== info.dev || current.size !== info.size) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
-			const hash = createHash("sha256"), buffer = Buffer.alloc(65536); let offset = 0, header = Buffer.alloc(0);
-			while (offset < row.bytes) { if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE"); const result = await file.read(buffer, 0, Math.min(buffer.length, row.bytes - offset), offset); if (!result.bytesRead) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); header = Buffer.concat([header, buffer.subarray(0, Math.min(result.bytesRead, Math.max(0, 4 - header.length)))]); if (!header.equals(webmHeader.subarray(0, header.length))) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); hash.update(buffer.subarray(0, result.bytesRead)); offset += result.bytesRead; }
+			const hash = createHash("sha256"), timing = new WebmTiming(), buffer = Buffer.alloc(65536); let offset = 0, header = Buffer.alloc(0);
+			while (offset < row.bytes) { if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE"); const result = await file.read(buffer, 0, Math.min(buffer.length, row.bytes - offset), offset); if (!result.bytesRead) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); header = Buffer.concat([header, buffer.subarray(0, Math.min(result.bytesRead, Math.max(0, 4 - header.length)))]); if (!header.equals(webmHeader.subarray(0, header.length))) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); hash.update(buffer.subarray(0, result.bytesRead)); timing.push(buffer.subarray(0, result.bytesRead)); offset += result.bytesRead; }
 			const digest = hash.digest("hex"); if (row.sha256 !== null && digest !== row.sha256) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
+			const recordedTiming = this.timingRows().find(row => row.recording_id === id); if (recordedTiming && recordedTiming.media_sha256 !== digest) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
 			const final = await file.stat(); if (final.size !== current.size || final.mtimeMs !== current.mtimeMs || final.ctimeMs !== current.ctimeMs) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED");
 			if (this.closed || this.closing || closed) throw new Error("VIDEO_PLAYBACK_UNAVAILABLE");
-			return { recording: this.publicRow(row), observedSha256: digest, complete: row.state === "complete", readOnly: true, executionAuthority: false,
+			return { recording: this.publicRow(row), observedSha256: digest, timing: timing.finish(row.state === "complete"), complete: row.state === "complete", readOnly: true, executionAuthority: false,
 				read: async (offset, length) => { if (closed || !Number.isSafeInteger(offset) || offset < 0 || offset >= row.bytes || !Number.isSafeInteger(length) || length < 1 || length > this.limits.readBytes) throw new Error("VIDEO_RANGE_INVALID"); const info = await file.stat(); if (info.size !== final.size || info.mtimeMs !== final.mtimeMs || info.ctimeMs !== final.ctimeMs || info.nlink !== 1) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); const bytes = Buffer.alloc(Math.min(length, row.bytes - offset)); const read = await file.read(bytes, 0, bytes.length, offset); if (read.bytesRead !== bytes.length) throw new Error("VIDEO_ARCHIVE_MEDIA_UNCONFIRMED"); return bytes; },
 				close: reader.close };
 		} catch (error) { await reader.close(); throw error; }

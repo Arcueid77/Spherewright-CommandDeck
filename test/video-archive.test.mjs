@@ -6,6 +6,9 @@ import { join, dirname, basename } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { VideoArchive, videoArchiveLimits } from "../apps/desktop/video-archive.mjs";
+import { journalPrefixHash } from "../apps/desktop/journal-evidence.mjs";
+import { journalFacts } from "../apps/desktop/journal-format.mjs";
+import { block, cluster, movie } from "./fixtures/webm.mjs";
 
 const metadata = { width: 1280, height: 720, frameRate: 30, sourceRevision: "a".repeat(40), piCommit: "b".repeat(40) };
 // Binary storage fixture, not evidence of a decoded video or a captured window.
@@ -92,7 +95,7 @@ test("v1 catalog migration preserves every media/recording field and bookmarks s
 	const f = await fixture(t), old = legacyCatalog(f.directory), catalog = join(f.directory, "videos.sqlite"), marker = join(f.directory, "videos.sqlite.presence");
 	await writeFile(join(f.directory, old.id + ".webm"), first); await writeFile(marker, "commanddeck-video-archive-v1\n");
 	const before = new DatabaseSync(catalog, { readOnly: true }); let original; try { original = before.prepare("SELECT * FROM recordings").all(); } finally { before.close(); }
-	const archive = f.open(); assert.equal(archive.db.prepare("PRAGMA user_version").get().user_version, 2); assert.deepEqual(archive.db.prepare("SELECT * FROM recordings").all(), original);
+	const archive = f.open(); assert.equal(archive.db.prepare("PRAGMA user_version").get().user_version, 3); assert.deepEqual(archive.db.prepare("SELECT * FROM recordings").all(), original);
 	assert.deepEqual(archive.annotations(old.id).bookmarks, []); assert.deepEqual(await readFile(join(f.directory, old.id + ".webm")), first); assert.equal(await readFile(marker, "utf8"), "commanddeck-video-archive-v1\n");
 	const saved = await archive.addBookmark(old.id, old.hash, 400, "checkpoint", null, () => true); assert.equal(saved.bookmarks.length, 1); assert.equal(saved.executionAuthority, false);
 	await archive.close(); const reopened = f.open(); assert.deepEqual(reopened.annotations(old.id), saved); assert.deepEqual(reopened.db.prepare("SELECT * FROM recordings").all(), original);
@@ -122,4 +125,28 @@ test("corrupt bookmark evidence is refused before startup writes and remains int
 	const f = await fixture(t), archive = f.open(), id = (await archive.start(metadata)).activeId; await archive.append(id, 1, first); await archive.finish(id); const hash = archive.snapshot().recordings[0].sha256;
 	await archive.addBookmark(id, hash, 500, "checkpoint", null, () => true); archive.db.prepare("UPDATE video_bookmarks SET media_sha256=?").run("f".repeat(64)); await archive.close();
 	const catalog = join(f.directory, "videos.sqlite"), original = await readFile(catalog); assert.throws(() => f.open(), /VIDEO_BOOKMARK_EVIDENCE_INVALID/); assert.deepEqual(await readFile(catalog), original); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), first);
+});
+test("timing evidence commits with the same encoded prefix and survives a normal reopen", async t => {
+	const f = await fixture(t), archive = f.open(), journalId = randomUUID(), events = [{ sequence: 1, elapsedMs: 0, domain: "recording", kind: "start", task: null, facts: journalFacts({}) }];
+	const clock = (elapsedMs, priorCount) => ({ journalId, elapsedMs, eventCount: 1, prefixSha256: journalPrefixHash(journalId, events), priorCount, priorSha256: journalPrefixHash(journalId, events, priorCount) });
+	const id = (await archive.start({ ...metadata, journalId, clock: clock(100, 0) })).activeId, bytes = movie([cluster(0, [block(0), block(1000)])]);
+	await archive.append(id, 1, bytes.subarray(0, 1), clock(200, 1)); assert.equal(archive.annotations(id).timing.status, "pending");
+	await archive.append(id, 2, bytes.subarray(1), clock(1200, 1)); await archive.finish(id); const original = archive.annotations(id);
+	assert.equal(original.timing.status, "bounded"); assert.equal(original.timing.originLowerMs, 100); assert.equal(original.timing.originUpperMs, 202); assert.equal(original.timing.mediaSha256, original.recording.sha256);
+	const reader = await archive.openReader(id); assert.equal(reader.timing.lastMs, 1000); await reader.close(); await archive.close(); assert.deepEqual(f.open().annotations(id), original);
+});
+test("v2-format migration preserves bookmarks/media and creates no invented clock history", async t => {
+	const f = await fixture(t), archive = f.open(), id = (await archive.start(metadata)).activeId; await archive.append(id, 1, first); await archive.finish(id); const hash = archive.snapshot().recordings[0].sha256;
+	const annotations = await archive.addBookmark(id, hash, 400, "checkpoint", null, () => true); await archive.close();
+	const old = new DatabaseSync(join(f.directory, "videos.sqlite")); try { old.exec("DROP TABLE video_timing; PRAGMA user_version=2"); } finally { old.close(); }
+	const reopened = f.open(); assert.equal(reopened.db.prepare("PRAGMA user_version").get().user_version, 3); assert.deepEqual(reopened.annotations(id), annotations); assert.equal(reopened.annotations(id).timing, null); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), first);
+});
+test("duplicate chunk acknowledgements retain the original clock prefix and SQLite denial keeps both ledgers at the accepted prefix", async t => {
+	const f = await fixture(t), archive = f.open(), journalId = randomUUID(), events = [{ sequence: 1, elapsedMs: 0, domain: "recording", kind: "start", task: null, facts: journalFacts({}) }];
+	const clock = (elapsedMs, priorCount) => ({ journalId, elapsedMs, eventCount: events.length, prefixSha256: journalPrefixHash(journalId, events), priorCount, priorSha256: journalPrefixHash(journalId, events, priorCount) });
+	const id = (await archive.start({ ...metadata, journalId, clock: clock(100, 0) })).activeId, bytes = movie([cluster(0, [block(0), block(1000)])]);
+	const receipt = await archive.append(id, 1, bytes.subarray(0, 1), clock(200, 1)); events.push({ sequence: 2, elapsedMs: 300, domain: "probe", kind: "state", task: null, facts: journalFacts({ busy: true }) });
+	assert.deepEqual(await archive.append(id, 1, bytes.subarray(0, 1), clock(400, 1)), receipt); assert.equal(receipt.clockCount, 1); assert.equal(archive.annotations(id).timing.eventCount, 1);
+	archive.db.exec("PRAGMA query_only=ON"); await assert.rejects(archive.append(id, 2, bytes.subarray(1), clock(1300, 1)), /VIDEO_ARCHIVE_UNAVAILABLE/); archive.db.exec("PRAGMA query_only=OFF");
+	assert.equal(archive.db.prepare("SELECT bytes FROM recordings WHERE id=?").get(id).bytes, 1); assert.equal(archive.db.prepare("SELECT bytes,event_count FROM video_timing WHERE recording_id=?").get(id).event_count, 1); assert.deepEqual(await readFile(join(f.directory, id + ".webm")), bytes.subarray(0, 1));
 });

@@ -6,13 +6,14 @@ type VideoState = { available: boolean; activeId: string | null; error: string |
 type Playback = { grant: string; url: string; mediaSha256: string; recording: Recording; complete: boolean; readOnly: true; executionAuthority: false };
 type JournalPoint = { sequence: number; elapsedMs: number; domain: string; kind: string; task: string | null; state: string; tool: string | null };
 type VideoBookmark = { id: string; timeMs: number; tag: string; mediaSha256: string; relation: { sequence: number } | null; link: { status: string; event: JournalPoint | null } };
-type VideoContext = { recording: Recording; bookmarks: VideoBookmark[]; limits: { perRecording: number }; journal: { status: string; total: number; offset: number; nextOffset: number | null; events: JournalPoint[] } };
+type VideoContext = { recording: Recording; bookmarks: VideoBookmark[]; limits: { perRecording: number }; timeline: { status: string; mediaSha256: string | null; uncertaintyMs: number | null; events: { event: JournalPoint; fromMs: number; toMs: number; timeMs: number }[] }; journal: { status: string; total: number; offset: number; nextOffset: number | null; events: JournalPoint[] } };
 const call = <T,>(action: string, args: Record<string, unknown> = {}) => window.deck.video<T>(action, args);
 const states: Record<string, string> = { complete: "已完成", interrupted: "录制中断", recording: "正在录制" };
 const size = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
 const tags: Record<string, string> = { checkpoint: "进度节点", attention: "需要关注", issue: "发现问题", verified: "已核验" };
 const clock = (ms: number) => `${Math.floor(ms / 60000)}:${(Math.floor(ms / 1000) % 60).toString().padStart(2, "0")}.${Math.floor(ms % 1000).toString().padStart(3, "0")}`;
 const pointLabel = (point: JournalPoint) => `#${point.sequence} · 日记 ${clock(point.elapsedMs)} · ${point.domain}/${point.kind}${point.task ? ` · ${point.task}` : ""}${point.tool ? ` · ${point.tool}` : ""}`;
+const timelineMessages: Record<string, string> = { none: "这段录像没有同步记录，仍可手动关联。", pending: "同步依据尚未完成。", unsupported: "这段录像的时间依据不足，仍可手动关联。", changed: "对应日记内容与录制时不符，自动关联已停止。", missing: "对应日记或所需事件缺失，自动关联暂不可用。", unavailable: "对应日记暂不可用。", coarse: "时间范围过宽，暂不自动关联。" };
 
 export function VideosPanel() {
 	const [state, setState] = useState<VideoState | null>(null), [selected, setSelected] = useState(""), [playback, setPlayback] = useState<Playback | null>(null), [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
@@ -63,10 +64,10 @@ export function VideosPanel() {
 		} catch { if (alive.current && expected === generation.current) setNotice("书签未保存。请重新打开播放，检查存储状态或书签上限后再试。"); }
 		finally { if (alive.current && expected === generation.current) setBookmarkBusy(false); }
 	}
-	async function seekBookmark(bookmark: VideoBookmark) {
+	async function seekPosition(timeMs: number, mediaSha256: string | null) {
 		const current = lease.current, element = video.current, expected = generation.current;
-		if (!current || !element || current.recording.id !== selected || current.mediaSha256 !== bookmark.mediaSha256) { setNotice("请先打开与书签一致的录像。"); return; }
-		const target = bookmark.timeMs / 1000; element.pause(); setSeeking(true); setNotice("");
+		if (!current || !element || current.recording.id !== selected || current.mediaSha256 !== mediaSha256) { setNotice("请先打开与时间记录一致的录像。"); return; }
+		const target = timeMs / 1000; element.pause(); setSeeking(true); setNotice("");
 		try {
 			if (element.readyState < 2 || Math.abs(element.currentTime - target) > 0.02) await new Promise<void>((resolve, reject) => {
 				const cleanup = () => { clearTimeout(timer); element.removeEventListener("seeked", done); element.removeEventListener("error", failed); };
@@ -74,7 +75,7 @@ export function VideosPanel() {
 				const failed = () => { cleanup(); reject(); }, timer = setTimeout(failed, 4000);
 				element.addEventListener("seeked", done); element.addEventListener("error", failed); try { element.currentTime = target; } catch { failed(); }
 			});
-			if (alive.current && expected === generation.current) { observeFrame(); setNotice(`已定位视频 ${clock(bookmark.timeMs)}。`); }
+			if (alive.current && expected === generation.current) { observeFrame(); setNotice(`已定位视频 ${clock(timeMs)}。`); }
 		} catch { if (alive.current && expected === generation.current) setNotice("无法定位到该画面，录像可能不完整或此位置尚不可用。"); }
 		finally { if (alive.current && expected === generation.current) setSeeking(false); }
 	}
@@ -95,6 +96,13 @@ export function VideosPanel() {
 			<p className="muted">构建声明：{row.build.sourceRevision?.slice(0, 12) ?? "源码模式，未声明固定候选"} · Pi {row.build.piCommit?.slice(0, 12) ?? "未声明"}</p>
 		</>}
 		{playback && <video key={playback.grant} ref={video} controls muted preload="metadata" src={playback.url} aria-label="本地录像播放器" onLoadedData={observeFrame} onTimeUpdate={observeFrame} onPause={observeFrame} onPlay={observeFrame} onSeeked={observeFrame} onError={() => { setFrame({ ready: false, paused: true, timeMs: 0 }); setNotice("播放已停止或链接已失效，请重新打开录像。"); }} />}
+		{row && context && <section className="video-timeline" aria-label="录像自动事件时间线">
+			<h3>自动事件时间线</h3>
+			{context.timeline.status === "bounded" ? <><p className="muted">事件自动关联到视频时间范围，范围宽度不超过 {context.timeline.uncertaintyMs} 毫秒。点击定位范围中点；播放不会执行任务。</p>
+				{context.timeline.events.map(marker => <div key={marker.event.sequence}><button data-timeline-sequence={marker.event.sequence} aria-current={frame.timeMs >= marker.fromMs && frame.timeMs <= marker.toMs ? "true" : undefined} disabled={busy || seeking || !playback || playback.recording.id !== selected || playback.mediaSha256 !== context.timeline.mediaSha256} onClick={() => void seekPosition(marker.timeMs, context.timeline.mediaSha256)}>{pointLabel(marker.event)} · 视频 {clock(marker.fromMs)}–{clock(marker.toMs)}</button></div>)}
+				{!context.timeline.events.length && <p className="muted">本页没有完整落在已记录画面范围内的事件。</p>}
+			</> : <p className="muted">{timelineMessages[context.timeline.status] ?? "自动关联暂不可用。"}</p>}
+		</section>}
 		{row && <section className="video-annotations" aria-label="录像书签与事件关联">
 			<h3>画面书签 / 手动关联</h3><p className="muted">暂停在要保留的画面后添加书签。可关联录制开始时绑定的运行日记；视频时间与日记时间分别计算，关联由你选择。</p>
 			{playback && <p>当前视频位置：{clock(frame.timeMs)}{frame.paused ? " · 已暂停" : " · 播放中"}</p>}
@@ -103,7 +111,7 @@ export function VideosPanel() {
 			<div className="actions"><button disabled={!canBookmark} onClick={() => void addBookmark()}>添加画面书签</button><button disabled={contextBusy || bookmarkBusy} onClick={() => void loadContext(selected, context?.journal.offset)}>刷新关联事件</button></div>
 			{context?.journal.status === "available" ? <p className="muted">日记事件 {context.journal.events.length ? context.journal.offset + 1 : 0}–{context.journal.offset + context.journal.events.length} / {context.journal.total}。<button disabled={contextBusy || bookmarkBusy || context.journal.offset === 0} onClick={() => void loadContext(selected, Math.max(0, context.journal.offset - 128))}>上一页事件</button> <button disabled={contextBusy || bookmarkBusy || context.journal.nextOffset === null} onClick={() => void loadContext(selected, context.journal.nextOffset ?? 0)}>下一页事件</button></p> : <p className="muted">{context?.journal.status === "none" ? "录制开始时没有运行日记；仍可添加画面书签。" : "对应日记暂不可用；已有书签和录像仍保留。"}</p>}
 			<div className="video-bookmarks">{context?.bookmarks.map(bookmark => <div key={bookmark.id} data-bookmark-id={bookmark.id}>
-				<button disabled={busy || seeking || !playback || playback.recording.id !== selected || playback.mediaSha256 !== bookmark.mediaSha256} onClick={() => void seekBookmark(bookmark)}>视频 {clock(bookmark.timeMs)} · {tags[bookmark.tag]}</button>
+				<button disabled={busy || seeking || !playback || playback.recording.id !== selected || playback.mediaSha256 !== bookmark.mediaSha256} onClick={() => void seekPosition(bookmark.timeMs, bookmark.mediaSha256)}>视频 {clock(bookmark.timeMs)} · {tags[bookmark.tag]}</button>
 				{bookmark.link.event ? <p className="muted" data-event-sequence={bookmark.link.event.sequence}>手动关联：{pointLabel(bookmark.link.event)}</p> : bookmark.relation && <p className="notice">关联的日记事件{bookmark.link.status === "changed" ? "内容已变化" : "暂不可核对"}，不显示为已匹配。</p>}
 			</div>)}</div>
 			{context && <p className="muted">本片书签 {context.bookmarks.length} / {context.limits.perRecording}；书签与回放只用于浏览。</p>}

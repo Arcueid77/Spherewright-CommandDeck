@@ -43,7 +43,7 @@ export class VideoPlaybackSessions {
 				reader = await archive.openReader(id); this.scope(owner, generation); if (this.#versions.get(owner) !== version) throw new Error("VIDEO_UI_CHANGED");
 				if (reader.readOnly !== true || reader.executionAuthority !== false || reader.recording?.id !== id || !Number.isSafeInteger(reader.recording.bytes) || reader.recording.bytes < 4 || reader.recording.bytes > 134217728 || !/^[a-f0-9]{64}$/.test(reader.observedSha256 ?? "")) throw new Error("VIDEO_PLAYBACK_UNCONFIRMED");
 				const grant = randomUUID(), state = { grant, owner, generation, reader, expires: this.now() + this.ttlMs, reads: 0 }; this.#sessions.set(grant, state);
-				return { grant, recording: reader.recording, mediaSha256: reader.observedSha256, complete: reader.complete === true, readOnly: true, executionAuthority: false, expiresInMs: this.ttlMs };
+				return { grant, recording: reader.recording, mediaSha256: reader.observedSha256, timing: reader.timing ?? { status: "unavailable" }, complete: reader.complete === true, readOnly: true, executionAuthority: false, expiresInMs: this.ttlMs };
 			} catch (error) { await reader?.close().catch(() => { this.#failed = true; }); throw error; }
 		})();
 		entry.promise = operation; this.#pending.add(entry); void operation.finally(() => this.#pending.delete(entry)).catch(() => {}); return operation;

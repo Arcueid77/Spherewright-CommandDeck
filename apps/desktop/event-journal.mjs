@@ -3,6 +3,7 @@ import { mkdirSync, lstatSync, realpathSync, openSync, closeSync, readFileSync, 
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { journalLimits, bookmarkTags, JournalProjector, journalFacts, validateJournalPoint } from "./journal-format.mjs";
+import { journalPrefixHash } from "./journal-evidence.mjs";
 
 const iso = () => new Date().toISOString();
 const idValid = value => typeof value === "string" && /^[a-f0-9-]{36}$/.test(value);
@@ -81,6 +82,13 @@ export class EventJournal {
 		try { this.db.prepare("INSERT INTO bookmarks(id,recording_id,sequence,tag,created_at) VALUES(?,?,?,?,?)").run(randomUUID(), id, sequence, tag, this.utc()); }
 		catch { this.fail(); throw new Error("JOURNAL_STORAGE_UNAVAILABLE"); }
 		this.notify(); return this.read(id);
+	}
+	sampleClock(id, priorCount = 0) {
+		if (this.closed || this.error || this.active?.id !== id) return null;
+		try {
+			const { events } = this.read(id), elapsedMs = Math.max(this.active.lastElapsed, Math.floor(Math.max(0, this.now() - this.active.started)));
+			return { journalId: id, elapsedMs, eventCount: events.length, prefixSha256: journalPrefixHash(id, events), priorCount, priorSha256: journalPrefixHash(id, events, priorCount) };
+		} catch { this.fail(); return null; }
 	}
 	read(id) {
 		if (!idValid(id)) throw new Error("JOURNAL_RECORDING_INVALID");

@@ -6,12 +6,18 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { EventJournal } from "../apps/desktop/event-journal.mjs";
 import { JournalProjector, journalLimits } from "../apps/desktop/journal-format.mjs";
+import { journalPrefixHash } from "../apps/desktop/journal-evidence.mjs";
 
 async function fixture(t, options) {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "commanddeck-journal-"))), stores = [];
 	t.after(async () => { for (const store of stores) if (!store.closed) store.close(); const canonical = await realpath(directory); assert.equal(dirname(canonical).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(canonical).startsWith("commanddeck-journal-")); await rm(canonical, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 	return { directory, open: () => { const store = new EventJournal(directory, options); stores.push(store); return store; } };
 }
+test("a journal clock sample pins the exact committed prefix and cannot migrate to a stopped or different journal", async t => {
+	let now = 10000; const f = await fixture(t, { now: () => now }), store = f.open(), id = store.start({}).activeId; now += 100; store.capture({ type: "probe-state", busy: true });
+	const sample = store.sampleClock(id, 1), events = store.read(id).events; assert.equal(sample.elapsedMs, 100); assert.equal(sample.eventCount, 2); assert.equal(sample.priorSha256, journalPrefixHash(id, events, 1)); assert.equal(sample.prefixSha256, journalPrefixHash(id, events)); assert.equal(store.sampleClock("another"), null);
+	store.stop(); assert.equal(store.sampleClock(id), null); assert.ok(!JSON.stringify(sample).includes("started_at"));
+});
 test("journal projection keeps stable per-recording aliases and never persists text, credentials, paths or original identities", () => {
 	const projector = new JournalProjector(), secret = "PRIVATE_TOKEN_AND_PATH", id = "PRIVATE_ORIGINAL_TASK";
 	const first = projector.project({ type: "workbench", taskId: id, kind: "task", facts: { state: "running", code: secret }, prompt: secret, text: secret });

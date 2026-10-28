@@ -7,8 +7,8 @@ const sameSource = (a, b) => ["version", "sourceId", "windowBinding", "width", "
 // UI document/process loss revokes admission immediately; cleanup acknowledgement
 // or a confirmed document/process replacement is required before another source.
 export class VideoRecording {
-	constructor({ getArchive, getBuild, getJournalId = () => null, getSource, isCurrent, isLocked, notify = () => {}, now = () => performance.now() }) {
-		Object.assign(this, { getArchive, getBuild, getJournalId, getSource, isCurrent, isLocked, notify, now });
+	constructor({ getArchive, getBuild, getJournalId = () => null, getJournalClock = () => null, getSource, isCurrent, isLocked, notify = () => {}, now = () => performance.now() }) {
+		Object.assign(this, { getArchive, getBuild, getJournalId, getJournalClock, getSource, isCurrent, isLocked, notify, now });
 		this.state = null; this.error = null; this.disposed = false; this.tail = Promise.resolve(); this.pending = 0; this.checking = false;
 		this.timer = setInterval(() => void this.check(), 1000); this.timer.unref?.();
 	}
@@ -56,7 +56,8 @@ export class VideoRecording {
 			await this.verify(state);
 			return await this.queue(async () => {
 				if (state.cancelled || this.state !== state) throw new Error("VIDEO_CAPTURE_CHANGED");
-				const archive = this.getArchive(), build = this.getBuild(), result = await archive.start({ ...state.size, sourceRevision: build?.sourceRevision, piCommit: build?.piCommit, journalId: this.getJournalId() });
+				state.journalId = this.getJournalId(); const clock = this.getJournalClock(state.journalId, 0); state.clockCount = clock?.eventCount ?? 0;
+				const archive = this.getArchive(), build = this.getBuild(), result = await archive.start({ ...state.size, sourceRevision: build?.sourceRevision, piCommit: build?.piCommit, journalId: state.journalId, clock });
 				state.recordingId = result.activeId;
 				if (state.cancelled || this.state !== state) throw new Error("VIDEO_CAPTURE_CHANGED");
 				state.phase = "recording"; this.emit(); return this.snapshot();
@@ -68,7 +69,7 @@ export class VideoRecording {
 		if (!(bytes instanceof Uint8Array) || bytes.length < 1 || bytes.length > 2097152 || !Number.isSafeInteger(sequence) || sequence < 1) throw new Error("VIDEO_CHUNK_INVALID");
 		if (this.pending >= 2) throw new Error("VIDEO_ARCHIVE_BACKPRESSURE"); this.pending++; const copy = Buffer.from(bytes);
 		const result = this.queue(async () => {
-			this.match(owner, generation, permit, ["recording"]); const receipt = await this.getArchive().append(state.recordingId, sequence, copy);
+			this.match(owner, generation, permit, ["recording"]); const clock = this.getJournalClock(state.journalId, state.clockCount), receipt = await this.getArchive().append(state.recordingId, sequence, copy, clock); state.clockCount = receipt.clockCount ?? clock?.eventCount ?? state.clockCount;
 			state.bytes = receipt.bytes; state.chunks = receipt.sequence; this.emit(); return receipt;
 		}).catch(async error => { void this.interrupt(code(error), "ui_lost", state); throw error; }).finally(() => { this.pending--; }); return result;
 	}
