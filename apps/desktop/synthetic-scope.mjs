@@ -3,7 +3,30 @@ import { Server } from "node:http";
 import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { realpathSync, lstatSync } from "node:fs";
+import { realpathSync, lstatSync, writeFileSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+
+// Publish a complete fixture snapshot without truncating an already-open reader.
+// This is test evidence transport, not a game persistence or durability guarantee.
+export function publishSyntheticResearchWorld(path, world) {
+	assert.equal(basename(path), "synthetic-research-world.json");
+	const info = lstatSync(path);
+	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1);
+	const bytes = JSON.stringify(world);
+	assert.ok(Buffer.byteLength(bytes) <= 4096, "SYNTHETIC_WORLD_SNAPSHOT_TOO_LARGE");
+	const staging = path + "." + randomUUID() + ".pending";
+	writeFileSync(staging, bytes, { flag: "wx" });
+	// Windows can refuse replacement while an async reader holds the target.
+	// Retry the same complete staging file; never truncate or remove the target.
+	const deadline = performance.now() + 2000, pause = new Int32Array(new SharedArrayBuffer(4));
+	for (;;) {
+		try { renameSync(staging, path); return; }
+		catch (error) {
+			if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code) || performance.now() >= deadline) throw error;
+			Atomics.wait(pause, 0, 0, 10);
+		}
+	}
+}
 
 export function syntheticCommitReceiptReleaseFile(runId) {
 	assert.match(runId, /^[a-f0-9-]{36}$/);

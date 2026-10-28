@@ -1,10 +1,10 @@
 import { createInterface } from "node:readline";
 import assert from "node:assert/strict";
-import { lstatSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, realpathSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { nativeResearchStateHash } from "../../apps/desktop/research-preview.mjs";
-import { syntheticCommitReceiptReleased } from "../../apps/desktop/synthetic-scope.mjs";
+import { syntheticCommitReceiptReleased, publishSyntheticResearchWorld } from "../../apps/desktop/synthetic-scope.mjs";
 const mode = process.argv[2] ?? "normal", playbook = "spherewright://agent/playbooks/opening-movement-v1";
 const persistent = ["mcp-commit-timeout", "mcp-before-intent-preview", "mcp-before-intent-confirmation", "mcp-before-intent-revalidation", "mcp-drop-after-accept", "mcp-drop-after-accept-duplicate", "mcp-drop-after-accept-late", "mcp-drop-before-accept", "mcp-drop-after-accept-world", "mcp-drop-after-accept-schema", "mcp-drop-after-accept-key", "mcp-drop-after-accept-unknown", "mcp-drop-after-accept-recovery", "mcp-drop-after-accept-failed", "mcp-drop-after-accept-recovery-flag", "mcp-lost-ack", "mcp-lost-ack-storage", "storage-normal"].includes(mode);
 let world, worldPath;
@@ -23,7 +23,7 @@ if (persistent) {
 	stage = "COMMIT_IDENTITY";
 	if (world.commits) { assert.equal(world.techId, 100); assert.match(world.key, /^[0-9a-f-]{36}$/); assert.equal(world.tick, 1201); }
 	else { assert.equal(world.techId, null); assert.equal(world.key, null); }
-	stage = "SAVE"; world.launches++; writeFileSync(worldPath, JSON.stringify(world));
+	stage = "SAVE"; world.launches++; publishSyntheticResearchWorld(worldPath, world);
 	} catch { process.stderr.write("SYNTHETIC_WORLD_INIT_" + stage + "\n", () => process.exit(2)); await new Promise(() => {}); }
 }
 const send = (id, result, done) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n", done);
@@ -35,7 +35,7 @@ if (mode === "bad-schema" || mode === "mcp-drop-after-accept-schema" && world.la
 if (mode === "bad-commit-hint") tools[5].annotations.destructiveHint = false;
 let commits = 0, preparedTech, key, tick = 1200, resultReads = 0, progressions = 0, failedContext = false, delayedReceipt;
 if (world) { commits = world.commits; preparedTech = world.techId ?? undefined; key = world.key ?? undefined; tick = world.tick; resultReads = world.resultReads; }
-const persist = () => { if (world) { Object.assign(world, { commits, techId: commits ? preparedTech : null, key: key ?? null, tick, resultReads }); writeFileSync(worldPath, JSON.stringify(world)); } };
+const persist = () => { if (world) { Object.assign(world, { commits, techId: commits ? preparedTech : null, key: key ?? null, tick, resultReads }); publishSyntheticResearchWorld(worldPath, world); } };
 const hash = () => "sha256:" + (commits ? "b" : "a").repeat(64);
 const budget = () => [{ itemId: 1202, name: "磁线圈", count: 10, direction: "research-consumption" }];
 const input = createInterface({ input: process.stdin });

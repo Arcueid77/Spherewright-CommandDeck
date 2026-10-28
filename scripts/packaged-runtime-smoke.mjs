@@ -128,6 +128,7 @@ try {
 			cases.push({ ...phases[0], developmentUsageScenario: contextFailures ? "cross-protocol-" + scenario + "-and-reopen" : providerContext ? "cross-protocol-continue-compact-and-reopen" : developmentContext ? "continue-compact-and-reopen" : "read-file-and-reopen", developmentUsageRecovery: phases[1], ...(contextFailures ? { noCompactionResultOrFollowupInvented: true } : {}), noPackagedChildrenRemain: true, originalRowsAndPiPreserved: true, sourceFilesUnchanged: true, externalGitRequired: true, gitVersion: toolchain.gitVersion, gitSha256: toolchain.gitSha256 });
 			continue;
 		}
+		console.log("PACKAGED_FAULT_CASE " + JSON.stringify({ kind: mcpLoss ? "mcp-loss" : "runtime-loss", scenario, phase: "fault" }));
 		await launch(directory, caseEnvironment, caseProof, ["--portable-smoke", (mcpLoss ? "--portable-mcp-loss=" : "--portable-runtime-loss=") + scenario]);
 		const proof = JSON.parse(await readFile(join(directory, "application-proof.json"), "utf8"));
 		assert.equal(proof.runId, caseId); assert.equal(proof[mcpLoss ? "mcpLossScenario" : "runtimeScenario"], scenario); assert.equal(proof.sourceRevision, manifest.sourceRevision); assert.equal(proof.piCommit, manifest.piCommit);
@@ -165,6 +166,7 @@ try {
 			const expected = { tasks: state.tasks, events: state.events }, marker = { version: 1, kind: "synthetic-model-usage-recovery", runId: caseId, scenario, expected, sha256: modelUsageRecoveryHash(expected) };
 			await writeFile(join(caseProof, "before-reopen.private.json"), JSON.stringify(before), { flag: "wx" });
 			await writeFile(join(directory, modelUsageRecoveryFile), JSON.stringify(marker), { flag: "wx" });
+			console.log("PACKAGED_FAULT_CASE " + JSON.stringify({ kind: "mcp-loss", scenario, phase: "reopen" }));
 			await launch(directory, caseEnvironment, caseProof, ["--portable-smoke"], "reopen-");
 			modelUsageRecovery = JSON.parse(await readFile(join(directory, "model-usage-recovery-proof.json"), "utf8"));
 			assert.equal(modelUsageRecovery.runId, caseId); assert.equal(modelUsageRecovery.scenario, scenario); assert.equal(modelUsageRecovery.sourceRevision, manifest.sourceRevision); assert.equal(modelUsageRecovery.piCommit, manifest.piCommit); assert.equal(modelUsageRecovery.expectedSha256, marker.sha256);
