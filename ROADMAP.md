@@ -631,6 +631,8 @@ M5新增`lost-ack-storage`固定组合场景（fixture声明`portableMcpFaults:8
 
 M5新增两项固定Runtime/存储组合：`receipt-runtime`在实际commit接受回执返回、尚未交给账本时停止原自有utility；`terminal-runtime`在同一原action的终态及fresh读回返回、尚未交给账本终态事务时停止utility。两者都必须确认原Runtime真实exit、原意图仍为`recorded`或`accepted`且存储尚健康，才将该合成连接设为`query_only`；拒写后恢复可写、停止及UI重载仍保留存储失败、Runtime不可用与开发冻结，不重启Runtime或重发commit。健康整应用重开只可保留无action的原recorded阻断，或只读核销原accepted action。注入仅对显式隔离合成模式及这两个固定时点开放，不扩展生产IPC；终态观察钩子仅在所属合成host匹配时生效并于finally还原。包声明新增`portableRuntimeStorageFaults:1`，旧三类能力编号保持；包外入口复用完整五张游戏SQL表/Pi/保险库/world取证，保留原三例并要求五场景/10次实际启动。新增3项协调器/准入测试、36项相关回归、完整Node22测试491/491（0skip）、类型检查和普通科研源码桌面回归通过；Node测试的Runtime退出由协调器状态回调模拟，不冒作utility实测。旧指定便携包已在新入口能力门拒绝，未创建新fixture/profile。实际新包、真实utility退出及整应用恢复、准确CI仍待，0真实游戏/模型调用。
 
+Runtime/存储候选`fec02e9ef5ac2507007420aaf138c77838f61522`已从干净源码生成16,204文件 / 741,170,807字节完整自包含包。首轮run `96c8b5b5-848c-4334-8470-c3311612d7d0`在原`before-send`案例的包外全量比较失败，未推进到两项新增组合：两次应用均正常exit0、无超时、独立原生观察0所属残留。原五表/Pi/保险库/world快照逐字段比对仅`game_tasks[0].state`从`awaiting_approval`变为`cancelled`；该无intent任务在健康重开后的正常关闭调用既有`ledger.stop`，原入口本就要求最终cancelled。比较器现只为此案例允许恰好一项未提交任务的这一个状态转换，仍要求零intent及其余完整快照相同；receipt仍要求整份快照完全相同，terminal保留原action/key/接受记录及正常完成的独立核验。原失败快照与日志保留，未修改候选包或历史SQL；控制器语法及原失败证据按新窄规则比较通过，491项源码结论仍归原候选。控制器另记录自身Git提交与文件SHA256、要求干净来源并在完成前复核，与包提交分开归属；修正后的五例/10次实际启动及新准确CI仍待。
+
 ## 10. M6：后续扩展
 
 按需求独立切片，不要求全部放进同一个版本：

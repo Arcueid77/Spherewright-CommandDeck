@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,9 +12,13 @@ import { observePackagedProcesses } from "./observe-packaged-processes.mjs";
 import { syntheticMcpEnvironment } from "../apps/desktop/synthetic-scope.mjs";
 import { portableStorageScenarios, runtimeStorageScenarios, storageFaultBoundary } from "../apps/desktop/portable-mode.mjs";
 import { usageRecoveryState } from "./model-usage-recovery-state.mjs";
+import { readGit } from "../apps/desktop/workspace.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 if (process.platform !== "win32" || args.length !== 2 || args[0] !== "--source") throw new Error("EXPLICIT_PACKAGED_STORAGE_BUNDLE_REQUIRED");
+const controllerRevision = (await readGit(root, ["rev-parse", "HEAD"])).trim(), controllerFile = fileURLToPath(import.meta.url);
+const controllerHash = async () => createHash("sha256").update(await readFile(controllerFile)).digest("hex"), controllerSha256 = await controllerHash();
+assert.equal((await readGit(root, ["status", "--porcelain"])).trim(), "", "STORAGE_CONTROLLER_REQUIRES_CLEAN_SOURCE");
 const source = await realpath(resolve(root, args[1])), manifest = await verifyBundle(source);
 assert.equal(manifest.portableStorageFaults, 1, "PACKAGED_STORAGE_MODE_UNSUPPORTED_REBUILD_REQUIRED"); assert.equal(manifest.nativeProcessObserver, 1);
 assert.equal(manifest.portableRuntimeStorageFaults, 1, "PACKAGED_RUNTIME_STORAGE_MODE_UNSUPPORTED_REBUILD_REQUIRED");
@@ -27,7 +31,7 @@ try {
 	for (const scenario of portableStorageScenarios) {
 		const boundary = storageFaultBoundary(scenario), runtimeLoss = runtimeStorageScenarios.includes(scenario);
 		const directory = await temporary(), caseId = randomUUID(), evidence = join(proofRoot, scenario); await mkdir(evidence);
-		await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, scenario, directory, copy, sourceRevision: manifest.sourceRevision }), { flag: "wx" });
+		await writeFile(join(evidence, "context.private.json"), JSON.stringify({ runId, caseId, scenario, directory, copy, sourceRevision: manifest.sourceRevision, controllerRevision, controllerSha256 }), { flag: "wx" });
 		const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
 		const env = syntheticMcpEnvironment({ ...inherited, PATH: join(process.env.SystemRoot, "System32"), PI_OFFLINE: "1", DOTNET_ROOT: join(directory, "no-shared-dotnet"), DOTNET_ROOT_X64: join(directory, "no-shared-dotnet"), DOTNET_MULTILEVEL_LOOKUP: "0", DOTNET_DISABLE_GUI_ERRORS: "1", COMMANDDECK_PORTABLE_ROOT: directory, COMMANDDECK_PORTABLE_RUN_ID: caseId });
 		const phaseProofs = []; let beforeState, originalBytes;
@@ -61,7 +65,12 @@ try {
 			else {
 				assert.deepEqual(state.pi, beforeState.pi, "ORIGINAL_PI_HISTORY_CHANGED_ON_RESUME"); assert.deepEqual(state.vault, beforeState.vault, "ORIGINAL_VAULT_CHANGED_ON_RESUME");
 				assert.deepEqual(state.rows.game_task_details, beforeState.rows.game_task_details, "ORIGINAL_TASK_DETAILS_CHANGED_ON_RESUME");
-				if (boundary !== "terminal") assert.deepEqual(state, beforeState, "ORIGINAL_STORAGE_STATE_CHANGED_ON_RESUME");
+				if (boundary === "receipt") assert.deepEqual(state, beforeState, "ORIGINAL_STORAGE_STATE_CHANGED_ON_RESUME");
+				if (boundary === "before-send") {
+					assert.equal(beforeState.rows.game_tasks.length, 1); assert.equal(beforeState.rows.game_tasks[0].state, "awaiting_approval"); assert.deepEqual(beforeState.rows.game_intents, []);
+					const cancelled = structuredClone(beforeState); cancelled.rows.game_tasks[0].state = "cancelled";
+					assert.deepEqual(state, cancelled, "UNCOMMITTED_TASK_CLOSE_CHANGED_MORE_THAN_CANCELLATION");
+				}
 				assert.deepEqual(await readFile(join(directory, "storage-original.private.json")), originalBytes);
 			}
 		}
@@ -80,7 +89,8 @@ try {
 		cases.push({ storageScenario: scenario, applicationRuns: 2, phases: phaseProofs, independentExitObservedAfterEachRun: true, originalPiHistoryUnchanged: true, durableOriginalVerifiedAfterExit: true, originalRecordSha256: original.sha256 });
 	}
 	await verifyBundle(copy); await verifyBundle(source);
-	const proof = { packagedStorageSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, cases, applicationRuns: cases.reduce((sum, value) => sum + value.applicationRuns, 0), actualPackagedApplication: true, outsideSourceCheckout: true, developerToolPathExcluded: true, bundleUnchanged: true, fault: "sqlite-query-only", osDiskFullVerified: false, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
+	assert.equal((await readGit(root, ["rev-parse", "HEAD"])).trim(), controllerRevision); assert.equal(await controllerHash(), controllerSha256);
+	const proof = { packagedStorageSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, controllerRevision, controllerSha256, piCommit: manifest.piCommit, cases, applicationRuns: cases.reduce((sum, value) => sum + value.applicationRuns, 0), actualPackagedApplication: true, outsideSourceCheckout: true, developerToolPathExcluded: true, bundleUnchanged: true, fault: "sqlite-query-only", osDiskFullVerified: false, cleanWindowsVmVerified: false, fullRecoveryMatrixVerified: false, gameCalls: 0, realModelRequests: 0 };
 	await writeFile(join(proofRoot, "proof.json"), JSON.stringify(proof, null, 2), { flag: "wx" }); await writeFile(join(root, ".local/packaged-storage-smoke.json"), JSON.stringify(proof, null, 2));
 	passed = true; console.log(JSON.stringify({ packagedStorageSmoke: "passed", runId, sourceRevision: manifest.sourceRevision, applicationRuns: proof.applicationRuns, gameCalls: 0, realModelRequests: 0 }));
 } finally {
