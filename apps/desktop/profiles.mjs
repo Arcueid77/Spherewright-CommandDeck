@@ -1,6 +1,20 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { modelPricing } from "./model-usage.mjs";
+
+export function readModelPricing(path, providerId, modelId) {
+	try {
+		if (statSync(path).size > 1024 * 1024) return null;
+		const config = JSON.parse(readFileSync(path, "utf8"));
+		const provider = config.providers?.[providerId], model = provider?.models?.find(value => value.id === modelId);
+		// Only caller-configured prices, never the registry's default zero prices.
+		const override = provider?.modelOverrides?.[modelId]?.cost;
+		if (model?.cost?.tiers || override?.tiers) return null; // Tiered billing needs its own estimator.
+		if (!model?.cost && !override) return null;
+		return modelPricing(Object.fromEntries(["input", "output", "cacheRead", "cacheWrite"].map(key => [key, override?.[key] ?? model?.cost?.[key] ?? null])));
+	} catch { return null; }
+}
 
 function validateEndpoint(value) {
 	let url;

@@ -3,6 +3,7 @@ import { mkdirSync, openSync, closeSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { matchResearchBudget, nativeResearchStateHash, researchId } from "./research-preview.mjs";
+import { modelUsageSnapshot } from "./model-usage.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -166,9 +167,17 @@ export class GameIntentLedger {
 		this.#transaction(() => this.db.prepare("INSERT INTO game_task_details(task_id,body) VALUES(?,?)").run(id, JSON.stringify(body)));
 	}
 	note(id, kind, value = {}) {
-		if (!["stage", "assistant", "tool", "error", "result"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
-		const body = { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
-		this.#transaction(() => { this.#task(id); this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,?,?)").run(id, kind, JSON.stringify(body)); this.db.prepare("DELETE FROM game_task_events WHERE task_id=? AND sequence NOT IN (SELECT sequence FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 200)").run(id, id); });
+		if (!["stage", "assistant", "tool", "error", "result", "usage"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
+		const body = kind === "usage" ? { at: this.now(), usage: modelUsageSnapshot(value) } : { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
+		this.#transaction(() => {
+			this.#task(id);
+			this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,?,?)").run(id, kind, JSON.stringify(body));
+			if (kind === "usage") {
+				const row = this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id);
+				if (row) this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify({ ...JSON.parse(row.body), usage: body.usage }), id);
+			}
+			this.db.prepare("DELETE FROM game_task_events WHERE task_id=? AND sequence NOT IN (SELECT sequence FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 200)").run(id, id);
+		});
 	}
 	events(id) { this.#task(id); return this.db.prepare("SELECT sequence,kind,body FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 100").all(id).reverse().map(({ body, ...value }) => ({ ...value, ...JSON.parse(body) })); }
 	advised(id) { return this.#transaction(() => { const task = this.#task(id); if (task.state !== "draft") throw new Error("GAME_TASK_NOT_ADVISORY"); this.db.prepare("UPDATE game_tasks SET state='advised' WHERE id=?").run(id); return this.task(id); }); }

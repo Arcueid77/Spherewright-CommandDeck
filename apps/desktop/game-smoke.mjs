@@ -37,6 +37,7 @@ export async function runGameSmoke(driver) {
 		const delta = name ? { tool_calls: [{ index: 0, id: name === "observe_research" ? "game-observe" : "game-proposal", type: "function", function: { name, arguments: JSON.stringify(name === "observe_research" ? {} : { techId: 100, reason: "已观察指定科技与前置条件；只建议正常入队，等待用户确认。" }) } }] } : { content: "建议已提出，尚未执行。确认后由程序提交一次并核对队列。" };
 		response.writeHead(200, { "content-type": "text/event-stream" });
 		for (const choice of [{ delta: { role: "assistant", ...delta } }, { delta: {}, finish_reason: name ? "tool_calls" : "stop" }]) response.write(`data: ${JSON.stringify({ id: "synthetic-game", object: "chat.completion.chunk", model: "fixture", choices: [{ index: 0, ...choice }] })}\n\n`);
+		response.write(`data: ${JSON.stringify({ id: "synthetic-game", choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 7 } } })}\n\n`);
 		response.end("data: [DONE]\n\n");
 	});
 	await new Promise((done) => server.listen(0, "127.0.0.1", done));
@@ -44,7 +45,7 @@ export async function runGameSmoke(driver) {
 		driver.registerSyntheticProvider?.(server, profileId, key);
 		const vault = await driver.api("profiles-manage", { action: "list" });
 		if (driver.context) assert.deepEqual(vault.profiles, [], "PORTABLE_RUNTIME_VAULT_MUST_BE_EMPTY");
-		await driver.api("profiles-manage", { action: "save", args: { id: profileId, label: "Synthetic game smoke", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", apiKey: key, contextWindow: 65536, maxTokens: 1024, expectedRevision: vault.revision } });
+		await driver.api("profiles-manage", { action: "save", args: { id: profileId, label: "Synthetic game smoke", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", apiKey: key, contextWindow: 65536, maxTokens: 1024, pricing: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 }, expectedRevision: vault.revision } });
 		await driver.api("bridge-select", marker); await driver.api("bridge", { action: "refresh" });
 		const evaluate = (source) => driver.testCommand("evaluate", { source }), state = () => driver.api("game", { action: "snapshot" });
 		async function until(predicate, label, budget = 12000) { const deadline = Date.now() + budget; while (!await predicate()) { if (Date.now() > deadline) { await writeFile(join(base, "failure.private.json"), JSON.stringify({ label, state: await state(), ui: await evaluate("document.body.innerText") }, null, 2)); throw new Error("GAME_SMOKE_TIMEOUT_" + label); } await new Promise((done) => setTimeout(done, 50)); } }
@@ -69,6 +70,11 @@ export async function runGameSmoke(driver) {
 		}
 		await until(async () => (await state()).phase === "awaiting_approval", "PREVIEW");
 		let current = await state(); assert.equal(current.unresolved.length, 0); assert.equal(current.developmentFrozen, true);
+		const usage = current.tasks[0].details.usage;
+		assert.equal(usage.coverage, "reported"); assert.equal(usage.requests, 3); assert.equal(usage.reportedResponses, 3);
+		assert.deepEqual(usage.tokens, { input: 270, output: 60, cacheRead: 30, cacheWrite: 0, totalTokens: 360, reasoning: 21 });
+		assert.equal(usage.estimate.status, "estimated"); assert.ok(Math.abs(usage.estimate.usd - 0.001155) < 1e-12);
+		await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens') && document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('0.001155')"), "MODEL_USAGE_DISPLAY");
 		assert.equal(await driver.getSyntheticCommitCount(), 0); assert.equal(requests, 3);
 		const denied = await evaluate("(async()=>{let count=0;for(const action of ['approve','commit','game-confirmed','game-confirmation'])try{await window.deck.game(action,{userConfirmed:true})}catch{count++}try{await window.deck.workbench('game-end')}catch{count++}try{await window.deck.workbench('agent',{})}catch{count++}return count})()"); assert.equal(denied, 6);
 		await assert.rejects(driver.api("bridge", { action: "disconnect" }), /GAME_TASK_OWNS_BRIDGE/);
@@ -91,6 +97,7 @@ export async function runGameSmoke(driver) {
 		const capture = await driver.testCommand("capture-game");
 		await driver.testCommand("reload"); await until(async () => (await evaluate("document.body.innerText")).includes("队列变化已核对"), "RELOAD_RECEIPT");
 		assert.equal(await driver.getSyntheticCommitCount(), 1);
+		assert.deepEqual((await state()).tasks[0].details.usage, usage);
 		const profiles = await driver.api("profiles-manage", { action: "list" }); await driver.api("profiles-manage", { action: "remove", args: { id: profileId, expectedRevision: profiles.revision } });
 		await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);
 		if (physical) await writeFile(join(driver.root, ".local/m3-physical-stage.private.json"), JSON.stringify({ runId: driver.runId, stage: "completed", syntheticOnly: true }));

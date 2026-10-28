@@ -142,7 +142,7 @@ export class GameTasks {
 		const task = this.ledger.tasks().find((value) => value.id === taskId);
 		return { id: taskId, kind: "agent", state: "running", provider: task.details.provider, model: task.details.model };
 	}
-	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.phase === "planning" && this.operation && !this.closing && !this.controller?.signal.aborted) { try { this.#note(kind, value); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); } } }
+	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.operation && (kind === "usage" || this.phase === "planning" && !this.closing && !this.controller?.signal.aborted)) { try { this.#note(kind, value); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); } } }
 	confirmation(taskId, uiEpoch) {
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || taskId !== this.currentTaskId || !Number.isSafeInteger(uiEpoch) || uiEpoch <= 0) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");

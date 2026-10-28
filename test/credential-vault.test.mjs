@@ -40,6 +40,21 @@ test("concurrent stale updates cannot silently replace a protected profile", asy
 	assert.match(results.find((result) => result.status === "rejected").reason.message, /PROTECTED_STORE_CHANGED/);
 });
 
+test("optional explicit prices roundtrip sealed profiles, preserve on omitted edits and clear only explicitly", async t => {
+	const f = await fixture(t), pricing = { input: 2, output: 10, cacheRead: 0, cacheWrite: null }, input = profile({ pricing });
+	let saved = await f.vault.save(input);
+	assert.deepEqual((await f.vault.describe(input.id)).pricing, pricing);
+	assert.equal(saved.profiles[0].pricing, undefined); assert.equal((await f.vault.describe(input.id)).key, undefined);
+	const original = await readFile(f.file);
+	await assert.rejects(f.vault.save({ ...input, pricing: { input: -1 }, expectedRevision: saved.revision }), /PRICING/);
+	assert.deepEqual(await readFile(f.file), original);
+	saved = await f.vault.save({ ...input, pricing: undefined, apiKey: "", expectedRevision: saved.revision });
+	assert.deepEqual((await f.vault.resolve(input.id, input.modelId)).pricing, pricing);
+	await f.vault.save({ ...input, pricing: null, apiKey: "", expectedRevision: saved.revision });
+	assert.equal((await f.vault.resolve(input.id, input.modelId)).pricing, undefined);
+	assert.equal((await f.vault.resolve(input.id, input.modelId)).key, input.apiKey);
+});
+
 test("the internal credential channel binds a running task and rechecks after decrypting", async (t) => {
 	const f = await fixture(t), input = profile(); await f.vault.save(input);
 	const request = { taskId: randomUUID(), providerId: input.id, modelId: input.modelId };

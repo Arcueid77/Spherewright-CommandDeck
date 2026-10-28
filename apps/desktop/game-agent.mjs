@@ -1,9 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager } from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
-import { readProfiles } from "./profiles.mjs";
+import { readProfiles, readModelPricing } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
+import { ModelUsage } from "./model-usage.mjs";
 
 const maximumOutputTokens = 4096;
 
@@ -26,12 +27,15 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 	const runtime = protectedProfile ? await createProtectedRuntime(protectedProfile, signal) : await ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath, modelsStorePath: join(cwd, "models-store.json"), allowModelNetwork: false });
 	const model = runtime.getModel(providerId, modelId); if (!model) throw new Error("CONFIGURED_MODEL_UNAVAILABLE");
 	let requests = 0, calls = 0, proposedTechId = null, session, response = "", rejectedEcho = false;
+	const usage = new ModelUsage({ pricing: protectedProfile?.pricing ?? (modelsPath ? readModelPricing(modelsPath, providerId, modelId) : null), publish: value => event("usage", value) });
 	const stream = runtime.streamSimple.bind(runtime);
 	runtime.streamSimple = (model, context, options) => {
 		if (signal.aborted) throw new Error("GAME_MODEL_STOPPED");
 		if (requests >= 4) throw new Error("GAME_MODEL_REQUEST_LIMIT");
 		requests++;
-		return stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, maximumOutputTokens), maxRetries: 0 });
+		const id = usage.start();
+		try { return usage.track(id, stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, maximumOutputTokens), maxRetries: 0 })); }
+		catch (error) { usage.finish(id, null); throw error; }
 	};
 	let tail = Promise.resolve();
 	const tools = [];
@@ -78,6 +82,6 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		const stopReason = session.messages.filter((message) => message.role === "assistant").at(-1)?.stopReason;
 		if (stopReason === "length") throw new Error("GAME_MODEL_OUTPUT_LIMIT");
 		if (stopReason !== "stop") throw new Error("GAME_MODEL_DID_NOT_FINISH");
-		return { proposedTechId, requestCount: requests, toolCalls: calls, tools: names, cost: "unknown", gameCommits: 0 };
+		return { proposedTechId, requestCount: requests, toolCalls: calls, tools: names, usage: usage.snapshot(), cost: "unknown", gameCommits: 0 };
 	} finally { signal.removeEventListener("abort", abort); session?.dispose(); event("result", { text: `模型请求 ${requests} 次；工具 ${calls} 次；费用未知。模型没有提交游戏动作。` }); }
 }

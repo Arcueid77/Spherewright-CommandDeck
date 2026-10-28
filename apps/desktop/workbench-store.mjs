@@ -208,6 +208,7 @@ export class WorkbenchStore {
 		if (!Number.isSafeInteger(after) || after < 0) throw new Error("INVALID_EVENT_CURSOR");
 		return this.db.prepare("SELECT * FROM events WHERE task_id=? AND sequence>? ORDER BY sequence LIMIT 500").all(taskId, after).map((row) => ({ sequence: row.sequence, kind: row.kind, value: parse(row.value), createdAt: row.created_at }));
 	}
+	usage(taskId) { return parse(this.db.prepare("SELECT value FROM events WHERE task_id=? AND kind='usage' ORDER BY sequence DESC LIMIT 1").get(taskId)?.value); }
 	ui(key) { return parse(this.db.prepare("SELECT value FROM ui_state WHERE key=?").get(key)?.value); }
 	saveUi(key, value) {
 		if (typeof key !== "string" || key.length > 160 || json(value).length > 262144) throw new Error("UI_STATE_TOO_LARGE");

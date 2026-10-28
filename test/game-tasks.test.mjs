@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
+import { ModelUsage } from "../apps/desktop/model-usage.mjs";
 
 test("power drain invalidates the old catalog and approval without replaying its model", async t => {
 	let models = 0; const f = await fixture(t, { planner: async () => { models++; return { proposedTechId: 100 }; } });
@@ -128,6 +129,17 @@ test("cancel while model is planning refuses late proposal and leaves no approva
 	const f = await fixture(t, { planner: async () => { entered(); await new Promise((done) => { release = done; }); return { proposedTechId: 100 }; } });
 	f.start(); await barrier; f.host.stop(); release(); const done = await f.host.settled();
 	assert.equal(done.phase, "cancelled"); assert.equal(done.tasks[0].state, "cancelled"); assert.equal(done.unresolved.length, 0); assert.equal(f.frozen(), false);
+});
+
+test("late usage after cancellation is retained while a late proposal still cannot prepare or commit", async t => {
+	let entered, release; const barrier = new Promise(done => { entered = done; });
+	const f = await fixture(t, { planner: async () => { entered(); await new Promise(done => { release = done; }); return { proposedTechId: 100 }; } });
+	f.start(); await barrier;
+	const id = f.host.currentTaskId; f.host.stop();
+	const usage = new ModelUsage({ publish: value => f.host.plannerEvent(id, "usage", value) });
+	usage.finish(usage.start(), { usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120 } });
+	release(); const done = await f.host.settled();
+	assert.equal(done.phase, "cancelled"); assert.deepEqual(done.tasks[0].details.usage, usage.snapshot()); assert.equal(done.tasks[0].intent, null); assert.deepEqual(done.unresolved, []);
 });
 
 test("ACK loss stays blocked across restart; no new approval, key or model run is admitted", async (t) => {

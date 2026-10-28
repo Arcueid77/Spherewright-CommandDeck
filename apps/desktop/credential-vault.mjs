@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { lstat, readFile, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { modelPricing } from "./model-usage.mjs";
 
 export const protectedProvider = (id) => typeof id === "string" && /^deckvault-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 const digest = (bytes) => bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
@@ -13,7 +14,8 @@ function validate(value) {
 	if (!Number.isInteger(value.contextWindow) || value.contextWindow < 4096 || value.contextWindow > 2097152 || !Number.isInteger(value.maxTokens) || value.maxTokens < 128 || value.maxTokens > 131072 || value.maxTokens > value.contextWindow) throw new Error("INVALID_PROFILE_MODEL_LIMITS");
 	if (typeof value.key !== "string" || value.key.length < 8 || value.key.length > 16384 || /[\x00-\x1f\x7f]/.test(value.key)) throw new Error("INVALID_PROFILE_CREDENTIAL");
 	if ([value.id, value.label, value.modelId, value.baseUrl, value.api].some((item) => item.includes(value.key))) throw new Error("CREDENTIAL_IN_PROFILE_METADATA");
-	return { id: value.id, label: value.label.trim(), api: value.api, baseUrl: endpoint.href.replace(/\/+$/, ""), modelId: value.modelId, contextWindow: value.contextWindow, maxTokens: value.maxTokens, key: value.key };
+	const pricing = modelPricing(value.pricing);
+	return { id: value.id, label: value.label.trim(), api: value.api, baseUrl: endpoint.href.replace(/\/+$/, ""), modelId: value.modelId, contextWindow: value.contextWindow, maxTokens: value.maxTokens, key: value.key, ...(pricing ? { pricing } : {}) };
 }
 const metadata = (profile) => ({ providerId: profile.id, modelId: profile.modelId, label: profile.label, api: profile.api, source: "protected" });
 
@@ -65,7 +67,7 @@ export class CredentialVault {
 			const current = await this.read();
 			if (input.expectedRevision !== current.revision) throw new Error("PROTECTED_STORE_CHANGED");
 			const previous = current.profiles.find((entry) => entry.id === input.id);
-			const value = validate({ ...input, key: input.apiKey === "" && previous ? previous.key : input.apiKey });
+			const value = validate({ ...input, pricing: input.pricing === undefined ? previous?.pricing : input.pricing, key: input.apiKey === "" && previous ? previous.key : input.apiKey });
 			if (current.profiles.some((entry) => entry.id !== value.id && entry.label.toLowerCase() === value.label.toLowerCase())) throw new Error("PROFILE_LABEL_ALREADY_EXISTS");
 			const profiles = current.profiles.filter((entry) => entry.id !== value.id).concat(value);
 			if (profiles.length > 16) throw new Error("TOO_MANY_PROTECTED_PROFILES");

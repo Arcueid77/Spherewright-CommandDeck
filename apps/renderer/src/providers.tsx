@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 
 export type Profile = { providerId: string; modelId: string; api: string; label?: string; source?: "external" | "protected" };
 type Store = { available: boolean; revision: string | null; profiles: Profile[]; external: Profile[] };
-type Form = { id: string; label: string; api: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number; revision: string | null; credentialPresent?: boolean };
+type PriceKey = "input" | "output" | "cacheRead" | "cacheWrite";
+type Form = { id: string; label: string; api: string; baseUrl: string; modelId: string; contextWindow: number; maxTokens: number; revision: string | null; credentialPresent?: boolean; pricing?: Record<PriceKey, number | null> | null };
+const priceLabels: Record<PriceKey, string> = { input: "输入价格", output: "输出价格", cacheRead: "缓存读取价格", cacheWrite: "缓存写入价格" };
 const manage = <T,>(action: string, args: Record<string, unknown> = {}) => window.deck.manageProfiles<T>(action, args);
 export const profileToken = (profile: Profile) => JSON.stringify([profile.providerId, profile.modelId]);
 
@@ -43,10 +45,11 @@ export function ProviderSettings({ close }: { close: () => void }) {
 			<label>模型 ID<input aria-label="模型 ID" maxLength={200} required value={form.modelId} onChange={(event) => update("modelId", event.target.value)} /></label>
 			<div className="provider-limits"><label>上下文上限<input aria-label="上下文上限" type="number" min={4096} max={2097152} required value={form.contextWindow} onChange={(event) => update("contextWindow", Number(event.target.value))} /></label><label>输出上限<input aria-label="输出上限" type="number" min={128} max={131072} required value={form.maxTokens} onChange={(event) => update("maxTokens", Number(event.target.value))} /></label></div>
 			<label>API 密钥<input aria-label="API 密钥" type="password" autoComplete="new-password" spellCheck={false} maxLength={16384} required={!form.credentialPresent} placeholder={form.credentialPresent ? "留空沿用已保存密钥" : "仅保存在此电脑"} value={key} onChange={(event) => setKey(event.target.value)} /></label>
-			<p className="muted">密钥由 Windows 保护保存。此类服务在一轮回复完成后显示内容，费用仍为未知。</p>
+			<fieldset><legend>费用估算 · USD / 百万 tokens（可选）</legend><p className="muted">留空表示价格未知，明确填写 0 才按免费估算。使用统一费率，不自动查询服务商价格。</p><div className="provider-limits">{(Object.keys(priceLabels) as PriceKey[]).map(field => <label key={field}>{priceLabels[field]}<input aria-label={priceLabels[field]} type="number" min={0} max={1000000} step="any" value={form.pricing?.[field] ?? ""} onChange={event => setForm(current => current ? { ...current, pricing: { input: null, output: null, cacheRead: null, cacheWrite: null, ...current.pricing, [field]: event.target.value === "" ? null : Number(event.target.value) } } : null)} /></label>)}</div></fieldset>
+			<p className="muted">密钥由 Windows 保护保存。此类服务在一轮回复完成后显示内容；用量缺失时仍显示未知。</p>
 			<div className="actions"><button type="submit" className="accent">保存配置</button><button type="button" onClick={clear}>取消</button>{form.credentialPresent && <button type="button" onClick={() => removeArmed ? void remove() : setRemoveArmed(true)}>{removeArmed ? "确认删除此配置" : "删除配置"}</button>}</div>
 		</fieldset></form>}
-		<div className="external-providers"><b>来自 CC Switch / Pi</b>{store.external.length ? store.external.map((profile) => <p key={profileToken(profile)}>{profile.modelId} · {profile.api}</p>) : <p>未发现可用配置。</p>}<p className="muted">在原管理工具中修改，不会自动迁移密钥。</p></div></>}
+		<div className="external-providers"><b>来自 CC Switch / Pi</b>{store.external.length ? store.external.map((profile) => <p key={profileToken(profile)}>{profile.modelId} · {profile.api}</p>) : <p>未发现可用配置。</p>}<p className="muted">在原管理工具中修改，不会自动迁移密钥。仅采用显式配置的模型 cost 费率；缺失或分档价格显示未知。</p></div></>}
 		{notice && <p role="status" className="notice">{notice}</p>}
 	</section></div>;
 }

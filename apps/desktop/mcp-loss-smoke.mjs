@@ -9,6 +9,7 @@ export function mcpLossProofName(scenario) {
 
 export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requests, base }) {
 	const accepted = driver.mcpLossScenario === "accepted", originalClient = driver.getBridgeClient(), runtimePid = driver.getRuntimePid(), taskId = (await state()).currentTaskId;
+	const usage = (await state()).tasks[0].details.usage;
 	const world = async () => { const value = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(value.runId, driver.runId); return value; };
 	async function reloadGame() {
 		await driver.testCommand("reload");
@@ -40,7 +41,9 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		assert.deepEqual((await state()).unresolved, [original]); assert.equal((await state()).developmentFrozen, true); assert.equal(driver.getBridgeClient(), originalClient); assert.equal(driver.bridgeExitConfirmed(), true);
 	}
 	const after = await world(); assert.equal(after.commits, 1); assert.equal(after.prepares, 1); assert.equal(after.launches, accepted ? 2 : 1); assert.equal(after.resultReads, accepted ? 2 : 0); assert.equal(requests(), 3); assert.equal(driver.getRuntimePid(), runtimePid);
+	assert.deepEqual((await state()).tasks[0].details.usage, usage);
+	await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens') && document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('0.001155')"), "MCP_LOSS_USAGE_RETAINED");
 	await writeFile(join(base, "mcp-loss.private.json"), JSON.stringify({ runId: driver.runId, scenario: driver.mcpLossScenario, original, before, after, state: await state() }), { flag: "wx" });
 	const proofDirectory = driver.proofDirectory ?? join(driver.root, ".local/mcp-loss", driver.runId); await mkdir(proofDirectory, { recursive: true });
-	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted, unknownCommitRemainsBlocked: !accepted, originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: accepted ? 1 : 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false }), { flag: "wx" });
+	await writeFile(join(proofDirectory, mcpLossProofName(driver.mcpLossScenario)), JSON.stringify({ runId: driver.runId, mcpLossScenario: driver.mcpLossScenario, syntheticOnly: true, originalMcpExitObserved: true, originalAcceptedActionReconciled: accepted, unknownCommitRemainsBlocked: !accepted, originalIdentityRetained: true, newExecutionDisabledDuringLoss: true, explicitOriginalReconciliationOnly: true, noModelOrCommitReplay: true, runtimeRetained: true, replacementMcpCount: accepted ? 1 : 0, syntheticModelRequests: requests(), syntheticGameCommits: 1, syntheticPrepareCalls: 1, ownServerExitConfirmed: true, modelUsage: { normalizedTokens: usage.tokens.totalTokens, reportedResponses: usage.reportedResponses, estimatedUsd: usage.estimate.usd, retainedAcrossUiReloadAndMcpLoss: true }, gameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false }), { flag: "wx" });
 }

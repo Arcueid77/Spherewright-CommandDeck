@@ -221,7 +221,7 @@ export class Workbench {
 		if (action === "check") return this.start({ rootId: args.rootId, kind: "check", prompt: args.checkId }, (task, signal) => this.invokeCheck(task, args.checkId, signal));
 		if (action === "task") {
 			const task = this.store.task(args.taskId);
-			return { ...task, invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), references: this.store.references(task.id), events: this.store.events(task.id, args.after ?? 0) };
+			return { ...task, usage: this.store.usage(task.id), invocations: this.store.invocations(task.id), changes: this.store.changes(task.id).map(({ beforeText, afterText, ...change }) => change), references: this.store.references(task.id), events: this.store.events(task.id, args.after ?? 0) };
 		}
 		if (action === "cancel") {
 			if (this.operation?.id !== args.taskId) throw new Error("TASK_NOT_RUNNING");

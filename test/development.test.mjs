@@ -217,12 +217,13 @@ test("the pinned Pi rejects injected scope and completes a bounded read/edit/che
 		const delta = tool ? { tool_calls: [{ index: 0, id: `fixture-${requests}`, type: "function", function: { name: tool, arguments: JSON.stringify(args) } }] } : { content: "Changed the fixture and verified the named check." };
 		response.writeHead(200, { "content-type": "text/event-stream" });
 		for (const choice of [{ delta: { role: "assistant", ...delta } }, { delta: {}, finish_reason: tool ? "tool_calls" : "stop" }]) response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, ...choice }] })}\n\n`);
+		response.write(`data: ${JSON.stringify({ id: "fixture", choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 7 } } })}\n\n`);
 		response.end("data: [DONE]\n\n");
 	});
 	await new Promise((done) => endpoint.listen(0, "127.0.0.1", done));
 	t.after(() => { endpoint.closeAllConnections(); endpoint.close(); });
 	const modelsPath = join(f.base, "models.json");
-	await writeFile(modelsPath, JSON.stringify({ providers: { "commanddeck-fixture": { baseUrl: `http://127.0.0.1:${endpoint.address().port}/v1`, api: "openai-completions", apiKey: "synthetic", models: [{ id: "fixture", contextWindow: 16384, maxTokens: 2048 }] } } }));
+	await writeFile(modelsPath, JSON.stringify({ providers: { "commanddeck-fixture": { baseUrl: `http://127.0.0.1:${endpoint.address().port}/v1`, api: "openai-completions", apiKey: "synthetic", models: [{ id: "fixture", contextWindow: 16384, maxTokens: 2048, cost: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 } }] } } }));
 	const task = await f.workbench.start({ rootId: f.rootId, kind: "agent", provider: "commanddeck-fixture", model: "fixture", prompt: "Change the fixture value to 2 and run the test." }, (task, signal) => runDevelopmentAgent({ workbench: f.workbench, task, signal, testModelsPath: modelsPath }));
 	await f.workbench.operation.done;
 	const result = await f.workbench.request("task", { taskId: task.id });
@@ -231,9 +232,18 @@ test("the pinned Pi rejects injected scope and completes a bounded read/edit/che
 	assert.equal(result.result.toolCalls, 3);
 	assert.equal(result.invocations.filter((entry) => entry.name === "workspace_edit").length, 1);
 	assert.equal(result.result.changedFiles.length, 1); assert.equal(result.result.cost, "unknown");
+	assert.deepEqual(result.usage.tokens, { input: 450, output: 100, cacheRead: 50, cacheWrite: 0, totalTokens: 600, reasoning: 35 });
+	assert.equal(result.usage.reportedResponses, 5); assert.equal(result.usage.estimate.status, "estimated"); assert.ok(Math.abs(result.usage.estimate.usd - 0.001925) < 1e-12);
+	assert.deepEqual(result.usage, result.result.usage);
 	assert.ok(tools.includes("workspace_edit") && tools.includes("workspace_check"));
 	assert.ok(tools.every((name) => name.startsWith("workspace_")));
 	assert.equal(await readFile(join(f.repo, "code.mjs"), "utf8"), "export const value = 2;\n");
 	assert.equal(await readFile(join(f.repo, "check-count.txt"), "utf8"), "x");
 	assert.equal(result.invocations.find((entry) => entry.name === "workspace_check" && entry.result?.exitCode === 0).state, "completed");
+	// Latest accounting is independent of the 500-row transcript page and final result.
+	for (let i = 0; i < 505; i++) f.workbench.store.event(task.id, "assistant-text", { text: "bounded synthetic text" });
+	await f.workbench.close();
+	const reopened = new Workbench({ directory: f.directory, helperSource });
+	try { assert.deepEqual((await reopened.request("task", { taskId: task.id, after: 999999 })).usage, result.usage); assert.deepEqual(reopened.store.invocations(task.id), result.invocations); }
+	finally { await reopened.close(); }
 });

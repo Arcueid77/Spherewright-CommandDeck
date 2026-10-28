@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { nativeResearchStateHash } from "../apps/desktop/research-preview.mjs";
+import { ModelUsage } from "../apps/desktop/model-usage.mjs";
 
 async function fixture(t, { pageSize } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-ledger-")), file = join(directory, "game-ledger.sqlite"), authority = {}, stores = []; let now = 100000;
@@ -28,6 +29,20 @@ function completion(f, intent, extra = {}) {
 	return { actionId: "action-fixture", actionKind: "select-research", sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, terminal: true, succeeded: true, state: "completed", completedAtGameTick: 1201, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: [99, 100], previousCurrentTechId: 99, currentTechId: 99, inventoryPreserved: true, researchProgressPreserved: true }, ...extra };
 }
 const progression = (f, extra = {}) => ({ sessionId: f.scope.sessionId, planetId: f.scope.planetId, capturedAtGameTick: 1202, observedAt: f.context().observedAt, selectionStateHash: "sha256:" + "b".repeat(64), techQueue: [99, 100], ...extra });
+
+test("usage survives transcript pruning and ledger reopen without modifying action or approval state", async t => {
+	const f = await fixture(t), task = f.ledger.createResearchTask(f.scope);
+	f.ledger.details(task.id, { mode: "observe", model: "fixture", provider: "synthetic" });
+	const original = f.ledger.task(task.id), usage = new ModelUsage({ pricing: { input: 2 }, publish: value => f.ledger.note(task.id, "usage", { ...value, private: "PRIVATE_TEXT" }) });
+	usage.finish(usage.start(), { usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 100 } });
+	for (let i = 0; i < 205; i++) f.ledger.note(task.id, "assistant", { text: "synthetic" });
+	assert.equal(f.ledger.events(task.id).some(event => event.kind === "usage"), false);
+	assert.deepEqual(f.ledger.task(task.id), original); assert.deepEqual(f.ledger.tasks()[0].details.usage, usage.snapshot());
+	assert.throws(() => f.ledger.note(task.id, "usage", { version: 1, requests: 100 }), /INVALID_MODEL_USAGE/);
+	f.ledger.close(); const reopened = f.open();
+	assert.deepEqual(reopened.tasks()[0].details.usage, usage.snapshot()); assert.deepEqual(reopened.task(task.id), original); assert.deepEqual(reopened.unresolved(), []);
+	assert.ok(!JSON.stringify(reopened.tasks()).includes("PRIVATE_TEXT"));
+});
 const resultContext = (f) => ({ ...f.context(), gameTick: 1202, selectionStateHash: "sha256:" + "b".repeat(64) });
 
 test("research approval binds an immutable one-write scope and cannot be forged with model JSON", async (t) => {

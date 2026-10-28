@@ -1,9 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager } from "../../vendor/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
-import { readProfiles } from "./profiles.mjs";
+import { readProfiles, readModelPricing } from "./profiles.mjs";
 import { protectedProvider } from "./credential-vault.mjs";
 import { createProtectedRuntime } from "./protected-runtime.mjs";
+import { ModelUsage } from "./model-usage.mjs";
 
 const errorCode = (error) => /^[A-Z0-9_]+$/.test(error?.message) ? error.message : "DEVELOPMENT_TOOL_FAILED";
 const schema = (properties, required = Object.keys(properties)) => ({ type: "object", properties, required, additionalProperties: false });
@@ -28,11 +29,14 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 	const rules = await workspace.rules(root.id), knownRules = new Set(rules.map((rule) => rule.path + ":" + rule.sha256));
 	const runtime = protectedProfile ? await createProtectedRuntime(protectedProfile, signal) : await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath, modelsStorePath: join(directory, "models-store.json"), allowModelNetwork: false });
 	let requests = 0, calls = 0, unknown = false, credentialEchoRejected = false, response = "", session;
+	const usage = new ModelUsage({ pricing: protectedProfile?.pricing ?? (modelsPath ? readModelPricing(modelsPath, task.provider, task.model) : null), publish: value => workbench.notify(task.id, "usage", value) });
 	const stream = runtime.streamSimple.bind(runtime);
 	runtime.streamSimple = (model, context, options) => {
 		if (signal.aborted) throw new Error("DEVELOPMENT_TASK_CANCELLED");
 		if (++requests > 6) throw new Error("MODEL_REQUEST_BUDGET_EXHAUSTED");
-		return stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, 2048), maxRetries: 0 });
+		const id = usage.start();
+		try { return usage.track(id, stream(model, context, { ...options, maxTokens: Math.min(model.maxTokens, 2048), maxRetries: 0 })); }
+		catch (error) { usage.finish(id, null); throw error; }
 	};
 	const configured = runtime.getModel(task.provider, task.model);
 	if (!configured) throw new Error("CONFIGURED_MODEL_UNAVAILABLE");
@@ -115,6 +119,6 @@ export async function runDevelopmentAgent({ workbench, task, signal, testModelsP
 		if (credentialEchoRejected) throw new Error("PROVIDER_CREDENTIAL_ECHO_REJECTED");
 		const last = session.messages.filter((message) => message.role === "assistant").at(-1);
 		if (!signal.aborted && last?.stopReason !== "stop") throw new Error("DEVELOPMENT_MODEL_DID_NOT_FINISH");
-		return { requestCount: requests, toolCalls: calls, tools: names, changedFiles: store.changes(task.id).filter((change) => change.state === "applied").map(({ path, afterHash }) => ({ path, sha256: afterHash })), cost: "unknown", gameCalls: 0 };
+		return { requestCount: requests, toolCalls: calls, tools: names, changedFiles: store.changes(task.id).filter((change) => change.state === "applied").map(({ path, afterHash }) => ({ path, sha256: afterHash })), usage: usage.snapshot(), cost: "unknown", gameCalls: 0 };
 	} finally { signal.removeEventListener("abort", abort); session?.dispose(); }
 }

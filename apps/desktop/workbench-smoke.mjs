@@ -49,23 +49,25 @@ export async function runWorkbenchSmoke(driver) {
 	assert.equal(await readFile(join(source, "count.txt"), "utf8"), "x");
 	// This profile and endpoint are synthetic; no real credentials or external model are used.
 	const syntheticKey = "!synthetic-desktop-" + randomUUID(), providerId = "deckvault-" + randomUUID();
-	let releaseResponse, receivedAuthorization = false;
+	let releaseResponse, receivedAuthorization = false, accountedTask, usageEvidence;
 	const endpoint = createServer(async (request, response) => {
 		for await (const _chunk of request) {}
 		receivedAuthorization = request.headers.authorization === "Bearer " + syntheticKey;
 		await new Promise((done) => { releaseResponse = done; });
 		response.writeHead(200, { "content-type": "text/event-stream" });
 		for (const choice of [{ delta: { role: "assistant", content: "fixture echo: " + syntheticKey.slice(0, 11) } }, { delta: { content: syntheticKey.slice(11) } }, { delta: {}, finish_reason: "stop" }]) response.write(`data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", model: "fixture", choices: [{ index: 0, ...choice }] })}\n\n`);
+		response.write(`data: ${JSON.stringify({ id: "fixture", choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 7 } } })}\n\n`);
 		response.end("data: [DONE]\n\n");
 	});
 	await new Promise((done) => endpoint.listen(0, "127.0.0.1", done));
 	try {
 		const empty = await driver.api("profiles-manage", { action: "list" }); assert.equal(empty.profiles.length, 0); assert.equal(empty.available, true);
-		const config = { id: providerId, label: "Desktop fixture", api: "openai-completions", baseUrl: `http://127.0.0.1:${endpoint.address().port}/v1`, modelId: "fixture", contextWindow: 8192, maxTokens: 2048, apiKey: syntheticKey, expectedRevision: empty.revision };
+		const config = { id: providerId, label: "Desktop fixture", api: "openai-completions", baseUrl: `http://127.0.0.1:${endpoint.address().port}/v1`, modelId: "fixture", contextWindow: 8192, maxTokens: 2048, pricing: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 }, apiKey: syntheticKey, expectedRevision: empty.revision };
 		const saved = await evaluate(`window.deck.manageProfiles('save',${JSON.stringify(config)})`);
 		assert.ok(!JSON.stringify(saved).includes(syntheticKey));
 		const described = await evaluate(`window.deck.manageProfiles('describe',{id:${JSON.stringify(providerId)}})`);
 		assert.equal(described.credentialPresent, true); assert.ok(!JSON.stringify(described).includes(syntheticKey));
+		assert.deepEqual(described.pricing, config.pricing);
 		const denied = await evaluate("window.deck.manageProfiles('resolve',{}).then(()=>false,()=>true)"); assert.equal(denied, true);
 		const agent = await evaluate(`window.deck.workbench('agent',${JSON.stringify({ rootId: root.id, prompt: "Reply briefly. Do not use tools.", providerId, modelId: "fixture" })})`);
 		const requestedBy = Date.now() + 10000;
@@ -73,8 +75,13 @@ export async function runWorkbenchSmoke(driver) {
 		assert.equal(await evaluate(`window.deck.manageProfiles('remove',${JSON.stringify({ id: providerId, expectedRevision: saved.revision })}).then(()=>false,()=>true)`), true);
 		releaseResponse();
 		const completed = await settled(agent.id); assert.equal(completed.state, "succeeded", completed.error); assert.equal(completed.response, "fixture echo: [redacted]"); assert.equal(receivedAuthorization, true);
+		assert.deepEqual(completed.usage.tokens, { input: 90, output: 20, cacheRead: 10, cacheWrite: 0, totalTokens: 120, reasoning: 7 });
+		assert.equal(completed.usage.estimate.status, "estimated"); assert.ok(Math.abs(completed.usage.estimate.usd - 0.000385) < 1e-12);
+		accountedTask = agent.id; usageEvidence = completed.usage;
 		assert.ok(!JSON.stringify(completed).includes(syntheticKey));
-		await evaluate(`window.deck.manageProfiles('remove',${JSON.stringify({ id: providerId, expectedRevision: saved.revision })})`);
+		const repriced = await evaluate(`window.deck.manageProfiles('save',${JSON.stringify({ ...config, apiKey: "", pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, expectedRevision: saved.revision })})`);
+		assert.deepEqual((await request("task", { taskId: agent.id })).usage, usageEvidence);
+		await evaluate(`window.deck.manageProfiles('remove',${JSON.stringify({ id: providerId, expectedRevision: repriced.revision })})`);
 		assert.equal((await driver.api("profiles-manage", { action: "list" })).profiles.length, 0);
 	} finally { releaseResponse?.(); endpoint.closeAllConnections(); endpoint.close(); }
 	let rendered;
@@ -90,6 +97,8 @@ export async function runWorkbenchSmoke(driver) {
 	const settingsDeadline = Date.now() + 5000;
 	while (!(await evaluate("Boolean(document.querySelector('[role=dialog]')?.textContent.includes('添加模型服务'))"))) { assert.ok(Date.now() < settingsDeadline, "PROVIDER_SETTINGS_NOT_RENDERED"); await delay(50); }
 	assert.deepEqual(await evaluate("({workspaceInert:document.querySelector('.workspace').inert,overlay:document.body.dataset.deckOverlay,focusInside:document.querySelector('[role=dialog]').contains(document.activeElement),passwordAbsent:!document.querySelector('input[type=password]')})"), { workspaceInert: true, overlay: "settings", focusInside: true, passwordAbsent: true });
+	await evaluate("[...document.querySelectorAll('[role=dialog] button')].find(button=>button.textContent==='添加模型服务').click()");
+	assert.deepEqual(await evaluate("['输入价格','输出价格','缓存读取价格','缓存写入价格'].map(name=>document.querySelector('[aria-label='+name+']')?.value)"), ["", "", "", ""]);
 	await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
 	await delay(50);
 	assert.equal(await evaluate("Boolean(document.querySelector('[role=dialog]'))"), false);
@@ -133,6 +142,9 @@ export async function runWorkbenchSmoke(driver) {
 		await untilUi(async () => await evaluate(`[...document.querySelectorAll('.task-row')].some(row=>row.textContent.includes(${JSON.stringify(taskId.slice(0, 8))}))`), "M4_TASK_ROW");
 		await evaluate(`[...document.querySelectorAll('.task-row')].find(row=>row.textContent.includes(${JSON.stringify(taskId.slice(0, 8))})).click()`);
 	}
+	await showTask(accountedTask);
+	await untilUi(async () => await evaluate("document.querySelector('.output-panel [aria-label=模型用量与费用]')?.textContent.includes('120 tokens') && document.querySelector('.output-panel [aria-label=模型用量与费用]')?.textContent.includes('0.000385')"), "M6_USAGE_UI_NOT_RESTORED");
+	assert.deepEqual((await request("task", { taskId: accountedTask })).usage, usageEvidence);
 	await showTask(edit.id);
 	await untilUi(async () => await evaluate("[...document.querySelectorAll('.output-panel button')].some(button=>button.textContent==='打开原始差异')"), "M4_HISTORY_BUTTON");
 	await evaluate("[...document.querySelectorAll('.output-panel button')].find(button=>button.textContent==='打开原始差异').click()");
@@ -157,6 +169,7 @@ export async function runWorkbenchSmoke(driver) {
 	const proof = { runId: driver.runId, edited: true, checkExitCode: 0, checkStarts: 1, uiReloadDuringCheck: true, uiProcessReplaced: true, replacementHydrated: true, sameRuntime: true, draftRestored: true, editorRestored: true, historicalResultRestored: true, ipcWhitelistRejectsControlActions: true, protectedProfileRoundtrip: true, rendererCannotResolveCredential: true, profileMutationBlockedDuringTask: true, splitEchoRedacted: true, providerSettingsRenderAndDismiss: true, syntheticCredentialOnly: true, externalModelRequests: 0, noNodeInRenderer: true, visualCapture: capture.captured ? "captured" : "unavailable", gameCalls: 0, realDsp: "not_attached", physicalInput: "not_tested" };
 	Object.assign(proof, { originalDiffAfterCommit: true, crossRepositoryReference: true, referencePinsOldCommit: true, referenceSurvivesReload: true, historyPreservesUnsavedDraft: true, taskClickNavigatesToLog: true, navigationDoesNotRepeatCommand: true });
 	proof.supervisorTrayRetainedAcrossUiReplacement = true;
+	proof.modelUsage = { normalizedTokens: 120, reportedResponses: 1, estimatedUsd: usageEvidence.estimate.usd, priceSnapshotSurvivesReconfigurationAndRemoval: true, uiReloadAndReplacementRetainUsage: true, missingPriceInputsStayBlank: true, realModelRequests: 0 };
 	await driver.api("journal", { action: "stop", args: { id: journalId } });
 	const journal = await driver.api("journal", { action: "read", args: { id: journalId } });
 	assert.ok(journal.events.some(event => event.domain === "development" && event.facts.state === "running"));
