@@ -12,6 +12,8 @@ import { seedLegacyRecovery, readLegacyBaseRows } from "./legacy-recovery-fixtur
 import { seedPortableHistory } from "./portable-history-fixture.mjs";
 import { assertOwnedReadonlyFile, denyOwnedFileWrites, restoreOwnedFileWrites } from "./readonly-storage-fixture.mjs";
 import { assertOwnedAclReadonlyFile, denyOwnedAclFileWrites, restoreOwnedAclFileWrites, protectOwnedAclFixture, resetOwnedAclAutoFixture } from "./acl-storage-fixture.mjs";
+import { osStorageFailure } from "./os-storage-failure.mjs";
+import { startupBlockedStages } from "../apps/desktop/startup-progress.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url)), args = process.argv.slice(2), runId = randomUUID();
 const options = new Map();
@@ -47,6 +49,7 @@ try {
 		let exited = true, selectedFile, originalAccess, legacy, history; const stages = [];
 		async function launch(phase, expectedCode) {
 			exited = false;
+			console.log(JSON.stringify({ osStorageStage: "launch", kind, phase, fault }));
 			const child = spawn(join(copy, bundleExecutable), ["--portable-smoke"], { cwd: directory, env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] });
 			let output = "", timedOut = false; child.stdout.on("data", bytes => { output = (output + bytes).slice(-16384); }); child.stderr.on("data", bytes => { output = (output + bytes).slice(-16384); });
 			const timer = setTimeout(() => { timedOut = true; child.kill(); }, 90000); let code, signal;
@@ -59,7 +62,15 @@ try {
 				await writeFile(join(evidence, phase + "-process-observation.private.json"), JSON.stringify(observation)); remaining = observation.count;
 				if (remaining === 0) break; await new Promise(resolve => setTimeout(resolve, 200));
 			} while (performance.now() < deadline);
-			assert.equal(remaining, 0); exited = true; assert.equal(timedOut, false); assert.equal(code, expectedCode, "OS_STORAGE_APPLICATION_" + phase.toUpperCase() + "_FAILED");
+			const summary = osStorageFailure({ kind, phase, fault, code, expectedCode, timedOut, remaining, output }), progressExpected = expectedCode === 1 && manifest.files.some(file => file.path === "resources/app/apps/desktop/startup-progress.mjs"), progressConfirmed = !progressExpected || JSON.stringify(summary.startupStages) === JSON.stringify(startupBlockedStages);
+			if (remaining !== 0 || timedOut || code !== expectedCode || !progressConfirmed) {
+				const failure = { runId, controllerRevision, sourceRevision: manifest.sourceRevision, ...osStorageFailure({ kind, phase, fault, code, expectedCode, timedOut, remaining, output, progressConfirmed }) };
+				await writeFile(join(evidence, phase + "-failure.json"), JSON.stringify(failure), { flag: "wx" }); await writeFile(join(root, ".local", resultName + "-failure.json"), JSON.stringify(failure)); console.error(JSON.stringify(failure));
+			}
+			assert.equal(remaining, 0, "OS_STORAGE_PROCESS_EXIT_UNCONFIRMED_" + kind + "_" + phase); exited = true; assert.equal(timedOut, false, "OS_STORAGE_APPLICATION_TIMEOUT_" + kind + "_" + phase); assert.equal(code, expectedCode, "OS_STORAGE_APPLICATION_" + phase.toUpperCase() + "_FAILED");
+			assert.equal(progressConfirmed, true, "OS_STORAGE_STARTUP_PROGRESS_UNCONFIRMED_" + kind + "_" + phase);
+			console.log(JSON.stringify({ osStorageStage: "exited", kind, phase, fault, code }));
+			return summary.startupStages;
 		}
 		try {
 			if (kind === "legacy-game") { legacy = await seedLegacyRecovery(directory, caseId); selectedFile = legacy.file; }
@@ -84,7 +95,7 @@ try {
 			await writeFile(join(evidence, "os-denial.json"), JSON.stringify(denied), { flag: "wx" });
 			await writeFile(join(directory, "startup-failure-case.json"), JSON.stringify({ version: 1, runId: caseId, code: "STARTUP_STORAGE_UNAVAILABLE" }), { flag: "wx" });
 			for (const phase of ["blocked", "blocked-reopen"]) {
-				await launch(phase, 1);
+				const startupStages = await launch(phase, 1);
 				const proofBytes = await readFile(join(directory, "startup-blocked-proof.json")), proof = JSON.parse(proofBytes);
 				assert.equal(proof.runId, caseId); assert.equal(proof.code, "STARTUP_STORAGE_UNAVAILABLE");
 				for (const key of ["visibleBlockedWindow", "rendererNodeDisabled", "noPreloadBridge", "noPageScripts", "profileLockHeld", "usesRequestedPortableProfile"]) assert.equal(proof[key], true, key);
@@ -93,7 +104,7 @@ try {
 				const members = await readdir(dirname(selectedFile)); assert.ok(members.every(name => originalMembers.includes(name) || [basename(selectedFile) + "-wal", basename(selectedFile) + "-shm"].includes(name)), "UNEXPECTED_LEDGER_CREATED");
 				if (legacy) { const actual = readLegacyBaseRows(selectedFile); assert.equal(actual.version, 1); assert.deepEqual(actual.rows, legacy.rows); await assert.rejects(lstat(join(directory, "supervisor-profile/supervisor", "m1-smoke-" + caseId)), { code: "ENOENT" }); }
 				await writeFile(join(evidence, phase + "-application-proof.json"), proofBytes, { flag: "wx" }); await rename(join(directory, "startup-blocked-proof.json"), join(directory, phase + "-proof.retained.json"));
-				stages.push({ phase, blocked: true, independentExitObserved: true, originalLedgerSha256: bundleHash(before), originalLedgerBytesPreserved: true, ledgerMembers: members.map(name => name === basename(selectedFile) ? "database" : name.endsWith("-wal") ? "wal" : "shm") });
+				stages.push({ phase, blocked: true, startupStages, independentExitObserved: true, originalLedgerSha256: bundleHash(before), originalLedgerBytesPreserved: true, ledgerMembers: members.map(name => name === basename(selectedFile) ? "database" : name.endsWith("-wal") ? "wal" : "shm") });
 			}
 			const restoration = await access.restore({ root: directory, file: selectedFile, state: originalAccess }); originalAccess = undefined;
 			if (acl) { assert.equal(restoration.exactOriginalDaclRestored, true); assert.equal(restoration.ownerGroupPreserved, true); if (legacy) assert.equal(restoration.autoInheritedMetadataChanged, true); }

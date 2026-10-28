@@ -1,0 +1,8 @@
+import { startupBlockedStages, startupStagePrefix } from "../apps/desktop/startup-progress.mjs";
+
+const codes = ["STARTUP_STORAGE_UNAVAILABLE", "STARTUP_FAILED", "STARTUP_BLOCKED_WINDOW_FAILED", "GAME_LEDGER_SCHEMA_UNSUPPORTED", "GAME_LEDGER_SCHEMA_UNKNOWN", "WORKBENCH_SCHEMA_TOO_NEW", "WORKBENCH_SCHEMA_UNKNOWN", "PROFILE_LEDGER_EVIDENCE_MISSING", "PROFILE_LEDGER_GUARD_INVALID", "PROFILE_LEDGER_GUARD_UNSUPPORTED"];
+export function osStorageFailure({ kind, phase, fault, code, expectedCode, timedOut, remaining, output, progressConfirmed = true }) {
+	if (!["legacy-game", "workbench-history"].includes(kind) || !["fresh", "blocked", "blocked-reopen", "restored"].includes(phase) || !["windows-acl-write-deny", "windows-readonly-file-attribute"].includes(fault) || typeof timedOut !== "boolean" || typeof progressConfirmed !== "boolean" || ![0, 1].includes(expectedCode)) throw new Error("OS_STORAGE_FAILURE_SCOPE_INVALID");
+	const lines = typeof output === "string" ? output.slice(-16384).split(/\r?\n/) : [], stages = lines.filter(line => line.startsWith(startupStagePrefix)).map(line => line.slice(startupStagePrefix.length)).filter(stage => startupBlockedStages.includes(stage));
+	return { version: 1, kind, phase, fault, reason: remaining !== 0 ? "process_exit_unconfirmed" : timedOut ? "application_timeout" : code !== expectedCode ? "unexpected_exit" : !progressConfirmed ? "startup_progress_unconfirmed" : "none", code: Number.isSafeInteger(code) && code >= 0 && code <= 255 ? code : null, expectedCode, timedOut, ownedImagesRemaining: Number.isSafeInteger(remaining) && remaining >= 0 ? remaining : null, startupStages: stages, startupCodes: codes.filter(code => lines.some(line => line === code || line === "DESKTOP_SUPERVISOR_FAILED " + code)) };
+}

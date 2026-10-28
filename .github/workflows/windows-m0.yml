@@ -111,6 +111,8 @@ jobs:
             .local/packaged-storage-smoke.json
             .local/packaged-os-storage-smoke.json
             .local/packaged-acl-storage-smoke.json
+            .local/packaged-os-storage-failure.json
+            .local/packaged-acl-storage-failure.json
             .local/packaged-ledger-evidence-smoke.json
             .local/packaged-command-smoke.json
             .local/packaged-journal-interruption-smoke.json
