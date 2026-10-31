@@ -21,14 +21,14 @@ function resolveProfile(task, signal, taskType = "development") {
 		process.parentPort.postMessage({ type: "credential-request", id, taskId: task.id, providerId: task.provider, modelId: task.model, taskType });
 	});
 }
-function gameObservation(taskId, signal) {
+function gameObservation(taskId, signal, tool) {
 	if (!process.parentPort || signal.aborted) return Promise.reject(new Error("GAME_MODEL_STOPPED"));
 	const id = "game-read:" + randomUUID();
 	return new Promise((resolve, reject) => {
 		const finish = (value, code) => { gameReadPending.delete(id); clearTimeout(timer); signal.removeEventListener("abort", abort); code ? reject(new Error(code)) : resolve(value); };
-		const abort = () => finish(null, "GAME_MODEL_STOPPED"), timer = setTimeout(() => finish(null, "GAME_OBSERVATION_TIMEOUT"), 25000);
+		const abort = () => finish(null, "GAME_MODEL_STOPPED"), timer = setTimeout(() => finish(null, "GAME_OBSERVATION_TIMEOUT"), tool ? 150000 : 25000);
 		gameReadPending.set(id, finish); signal.addEventListener("abort", abort, { once: true });
-		process.parentPort.postMessage({ type: "game-read-request", id, taskId });
+		process.parentPort.postMessage({ type: "game-read-request", id, taskId, ...(tool ? { tool } : {}) });
 	});
 }
 export async function dispatchProbe(command, emit) {
@@ -51,15 +51,15 @@ export async function dispatchProbe(command, emit) {
 }
 if (process.parentPort) {
 	process.parentPort.on("message", async ({ data }) => {
-		if (data.type === "game-read-response") { gameReadPending.get(data.id)?.(data.value, data.ok === true ? null : "GAME_OBSERVATION_UNAVAILABLE"); return; }
+		if (data.type === "game-read-response") { gameReadPending.get(data.id)?.(data.value, data.ok === true ? null : /^[A-Z0-9_]{1,128}$/.test(data.code ?? "") ? data.code : "GAME_OBSERVATION_UNAVAILABLE"); return; }
 		if (data.type === "abort-game") { if (gameTaskId === data.taskId) gameController?.abort(); return; }
 		if (data.type === "game-planner") {
 			if (gameController || controller || !workbench || workbench.gameWritesFrozen || workbench.closing) { process.parentPort.postMessage({ type: "error", id: data.id, code: "GAME_RUNTIME_NOT_RESERVED" }); return; }
 			gameController = new AbortController(); gameTaskId = data.command.task.id; const active = gameController;
-			const timer = setTimeout(() => active.abort(), 300000);
+			const timer = setTimeout(() => active.abort(), data.command.task.scope.kind === "mcp-session" ? data.command.limits.durationMs : 300000);
 			try {
 				const { runGamePlanner } = await import("./game-agent.mjs");
-				const result = await runGamePlanner({ ...data.command, signal: active.signal, observe: () => gameObservation(gameTaskId, active.signal), event: (kind, value) => process.parentPort.postMessage({ type: "game-planner-event", taskId: gameTaskId, kind, value }), resolveProfile: (task, signal) => resolveProfile(task, signal, "game") });
+				const result = await runGamePlanner({ ...data.command, signal: active.signal, observe: () => gameObservation(gameTaskId, active.signal), invoke: (name, args) => gameObservation(gameTaskId, active.signal, { name, args }), event: (kind, value) => process.parentPort.postMessage({ type: "game-planner-event", taskId: gameTaskId, kind, value }), resolveProfile: (task, signal) => resolveProfile(task, signal, "game") });
 				process.parentPort.postMessage({ type: "result", id: data.id, result });
 			} catch (error) { process.parentPort.postMessage({ type: "error", id: data.id, code: /^[A-Z0-9_]+$/.test(error.message) ? error.message : "GAME_MODEL_FAILED" }); }
 			finally { clearTimeout(timer); gameController = null; gameTaskId = null; }

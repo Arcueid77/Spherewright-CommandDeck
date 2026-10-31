@@ -65,6 +65,7 @@ jobs:
       - run: npm run test:gateway
       - run: npm run test:observation
       - run: npm run test:game
+      - run: npm run test:game-native
       - run: npm run test:runtime-loss
       - run: npm run test:game-runtime-loss
       - run: npm run test:game-runtime-accepted

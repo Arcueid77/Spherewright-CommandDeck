@@ -95,7 +95,7 @@ const gameSmoke = smoke && (process.argv.includes("--smoke-game") || Boolean(por
 const fixtureProvider = gameSmoke || developmentUsageCase ? syntheticProviderScope({ multipleApis: developmentUsageCase?.multipleProviders === true }) : null;
 const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureContext.root, "runtime-fixtures/m3-smoke", gameFixtureContext.runId) : undefined;
 const gatewayFixtureDirectory = gatewayCase ? join(portableContext.root, "runtime-fixtures/gateway", portableContext.runId) : undefined;
-const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { ...(gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}), mecha: Boolean(gatewaySmoke) }) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
+const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: process.argv.includes("--smoke-game-native") ? "generic" : storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { ...(gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}), mecha: Boolean(gatewaySmoke) }) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
@@ -287,11 +287,11 @@ function registerFixtureProvider(...args) {
 }
 function runGamePlanner(command) {
 	if (!workbenchReady || runtimeExit?.exited) return Promise.reject(new Error("GAME_RUNTIME_UNAVAILABLE"));
-	const id = "game-planner:" + randomUUID(), { signal, observe, event, ...data } = command;
+	const id = "game-planner:" + randomUUID(), { signal, observe, invoke, event, ...data } = command;
 	return new Promise((resolve, reject) => {
 		const abort = () => { if (!runtimeExit?.exited) runtime?.postMessage({ type: "abort-game", taskId: data.task.id }); };
 		const finish = (value, error) => { signal.removeEventListener("abort", abort); error ? reject(error) : resolve(value); };
-		const timer = setTimeout(() => { runtimePending.delete(id); abort(); finish(null, new Error("GAME_RUNTIME_RESPONSE_TIMEOUT")); }, 310000);
+		const timer = setTimeout(() => { runtimePending.delete(id); abort(); finish(null, new Error("GAME_RUNTIME_RESPONSE_TIMEOUT")); }, data.task.scope.kind === "mcp-session" ? data.limits.durationMs + 10000 : 310000);
 		runtimePending.set(id, { timer, resolve: (value) => finish(value), reject: (error) => finish(null, error) });
 		signal.addEventListener("abort", abort, { once: true });
 		runtime.postMessage({ type: "game-planner", id, command: { ...data, directory: join(privateDirectory, smoke ? "game-agent-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID : "game-agent") } });
@@ -961,7 +961,7 @@ if (!app.hasSingleInstanceLock()) {
 			runtime.stderr.on("data", () => {});
 			runtime.on("message", (message) => {
 				if (message.type === "game-read-request") {
-					void (async () => { try { if (typeof message.id !== "string" || !/^game-read:[0-9a-f-]{36}$/.test(message.id)) throw new Error("INVALID_GAME_READ"); const value = await game.observeForModel(message.taskId); runtime.postMessage({ type: "game-read-response", id: message.id, ok: true, value }); } catch { runtime.postMessage({ type: "game-read-response", id: message.id, ok: false }); } })().catch(() => {});
+					void (async () => { try { if (typeof message.id !== "string" || !/^game-read:[0-9a-f-]{36}$/.test(message.id)) throw new Error("INVALID_GAME_READ"); const value = message.tool ? await game.callForModel(message.taskId, message.tool.name, message.tool.args) : await game.observeForModel(message.taskId); runtime.postMessage({ type: "game-read-response", id: message.id, ok: true, value }); } catch (error) { runtime.postMessage({ type: "game-read-response", id: message.id, ok: false, code: /^[A-Z0-9_]{1,128}$/.test(error.message) ? error.message : "GAME_OBSERVATION_UNAVAILABLE" }); } })().catch(() => {});
 					return;
 				}
 				if (message.type === "game-planner-event") { try { game.plannerEvent(message.taskId, message.kind, message.value); } catch { runtime.postMessage({ type: "abort-game", taskId: message.taskId }); } return; }

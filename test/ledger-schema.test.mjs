@@ -51,7 +51,7 @@ test("a malformed v1 game ledger is rejected without creating v2 tables or promo
 
 test("unexpected legacy metadata and malformed current metadata are rejected before journal or migration writes", async t => {
 	const directory = await fixture(t);
-	for (const version of [1, 2]) {
+	for (const version of [1, 2, 3]) {
 		const file = join(directory, "game-" + version + ".sqlite"); seedLegacy(file); const database = new DatabaseSync(file);
 		database.exec("CREATE TABLE game_task_details(task_id TEXT); CREATE TABLE game_task_events(sequence INTEGER,task_id TEXT,kind TEXT,body TEXT); PRAGMA user_version=" + version); database.close();
 		const before = await readFile(file), ports = options(); assert.throws(() => new GameIntentLedger(file, ports.value)); assert.deepEqual(await readFile(file), before); assert.equal(ports.calls(), 0);

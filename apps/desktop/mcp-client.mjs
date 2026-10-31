@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { researchDefinitions, supportedResearchTool, validResearchArguments, researchPlaybookUri } from "./research-contract.mjs";
 import { McpPerformance } from "./mcp-performance.mjs";
 import { observationLimits } from "./observation-policy.mjs";
+import { spherewrightCatalog, validSpherewrightArguments } from "./spherewright-tool-catalog.mjs";
 
 const definitions = {
 	spherewright_get_status: {}, spherewright_get_session_state: {},
@@ -57,6 +58,7 @@ export function launchMcp(selection, { descriptorPath, researchAuthority, observ
 export class ReadOnlyMcpClient {
 	#pending = new Map(); #sequence = 0; #buffer = ""; #tools = new Map(); #stage = "new"; #discoveryDeadline = Infinity;
 	#researchTools = new Set(); #researchAuthority; #hasPlaybook = false;
+	#gameTools = new Map();
 	#performance;
 	#observation; #observationStarted; #observationTools = 0; #observationTimer = null; #stopReason = null;
 	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000, researchAuthority, startedAt, observation } = {}) {
@@ -151,10 +153,25 @@ export class ReadOnlyMcpClient {
 		for (const tool of tools) { if (typeof tool?.name !== "string" || names.has(tool.name)) throw new Error("MCP_DUPLICATE_OR_INVALID_TOOL"); names.add(tool.name); if (supportedReadTool(tool)) accepted.set(tool.name, tool); if (supportedResearchTool(tool)) research.add(tool.name); }
 		this.#tools = accepted; this.#stage = "ready";
 		this.#researchTools = research; this.#hasPlaybook = resources.filter((value) => value?.uri === researchPlaybookUri).length === 1;
+		this.#gameTools = spherewrightCatalog(tools);
 		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: !this.#observation && this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
+		this.metadata.gameAvailable = !this.#observation && this.#hasPlaybook && ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result"].every(name => this.#gameTools.has(name));
+		this.metadata.gameToolCount = this.#gameTools.size;
 		return this.metadata;
 	}
 	supports(name) { return !this.closed && this.#stage === "ready" && this.#tools.has(name); }
+	gamePort(authority) {
+		if (!this.#researchAuthority || authority !== this.#researchAuthority || this.closed || this.#stage !== "ready" || !this.metadata.gameAvailable) throw new Error("TRUSTED_GAME_CAPABILITY_REQUIRED");
+		return Object.freeze({
+			tools: () => [...this.#gameTools.values()].map(({ tool, kind, family }) => ({ ...structuredClone(tool), kind, family })),
+			valid: (name, args) => validSpherewrightArguments(this.#gameTools.get(name), args),
+			call: (name, args) => {
+				if (this.closed || !validSpherewrightArguments(this.#gameTools.get(name), args)) { this.stats.rejectedCalls++; return Promise.reject(new Error("GAME_MCP_CALL_NOT_SUPPORTED")); }
+				return this.#callTool(name, args);
+			},
+			playbook: async () => { const reply = await this.#request("resources/read", { uri: researchPlaybookUri }); if (reply?.contents?.length !== 1 || reply.contents[0].uri !== researchPlaybookUri || typeof reply.contents[0].text !== "string" || reply.contents[0].text.length > 262144) throw new Error("GAME_PLAYBOOK_INVALID"); return reply.contents[0].text; },
+		});
+	}
 	async read(name, args = {}) {
 		if (!this.supports(name) || !validArguments(name, args)) { this.stats.rejectedCalls++; throw new Error("MCP_READ_NOT_SUPPORTED"); }
 		return this.#callTool(name, args);

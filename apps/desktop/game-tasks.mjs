@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { GameIntentLedger } from "./game-intent-ledger.mjs";
 import { ResearchAdapter } from "./research-adapter.mjs";
 import { positive, opaque } from "./research-contract.mjs";
+import { SpherewrightGameSession, gameContext, gameSessionLimits, readMcpAction } from "./spherewright-game-session.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]{1,128}$/.test(error?.message) ? error.message : "GAME_TASK_FAILED";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -41,8 +42,9 @@ export class GameTasks {
 	}
 	snapshot() {
 		const tasks = this.ledger.tasks();
+		if (this.currentTaskId && !tasks.some(task => task.id === this.currentTaskId)) tasks.unshift({ ...this.ledger.task(this.currentTaskId), details: this.ledger.detailsFor(this.currentTaskId), intent: null });
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
-		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog };
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, awaitingConfirmation: Boolean(this.mcpSession?.pending), expiresAt: this.mcpSession?.pending?.plan.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
 	}
 	#note(kind, value) { if (this.currentTaskId) this.ledger.note(this.currentTaskId, kind, value); this.emit(); }
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
@@ -63,14 +65,14 @@ export class GameTasks {
 		});
 		this.emit(); return this.snapshot();
 	}
-	async #reserve() {
+	async #reserve(generic = false) {
 		this.#requireStorage();
 		if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
 		if (this.closing) throw new Error("GAME_TASK_STOPPED");
 		this.#requireStorage();
 		if (!this.bridgeLease) {
-			this.bridgeLease = this.bridge.acquireResearch(this.#authority);
-			this.adapter = new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now });
+			this.bridgeLease = generic ? this.bridge.acquireGame(this.#authority) : this.bridge.acquireResearch(this.#authority);
+			this.adapter = generic ? null : new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now });
 		}
 	}
 	async #release() {
@@ -83,13 +85,14 @@ export class GameTasks {
 		if (!details?.cohortHash || !details.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
 		if (!this.bridgeLease) {
 			if (!this.#reconnectOriginal) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE");
-			this.#reconnectOriginal = false; await this.#reserve();
+			this.#reconnectOriginal = false; await this.#reserve(request.generic === true);
 		} else if (this.bridgeLease.client.closed) {
 			if (!this.#reconnectOriginal) throw new Error("ORIGINAL_MCP_DISCONNECTED");
 			this.#reconnectOriginal = false;
 			this.bridgeLease = await this.bridge.reconnectResearch(this.bridgeLease, details); this.adapter = null;
 		}
 		if (details.cohortHash !== this.bridgeLease.selection.cohortHash || details.schemaHash !== this.bridgeLease.client.metadata.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
+		if (request.generic === true) return readMcpAction(this.bridgeLease.client.gamePort(this.#authority), request);
 		this.adapter = new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now, recoveryOnly: true });
 		return this.adapter.readResearchProof(request);
 	}
@@ -106,6 +109,7 @@ export class GameTasks {
 		});
 	}
 	start(args) {
+		if (args?.kind === "mcp") return this.startMcp(args);
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
 		if (!args || !["observe", "assist"].includes(args.mode) || !positive(args.techId) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || args.prompt.length > 2000) throw new Error("INVALID_GAME_TASK");
@@ -129,6 +133,33 @@ export class GameTasks {
 			this.#stage("preparing"); await this.ledger.prepare(task.id); this.#notStopped(); this.#stage("awaiting_approval");
 		});
 	}
+	startMcp(args) {
+		this.#requireRuntime();
+		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
+		if (!["observe", "assist"].includes(args?.mode) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 2000 || Object.keys(args).some(key => !["kind", "mode", "providerId", "modelId", "prompt", "limits"].includes(key))) throw new Error("INVALID_GAME_TASK");
+		const limits = gameSessionLimits(args.limits); if (args.mode === "observe") limits.writes = 0;
+		this.currentTaskId = null; this.controller = new AbortController(); this.#confirmations.clear();
+		return this.#launch("observing", async () => {
+			await this.#reserve(true); this.#notStopped();
+			const port = this.bridgeLease.client.gamePort(this.#authority), context = await gameContext(port), playbook = await port.playbook(); this.#notStopped();
+			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
+			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", limits }); this.currentTaskId = task.id;
+			this.ledger.details(task.id, { ...binding, mode: args.mode, techName: "Spherewright MCP 任务", prompt: args.prompt, provider: args.providerId, model: args.modelId });
+			this.mcpSession = new SpherewrightGameSession({ port, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
+			const timer = setTimeout(() => this.controller.abort(), limits.durationMs);
+			try {
+				this.#stage("planning");
+				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, nativeTools: this.mcpSession.tools(), limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
+				this.#notStopped();
+				if (this.ledger.unresolved().length) this.#stage("reconciling");
+				else { this.ledger.advised(task.id); this.#stage("advised"); }
+			} finally { clearTimeout(timer); this.mcpSession.close(); this.mcpSession = null; }
+		});
+	}
+	async callForModel(taskId, name, args) {
+		if (!this.mcpSession || taskId !== this.currentTaskId || !this.operation || this.phase !== "planning") throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
+		return this.mcpSession.call(name, args);
+	}
 	async observeForModel(taskId) {
 		if (this.phase !== "planning" || taskId !== this.currentTaskId || !this.operation || !this.adapter) throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
 		this.#notStopped();
@@ -139,12 +170,13 @@ export class GameTasks {
 	profileTask(taskId) {
 		this.#requireStorage();
 		if (this.phase !== "planning" || taskId !== this.currentTaskId || !this.operation || this.closing || this.controller?.signal.aborted) throw new Error("PROTECTED_PROFILE_REQUEST_REJECTED");
-		const task = this.ledger.tasks().find((value) => value.id === taskId);
-		return { id: taskId, kind: "agent", state: "running", provider: task.details.provider, model: task.details.model };
+		const details = this.ledger.detailsFor(taskId);
+		return { id: taskId, kind: "agent", state: "running", provider: details.provider, model: details.model };
 	}
 	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.operation && (["usage", "context"].includes(kind) || this.phase === "planning" && !this.closing && !this.controller?.signal.aborted)) { try { this.#note(kind, value); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); } } }
 	confirmation(taskId, uiEpoch) {
 		this.#requireRuntime();
+		if (this.mcpSession && taskId === this.currentTaskId && this.phase === "awaiting_approval") return { ...this.mcpSession.confirmation(uiEpoch), syntheticOnly: this.syntheticOnly };
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || taskId !== this.currentTaskId || !Number.isSafeInteger(uiEpoch) || uiEpoch <= 0) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
 		const task = this.ledger.task(taskId);
 		if (task.state !== "awaiting_approval" || task.expiresAt <= this.now()) throw new Error("FRESH_RESEARCH_PREVIEW_REQUIRED");
@@ -162,6 +194,7 @@ export class GameTasks {
 	confirm(authority, nonce, uiEpoch) {
 		if (authority !== this.hostApproval) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED");
 		this.#requireRuntime();
+		if (this.mcpSession && this.phase === "awaiting_approval") { try { return this.mcpSession.confirm(nonce, uiEpoch); } catch (error) { this.#latchStorageFault(); throw error; } }
 		const challenge = this.#confirmations.get(nonce); this.#confirmations.delete(nonce);
 		if (!challenge || this.closing || this.operation || challenge.uiEpoch !== uiEpoch || challenge.taskId !== this.currentTaskId || challenge.expiresAt <= this.now() || this.phase !== "awaiting_approval") throw new Error("FRESH_RESEARCH_APPROVAL_REQUIRED");
 		return this.#launch("confirming", async () => {
@@ -177,6 +210,7 @@ export class GameTasks {
 		});
 	}
 	invalidateUi(uiEpoch) {
+		if (this.mcpSession?.pending?.uiEpoch === uiEpoch) this.mcpSession.cancelApproval();
 		for (const [nonce, value] of this.#confirmations) if (value.uiEpoch === uiEpoch) this.#confirmations.delete(nonce);
 		if (this.phase === "confirming" && !this.ledger.unresolved().length) { this.controller?.abort(); if (this.currentTaskId) this.ledger.stop(this.currentTaskId); }
 	}

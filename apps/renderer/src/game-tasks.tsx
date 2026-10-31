@@ -4,8 +4,8 @@ import { profileToken, type Profile } from "./providers";
 import { ModelUsage, type Usage, type ModelContext } from "./model-usage";
 
 type Intent = { intentId: string; taskId: string; state: string; actionId: string | null; terminal: { beforeQueue: number[]; afterQueue: number[]; freshQueue: number[]; completedAtGameTick: number } | null };
-type Task = { id: string; state: string; expiresAt: number | null; scope: { techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; provider?: string; model?: string; usage?: Usage; context?: ModelContext }; intent: Intent | null };
-type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
+type Task = { id: string; state: string; expiresAt: number | null; scope: { kind?: string; actionKind?: string; techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; prompt?: string; provider?: string; model?: string; usage?: Usage; context?: ModelContext }; intent: Intent | null };
+type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; mcp?: { available: boolean; tools: number; awaitingConfirmation: boolean; expiresAt: number | null; submissions: number }; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
 type Context = { state: GameState; profiles: Profile[]; healthy: boolean; busy: boolean; notice: string; act: (action: string, args?: Record<string, unknown>) => Promise<void>; confirm: (taskId: string) => Promise<void> };
 const Context = createContext<Context>(null!);
 const phases: Record<string, string> = { idle: "等待任务", reading_catalog: "读取科研列表", catalog_ready: "科研列表已读取", observing: "读取现场", planning: "Agent 正在分析", preparing: "原生预检中", awaiting_approval: "等待你确认", confirming: "核对确认与现场", accepted: "游戏已受理", reconciling: "核对原动作", completed: "队列变化已核对", advised: "只读建议已完成", blocked: "等待核销", failed: "本次未完成", cancelled: "后续执行已停止" };
@@ -38,6 +38,21 @@ export function GameTasksProvider({ children }: { children: ReactNode }) {
 	return <Context.Provider value={{ state, profiles, healthy, busy, notice, act: (action, args = {}) => run(() => window.deck.game(action, args)), confirm: (taskId) => run(() => window.deck.confirmResearch(taskId)) }}>{children}</Context.Provider>;
 }
 
+function McpGameForm() {
+	const c = useContext(Context), state = c.state;
+	const [model, setModel] = useState(""), [mode, setMode] = useState("observe"), [prompt, setPrompt] = useState(""), [writes, setWrites] = useState(32), [minutes, setMinutes] = useState(15);
+	const profile = c.profiles.find(value => profileToken(value) === model);
+	const locked = !c.healthy || state.systemPaused || !state.runtimeAvailable || !state.storageAvailable || state.readOnlyObservation || state.busy || state.developmentFrozen || state.unresolved.length > 0;
+	return <section aria-label="Spherewright MCP 游戏任务"><h3>通过 Spherewright 执行任务</h3><p>复用所选服务的原生工具。观察模式只读；协助模式每次提交都需确认，并保留原动作记录。</p><form className="mcp-game-form" onSubmit={event => { event.preventDefault(); if (profile) void c.act("start", { kind: "mcp", mode, prompt, providerId: profile.providerId, modelId: profile.modelId, limits: { modelRequests: 32, toolCalls: 256, writes: mode === "observe" ? 0 : writes, durationMs: minutes * 60000 } }); }}><fieldset disabled={locked}>
+		<label>运行方式<select aria-label="MCP 游戏任务模式" value={mode} onChange={event => setMode(event.target.value)}><option value="observe">观察与建议</option><option value="assist">协助执行 · 每次提交确认</option></select></label>
+		<label>模型<select aria-label="MCP 游戏 Agent 模型" value={model} onChange={event => setModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map(value => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
+		<label>游戏目标<textarea aria-label="MCP 游戏任务目标" value={prompt} onChange={event => setPrompt(event.target.value)} required maxLength={2000} rows={3} /></label>
+		<label>本轮分钟数<input aria-label="MCP 任务分钟上限" type="number" min={1} max={120} value={minutes} onChange={event => setMinutes(Number(event.target.value))} /></label>
+		{mode === "assist" && <label>最多提交次数<input aria-label="MCP 任务提交上限" type="number" min={1} max={256} value={writes} onChange={event => setWrites(Number(event.target.value))} /></label>}
+		<button className="accent" disabled={!profile || !prompt.trim() || !state.mcp?.available}>开始游戏任务</button>
+	</fieldset></form><p className="muted">已发现可用工具 {state.mcp?.tools ?? 0} 项。本轮最多32次模型请求、256次工具调用；到限结束。导入、恢复和解除隔离仍使用各自独立授权流程。</p></section>;
+}
+
 export function GameTasksPanel() {
 	const c = useContext(Context), bridge = useBridge().state, state = c.state;
 	const [model, setModel] = useState(""), [mode, setMode] = useState("assist"), [tech, setTech] = useState(""), [prompt, setPrompt] = useState("分析这项科技是否适合现在加入科研队列，并说明原因。");
@@ -47,8 +62,10 @@ export function GameTasksPanel() {
 	const ready = c.healthy && !state.systemPaused && state.runtimeAvailable && state.storageAvailable && !state.readOnlyObservation && bridge.metadata?.researchAvailable && bridge.observation?.connected && observedSession?.state === "observed" && observedSession.data?.gameLoaded && observedSession.data.owned && !observedSession.data.accessRestricted;
 	const expired = task?.expiresAt !== null && task?.expiresAt !== undefined && task.expiresAt <= Date.now();
 	const catalogFresh = state.catalog && state.catalog.expiresAt > Date.now();
-	return <div className="panel game-tasks-panel"><div className="eyebrow">BOUNDED GAME TASK</div><h2>游戏 Agent</h2><p>先从一项指定科技开始：Agent 读取科研状态并提出建议，你确认后正常入队，随后核对原动作和队列。</p>
+	const generic = task?.scope.kind === "mcp-session" || task?.scope.kind === "mcp-action";
+	return <div className="panel game-tasks-panel"><div className="eyebrow">BOUNDED GAME TASK</div><h2>游戏 Agent</h2><p>直接使用 Spherewright 的 MCP 能力，由原生预检决定可执行范围。</p>
 		{state.syntheticOnly && <p className="notice">合成验收 · NO DSP · 只操作替身</p>}
+		<McpGameForm />
 		<details className="game-task-settings" open={!task}><summary>{task ? "新任务设置" : "本次任务设置"}</summary><form onSubmit={(event) => { event.preventDefault(); if (profile && catalogFresh) void c.act("start", { mode, techId: Number(tech), catalogId: state.catalog!.id, prompt, providerId: profile.providerId, modelId: profile.modelId }); }}>
 			<fieldset disabled={!c.healthy || state.systemPaused || !state.runtimeAvailable || !state.storageAvailable || c.busy || locked || state.readOnlyObservation}><label>运行方式<select aria-label="游戏任务模式" value={mode} onChange={(event) => setMode(event.target.value)}><option value="observe">观察与建议</option><option value="assist">协助执行 · 每项确认</option><option disabled value="autonomous">有界自主 · 待输入协调验收</option></select></label>
 			<label>模型<select aria-label="游戏 Agent 模型" value={model} onChange={(event) => setModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map((value) => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
@@ -57,13 +74,14 @@ export function GameTasksPanel() {
 			<button className="accent" disabled={!ready || !catalogFresh || !profile || !state.catalog?.items.some((value) => value.techId === Number(tech))}>开始分析</button></fieldset>
 		</form>
 		{!ready && <p className="muted">请在“只读舰桥”连接兼容服务，并在游戏中准备可操作的 Spherewright 自有世界。</p>}</details>
-		<div className="game-task-stage" role="status">{state.phase === "runtime_unavailable" ? "Agent 运行时已停止" : phases[state.phase] ?? state.phase}{state.developmentFrozen ? " · 开发写入与构建已冻结" : ""}</div>
+		<div className="game-task-stage" role="status">{state.phase === "runtime_unavailable" ? "Agent 运行时已停止" : generic && state.phase === "advised" ? "本轮 Agent 已结束" : phases[state.phase] ?? state.phase}{state.developmentFrozen ? " · 开发写入与构建已冻结" : ""}</div>
 		{c.healthy && !state.runtimeAvailable && <p className="notice">Agent 运行时已停止，新执行暂停。原动作与回执保留；核对后请重新打开工作台。</p>}
 		{!c.healthy && <p className="notice">控制连接尚未确认。原任务不视为已停止，恢复连接后先核对状态。</p>}
 		{state.error && <p className="notice">{errors[state.error] ?? "本次任务未能完成，原因保留在下方记录。"}<small>{state.error}</small></p>}
 		{c.notice && <p className="notice">{c.notice}</p>}
 		{state.phase === "idle" && task && ["preparing", "awaiting_approval", "approved"].includes(task.state) && <p className="muted">上次预检已失效，请重新分析；旧票据和确认不会恢复。</p>}
-		{task && <><h3>{task.details.techName || "指定科技"} #{task.scope.techId}</h3><p className="data-scope">星球 #{task.scope.planetId} · 初次观察 tick {task.scope.capturedAtGameTick}<br />{task.details.model} · {task.details.mode === "observe" ? "只读建议" : "最多一次正常入队"}</p>
+		{generic && task && <section className="game-task-receipt"><h3>{task.details.techName || task.scope.actionKind || "Spherewright MCP 任务"}</h3><p>{task.details.prompt}</p><p className="muted">原生终态证明单次动作结束；目标产量仍需现场观测。</p><div className="actions"><button className="accent" disabled={!c.healthy || state.systemPaused || c.busy || !state.mcp?.awaitingConfirmation || (state.mcp.expiresAt ?? 0) <= Date.now()} onClick={() => void c.confirm(task.id)}>核对并确认本次操作</button><button disabled={!c.healthy || c.busy || !locked} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button></div></section>}
+		{task && !generic && <><h3>{task.details.techName || "指定科技"} #{task.scope.techId}</h3><p className="data-scope">星球 #{task.scope.planetId} · 初次观察 tick {task.scope.capturedAtGameTick}<br />{task.details.model} · {task.details.mode === "observe" ? "只读建议" : "最多一次正常入队"}</p>
 			<div className="actions"><button className="accent" disabled={!c.healthy || state.systemPaused || c.busy || state.busy || state.phase !== "awaiting_approval" || expired} onClick={() => void c.confirm(task.id)}>核对并确认入队</button>{state.phase === "awaiting_approval" && <button disabled={!c.healthy || state.systemPaused || c.busy || state.busy} onClick={() => void c.act("reprepare")}>{expired ? "预检已过期 · 重新预检" : "重新预检"}</button>}<button disabled={!c.healthy || c.busy || !locked} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button></div>
 			{task.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前：{task.intent.terminal.beforeQueue.map((id) => `#${id}`).join(" → ") || "空"}<br />之后：{task.intent.terminal.afterQueue.map((id) => `#${id}`).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">这证明正常入队与读回，科技研究完成需继续观察。</p></div>}
 		</>}
@@ -74,6 +92,6 @@ export function GameTasksPanel() {
 			return <Entry key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</Entry>;
 		})}</section>}
 		<p className="muted">游戏输入互斥尚未验收。“停止后续”会冻结新提交，已受理的动作继续核销；窗口焦点变化不表示动作已取消。</p>
-		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <details key={value.id}><summary>#{value.scope.techId} · {phases[value.state] ?? value.state}</summary><ModelUsage value={value.details.usage} context={value.details.context} /></details>)}</details>}
+		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <details key={value.id}><summary>{value.scope.kind?.startsWith("mcp-") ? value.scope.actionKind || "MCP 任务" : `#${value.scope.techId}`} · {value.scope.kind === "mcp-session" && value.state === "advised" ? "本轮已结束" : phases[value.state] ?? value.state}</summary><ModelUsage value={value.details.usage} context={value.details.context} /></details>)}</details>}
 	</div>;
 }

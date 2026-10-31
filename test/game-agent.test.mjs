@@ -28,6 +28,13 @@ async function fixture(t, respond, { maxTokens = 1024, pricing } = {}) {
 const call = (name, args, id = "tool-fixture") => [{ role: "assistant", tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }];
 
 const reportedUsage = { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 7 } };
+
+test("pinned Pi directly receives discovered Spherewright schemas and invokes native tools without research wrappers", async t => {
+	const name = "spherewright_get_recipe_catalog", invoked = [];
+	const f = await fixture(t, (_data, index) => index === 1 ? call(name, {}) : [{ content: "已读取原生配方；没有执行游戏写入。" }]);
+	const result = await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name, description: "Read the native recipe catalog", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } }], limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async (tool, args) => { invoked.push({ tool, args }); return { success: true, result: { items: [{ itemId: 1001 }] } }; } });
+	assert.deepEqual(result.tools, [name]); assert.deepEqual(invoked, [{ tool: name, args: {} }]); assert.deepEqual(f.seen[0].tools.map(tool => tool.function.name), [name]); assert.equal(result.requestCount, 2); assert.equal(Object.hasOwn(result, "gameCommits"), false);
+});
 test("real Pi normalized stream usage is captured once per response with explicit prices and unknown missing reports", async t => {
 	const f = await fixture(t, (_data, index) => index === 1 ? { deltas: call("observe_research", {}), usage: reportedUsage } : { deltas: [{ content: "只读建议。" }] }, { pricing: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 } });
 	const result = await f.run({ mode: "observe" });

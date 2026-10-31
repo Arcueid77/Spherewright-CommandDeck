@@ -54,6 +54,12 @@ export class BridgeMonitor {
 		const client = this.telemetry.client; client.researchPort(authority);
 		const lease = Object.freeze({ client, selection: this.selection }); this.researchLease = lease; return lease;
 	}
+	acquireGame(authority) {
+		if (this.systemPaused) throw new Error("SYSTEM_POWER_PAUSED");
+		if (!this.researchAuthority || authority !== this.researchAuthority || this.closing || this.operation || this.researchLease || !this.telemetry || this.telemetry.client.closed || !this.metadata?.gameAvailable) throw new Error("GAME_BRIDGE_UNAVAILABLE");
+		const client = this.telemetry.client; client.gamePort(authority);
+		const lease = Object.freeze({ client, selection: this.selection, generic: true }); this.researchLease = lease; return lease;
+	}
 	reconnectResearch(lease, binding) {
 		if (this.systemPaused) return Promise.reject(new Error("SYSTEM_POWER_PAUSED"));
 		if (this.closing) return Promise.reject(new Error("BRIDGE_MONITOR_CLOSING"));
@@ -63,10 +69,10 @@ export class BridgeMonitor {
 		// reconnect and polling remain excluded; the old child's exit is confirmed first.
 		return this.#operate(async () => {
 			await this.#disconnect(); this.error = null; await this.#connect();
-			if (this.closing || this.metadata.schemaHash !== binding.schemaHash || !this.metadata.researchAvailable) {
+			if (this.closing || this.metadata.schemaHash !== binding.schemaHash || !(lease.generic ? this.metadata.gameAvailable : this.metadata.researchAvailable)) {
 				await this.#disconnect(); throw new Error(this.closing ? "BRIDGE_MONITOR_CLOSING" : "ORIGINAL_MCP_COHORT_REQUIRED");
 			}
-			const replacement = Object.freeze({ client: this.telemetry.client, selection: this.selection, recoveryOnly: true });
+			const replacement = Object.freeze({ client: this.telemetry.client, selection: this.selection, recoveryOnly: true, ...(lease.generic ? { generic: true } : {}) });
 			this.researchLease = replacement; return replacement;
 		});
 	}

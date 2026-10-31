@@ -69,6 +69,7 @@ await writeFile(join(app, "package.json"), JSON.stringify(desktopPackageMetadata
 await copyBundleTree(join(root, "apps/desktop"), join(app, "apps/desktop"));
 await mkdir(join(app, "test/fixtures"), { recursive: true });
 await copyBundleTree(join(root, "test/fixtures/research-mcp-server.mjs"), join(app, "test/fixtures/research-mcp-server.mjs"));
+await copyBundleTree(join(root, "test/fixtures/game-mcp-server.mjs"), join(app, "test/fixtures/game-mcp-server.mjs"));
 await copyBundleTree(join(root, "test/fixtures/mcp-server.mjs"), join(app, "test/fixtures/mcp-server.mjs"));
 await copyBundleTree(join(root, "test/fixtures/runtime-performance.mjs"), join(app, "test/fixtures/runtime-performance.mjs"));
 await copyBundleTree(join(root, "dist/renderer"), join(app, "dist/renderer"));

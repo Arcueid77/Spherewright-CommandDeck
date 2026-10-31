@@ -14,15 +14,16 @@ import { preparePortableFixtureDirectory, createSyntheticResearchWorld, syntheti
 
 export function gameFixtureOptions(root, runId, { mode = "normal", directory = join(root, ".local/m3-smoke", runId) } = {}) {
 	if (!/^[0-9a-f-]{36}$/.test(runId ?? "")) throw new Error("EXPLICIT_GAME_SMOKE_REQUIRED");
-	assert.ok(["normal", "pending", "storage-normal", ...mcpLossModes].includes(mode));
+	assert.ok(["normal", "pending", "storage-normal", "generic", ...mcpLossModes].includes(mode));
 	const marker = join(directory, "Spherewright.Mcp.exe");
 	return {
 		async fingerprint(path) { assert.equal(await realpath(path), await realpath(marker)); const bytes = await readFile(marker); assert.equal(bytes.toString(), "OWNED_M3_SYNTHETIC_FIXTURE"); return { path: marker, cohortHash: createHash("sha256").update(bytes).digest("hex"), fileCount: 1 }; },
-		launch(_selection, { researchAuthority }) { const persistent = mode === "storage-normal" || mcpLossModes.includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, "test/fixtures/research-mcp-server.mjs"), mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
+		launch(_selection, { researchAuthority }) { const persistent = mode === "storage-normal" || mcpLossModes.includes(mode), env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" }; return new ReadOnlyMcpClient(spawn(process.execPath, [join(root, mode === "generic" ? "test/fixtures/game-mcp-server.mjs" : "test/fixtures/research-mcp-server.mjs"), mode === "generic" ? "normal" : mode, ...(persistent ? [join(directory, "synthetic-research-world.json"), runId] : [])], { windowsHide: true, stdio: "pipe", env: persistent ? syntheticMcpEnvironment(env) : env }), { researchAuthority }); },
 	};
 }
 
 export async function runGameSmoke(driver) {
+	if (process.argv.includes("--smoke-game-native")) { const { runMcpGameSmoke } = await import("./game-mcp-smoke.mjs"); return runMcpGameSmoke(driver); }
 	const physical = process.argv.includes("--smoke-game-physical");
 	const scenario = driver.runtimeScenario ?? (process.argv.includes("--smoke-runtime-loss") ? process.argv.includes("--smoke-runtime-planning") ? "planning" : process.argv.includes("--smoke-runtime-accepted") ? "accepted" : "confirmation" : null);
 	const base = driver.context ? await preparePortableFixtureDirectory(driver.context) : join(driver.root, ".local/m3-smoke", driver.runId), marker = join(base, "Spherewright.Mcp.exe");
@@ -65,7 +66,7 @@ export async function runGameSmoke(driver) {
 		await driver.api("game", { action: "catalog" }); await until(async () => (await state()).phase === "catalog_ready", "CATALOG");
 		await until(async () => await evaluate("[...document.querySelector('[aria-label=目标科技]').options].some(option=>option.value==='100')"), "CATALOG_DISPLAY");
 		await evaluate(`(()=>{const node=document.querySelector('[aria-label="游戏 Agent 模型"]');node.value=${JSON.stringify(JSON.stringify([profileId, "fixture"]))};node.dispatchEvent(new Event('change',{bubbles:true}));const input=document.querySelector('[aria-label="目标科技"]');input.value='100';input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-		await evaluate("document.querySelector('.game-tasks-panel form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))");
+		await evaluate("document.querySelector('.game-task-settings form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))");
 		if (scenario === "planning") {
 			await until(async () => (await state()).phase === "planning" && requests === 1, "MODEL_REQUEST_IN_FLIGHT");
 			await runGameRuntimeLossSmoke(driver, { evaluate, state, until, requests: () => requests, base }); return;

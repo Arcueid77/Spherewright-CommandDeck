@@ -27,7 +27,7 @@ export class GameIntentLedger {
 		this.#authority = approvalAuthority; this.#prepareResearch = prepareResearch; this.#readResearchProof = readResearchProof; this.now = now; this.bootId = randomUUID(); mkdirSync(dirname(file), { recursive: true }); this.db = new DatabaseSync(file);
 		try {
 			const version = this.db.prepare("PRAGMA user_version").get().user_version;
-			if (![0, 1, 2].includes(version)) throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED");
+			if (![0, 1, 2, 3].includes(version)) throw new Error("GAME_LEDGER_SCHEMA_UNSUPPORTED");
 			if (version === 0 && this.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get().n) throw new Error("GAME_LEDGER_SCHEMA_UNKNOWN");
 			// Validate the old structure before journal-mode or migration writes.
 			// A rejected legacy file must not already have been promoted to v2.
@@ -39,7 +39,7 @@ export class GameIntentLedger {
 					"SELECT id,scope,state,preview_hash,preview_boot,expires_at,approval_id,approval_at FROM game_tasks LIMIT 0",
 					"SELECT id,task_id,idempotency_key,state,action_id,acceptance,terminal FROM game_intents LIMIT 0",
 					"SELECT id,intent_id,reason FROM game_gate LIMIT 0",
-					...(version === 2 ? ["SELECT task_id,body FROM game_task_details LIMIT 0", "SELECT sequence,task_id,kind,body FROM game_task_events LIMIT 0"] : []),
+					...(version >= 2 ? ["SELECT task_id,body FROM game_task_details LIMIT 0", "SELECT sequence,task_id,kind,body FROM game_task_events LIMIT 0"] : []),
 				]) this.db.prepare(query).all();
 			}
 			// An engine read-only fallback must not advertise usable task storage.
@@ -77,6 +77,33 @@ export class GameIntentLedger {
 		const scope = { kind: "select-research", bridgeInstanceId: input.bridgeInstanceId, sessionId: input.sessionId, planetId: input.planetId, techId: input.techId, capturedAtGameTick: input.capturedAtGameTick, selectionStateHash: input.selectionStateHash, maximumAcceptedWrites: 1 };
 		nativeResearchStateHash(scope);
 		const id = randomUUID(); this.#transaction(() => this.db.prepare("INSERT INTO game_tasks(id,scope,state) VALUES(?,?,'draft')").run(id, JSON.stringify(scope))); return this.task(id);
+	}
+	createMcpTask(scope) {
+		if (!scope || !["mcp-session", "mcp-action"].includes(scope.kind) || !opaque(scope.bridgeInstanceId) || scope.sessionId !== null && !opaque(scope.sessionId) || scope.kind === "mcp-action" && (!opaque(scope.parentTaskId) || !opaque(scope.actionKind) || !stateHash(scope.requestHash))) throw new Error("INVALID_GAME_MCP_SCOPE");
+		// v3 adds generic scope/receipt meanings. Old binaries must refuse these
+		// records instead of interpreting them as research. Pure research stays v2.
+		const id = randomUUID(); this.#transaction(() => { this.db.exec("PRAGMA user_version=3"); this.db.prepare("INSERT INTO game_tasks(id,scope,state) VALUES(?,?,'draft')").run(id, JSON.stringify(scope)); }); return this.task(id);
+	}
+	beginMcpIntent(authority, id, previewHash, expiresAt) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const task = this.#task(id);
+			if (task.scope.kind !== "mcp-action" || task.state !== "draft" || !stateHash(previewHash) || expiresAt <= this.now() || this.db.prepare("SELECT 1 FROM game_gate LIMIT 1").get() || this.unresolved().length) throw new Error("UNRESOLVED_GAME_INTENT_BLOCKS_WRITES");
+			const intentId = randomUUID(), idempotencyKey = randomUUID();
+			this.db.prepare("UPDATE game_tasks SET state='intent_recorded',preview_hash=?,preview_boot=?,expires_at=?,approval_id=?,approval_at=? WHERE id=?").run(previewHash, this.bootId, expiresAt, randomUUID(), this.now(), id);
+			this.db.prepare("INSERT INTO game_intents(id,task_id,idempotency_key,state) VALUES(?,?,?,'recorded')").run(intentId, id, idempotencyKey);
+			return this.intent(intentId);
+		});
+	}
+	acceptMcp(id, receipt) {
+		const accepted = this.#transaction(() => {
+			const intent = this.#intent(id), task = this.#task(intent.task_id);
+			if (task.scope.kind !== "mcp-action" || receipt?.accepted !== true || receipt.actionKind !== task.scope.actionKind || receipt.idempotencyKey !== intent.idempotency_key || !opaque(receipt.actionId) || intent.action_id && intent.action_id !== receipt.actionId) { this.#unknown(id, "ACCEPTANCE_BINDING_MISMATCH"); return null; }
+			if (intent.state === "completed" || intent.action_id === receipt.actionId) return this.intent(id);
+			this.db.prepare("UPDATE game_intents SET state='accepted',action_id=?,acceptance=? WHERE id=?").run(receipt.actionId, JSON.stringify({ accepted: true, actionId: receipt.actionId, actionKind: receipt.actionKind, idempotencyKey: receipt.idempotencyKey, idempotencyEchoed: receipt.idempotencyEchoed !== false }), id);
+			this.db.prepare("UPDATE game_tasks SET state='accepted' WHERE id=?").run(task.id); return this.intent(id);
+		});
+		if (!accepted) throw new Error("ACCEPTANCE_BINDING_MISMATCH"); return accepted;
 	}
 	async prepare(id) {
 		const task = this.#transaction(() => { const value = this.#task(id); if (!["draft", "awaiting_approval", "approved"].includes(value.state)) throw new Error("RESEARCH_PREVIEW_REJECTED"); this.db.prepare("UPDATE game_tasks SET state='preparing',approval_id=NULL,approval_at=NULL,preview_hash=NULL WHERE id=?").run(id); return value; });
@@ -139,11 +166,30 @@ export class GameIntentLedger {
 		if (intent.state === "completed") return this.intent(id);
 		if (!intent.action_id) throw new Error("UNKNOWN_COMMIT_HAS_NO_ACTION_ID");
 		if (this.#reading.has(id)) throw new Error("ORIGINAL_ACTION_READ_ALREADY_IN_FLIGHT");
-		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: "select-research", actionId: intent.action_id, idempotencyKey: intent.idempotency_key, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId });
+		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: scope.kind === "mcp-action" ? scope.actionKind : "select-research", actionId: intent.action_id, idempotencyKey: intent.idempotency_key, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId, ...(scope.kind === "mcp-action" ? { generic: true } : {}) });
 		this.#reading.set(id, request);
-		try { const reply = await this.#readResearchProof(request); if (this.#reading.get(id) !== request || !equal(reply?.request, request)) throw new Error("RESEARCH_READ_CORRELATION_MISMATCH"); return this.#complete(id, reply.terminal, reply.freshProgression, reply.context); }
-		catch (error) { if (error?.message === "ORIGINAL_ACTION_BINDING_MISMATCH") { this.#transaction(() => this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH")); throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED"); } throw new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "ORIGINAL_ACTION_READ_FAILED"); }
+		try {
+			const reply = await this.#readResearchProof(request); if (this.#reading.get(id) !== request || !equal(reply?.request, request)) throw new Error("RESEARCH_READ_CORRELATION_MISMATCH");
+			if (scope.kind !== "mcp-action") return this.#complete(id, reply.terminal, reply.freshProgression, reply.context);
+			try { return { ...this.#completeMcp(id, reply.terminal, reply.context), nativeResult: reply.terminal }; }
+			catch (error) { if (error.message === "ORIGINAL_ACTION_PENDING") error.nativeResult = reply.terminal; throw error; }
+		}
+		catch (error) { if (error?.message === "ORIGINAL_ACTION_BINDING_MISMATCH") { this.#transaction(() => this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH")); throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED"); } const failure = new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "ORIGINAL_ACTION_READ_FAILED"); if (error.nativeResult) failure.nativeResult = error.nativeResult; throw failure; }
 		finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
+	}
+	#completeMcp(id, terminal, context) {
+		const outcome = this.#transaction(() => {
+			const intent = this.#intent(id), scope = this.#task(intent.task_id).scope, newWorld = scope.actionKind === "new-game";
+			if (auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
+			if (!terminal || terminal.actionId !== intent.action_id || terminal.actionKind !== scope.actionKind || (!newWorld || terminal.idempotencyKey != null) && terminal.idempotencyKey !== intent.idempotency_key || !newWorld && (terminal.sessionId !== scope.sessionId || scope.planetId !== null && terminal.planetId !== scope.planetId)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
+			if (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true || terminal.terminal === true && terminal.succeeded !== true) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
+			if (terminal.terminal !== true || terminal.succeeded !== true || terminal.state !== "completed") throw new Error("ORIGINAL_ACTION_PENDING");
+			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || !newWorld && context.sessionId !== scope.sessionId || context.owned !== true || context.accessRestricted !== false) throw new Error("GAME_CONTEXT_CHANGED");
+			if (newWorld && (!opaque(terminal.sessionId) || terminal.sessionId !== context.sessionId || !positive(terminal.planetId) || terminal.planetId !== context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
+			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify({ actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: true, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true }), id);
+			this.db.prepare("UPDATE game_tasks SET state='completed' WHERE id=?").run(intent.task_id); this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id); return null;
+		});
+		if (outcome) throw new Error(outcome); return this.intent(id);
 	}
 	#complete(id, terminal, freshProgression, context) {
 		const result = this.#transaction(() => {
@@ -160,11 +206,12 @@ export class GameIntentLedger {
 	}
 	stop(id) { this.#plans.delete(id); this.#preparing.delete(id); return this.#transaction(() => { const intent = this.db.prepare("SELECT id,state FROM game_intents WHERE task_id=?").get(id); this.db.prepare("UPDATE game_tasks SET state=? WHERE id=? AND state<>'completed'").run(intent ? "reconciling" : "cancelled", id); return this.task(id); }); }
 	task(id) { const value = this.#task(id); return { id: value.id, state: value.state, scope: value.scope, previewHash: value.preview_hash, expiresAt: value.expires_at, approvalId: value.approval_id }; }
+	detailsFor(id) { this.#task(id); return JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"); }
 	intent(id) { const value = this.#intent(id); return { intentId: value.id, taskId: value.task_id, state: value.state, idempotencyKey: value.idempotency_key, actionId: value.action_id, acceptance: value.acceptance ? JSON.parse(value.acceptance) : null, terminal: value.terminal ? JSON.parse(value.terminal) : null }; }
 	unresolved() { return this.db.prepare(`SELECT id FROM game_intents WHERE state IN (${pendingStates})`).all().map(({ id }) => this.intent(id)); }
 	tasks() { return this.db.prepare("SELECT id FROM game_tasks ORDER BY rowid DESC LIMIT 32").all().map(({ id }) => ({ ...this.task(id), details: JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"), intent: (() => { const value = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id); return value ? this.intent(value.id) : null; })() })); }
 	usageSample() {
-		const rows = this.db.prepare("SELECT CASE WHEN d.body IS NULL THEN NULL WHEN length(d.body)<=65536 THEN d.body ELSE 'false' END AS body FROM game_tasks t LEFT JOIN game_task_details d ON d.task_id=t.id ORDER BY t.rowid DESC LIMIT 257").all();
+		const rows = this.db.prepare("SELECT CASE WHEN d.body IS NULL THEN NULL WHEN length(d.body)<=65536 THEN d.body ELSE 'false' END AS body FROM game_tasks t LEFT JOIN game_task_details d ON d.task_id=t.id WHERE json_extract(t.scope,'$.kind') IS NOT 'mcp-action' ORDER BY t.rowid DESC LIMIT 257").all();
 		return usageSample(rows.map(({ body }) => {
 			const value = decodeUsageJson(body);
 			return value === null ? {} : value && typeof value === "object" && !Array.isArray(value) ? { provider: value.provider, model: value.model, usage: value.usage, context: value.context } : { usage: false, context: false };

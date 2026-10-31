@@ -12,6 +12,7 @@ import { mcpLossCase, portableMcpScenarios, mcpTimeoutReceiptProof, mcpLostAckSt
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
+if (args.includes("--smoke-game-native") && (args.length !== 2 || !args.includes("--smoke-game"))) throw new Error("EXPLICIT_NATIVE_GAME_SMOKE_REQUIRED");
 const renamedElectron = args.includes("--renamed-electron");
 if (renamedElectron) args.splice(args.indexOf("--renamed-electron"), 1);
 const runId = randomUUID();
@@ -25,7 +26,7 @@ const runtimeLoss = args.includes("--smoke-runtime-loss");
 const mcpFlags = args.filter(arg => arg.startsWith("--smoke-mcp-loss")), mcpLoss = mcpFlags.length > 0;
 if (mcpLoss && (mcpFlags.length !== 1 || renamedElectron || !args.includes("--smoke-game") || !portableMcpScenarios.map(value => "--smoke-mcp-loss=" + value).includes(mcpFlags[0]) || args.some(arg => !["--smoke-game", mcpFlags[0]].includes(arg)))) throw new Error("EXPLICIT_MCP_LOSS_SMOKE_REQUIRED");
 const mcpScenario = mcpLoss ? mcpFlags[0].slice("--smoke-mcp-loss=".length) : null, controlledFault = runtimeLoss || mcpLoss;
-const file = gatewaySmoke ? "desktop-smoke-gateway.json" : journalSmoke ? "desktop-smoke-journal.json" : powerSmoke ? "desktop-smoke-power.json" : traySmoke ? "desktop-smoke-tray.json" : mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
+const file = args.includes("--smoke-game-native") ? "desktop-smoke-game-native.json" : gatewaySmoke ? "desktop-smoke-gateway.json" : journalSmoke ? "desktop-smoke-journal.json" : powerSmoke ? "desktop-smoke-power.json" : traySmoke ? "desktop-smoke-tray.json" : mcpLoss ? "desktop-smoke-game-mcp-" + mcpScenario + ".json" : runtimeLoss ? args.includes("--smoke-game") ? args.includes("--smoke-runtime-accepted") ? "desktop-smoke-game-runtime-accepted.json" : args.includes("--smoke-runtime-planning") ? "desktop-smoke-game-runtime-planning.json" : "desktop-smoke-game-runtime-loss.json" : "desktop-smoke-runtime-loss.json" : args.includes("--smoke-observation") ? "desktop-smoke-observation.json" : args.includes("--smoke-game") ? "desktop-smoke-game.json" : args.includes("--smoke-bridge") ? "desktop-smoke-bridge.json" : args.includes("--smoke-workbench")
 	? "desktop-smoke-workbench.json"
 	: args.includes("--smoke-adapter")
 	? "desktop-smoke-adapter.json"
