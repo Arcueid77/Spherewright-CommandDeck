@@ -95,6 +95,15 @@ export class GameIntentLedger {
 			return this.intent(intentId);
 		});
 	}
+	authorizeMcpRun(authority, id, previewHash, expiresAt) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const task = this.#task(id);
+			if (task.scope.kind !== "mcp-session" || task.scope.mode !== "autonomous" || task.state !== "draft" || task.approval_id || !stateHash(previewHash) || !Number.isFinite(expiresAt) || expiresAt <= this.now() || this.unresolved().length || this.db.prepare("SELECT 1 FROM game_gate LIMIT 1").get()) throw new Error("FRESH_GAME_MCP_AUTHORIZATION_REQUIRED");
+			this.db.prepare("UPDATE game_tasks SET preview_hash=?,preview_boot=?,expires_at=?,approval_id=?,approval_at=? WHERE id=?").run(previewHash, this.bootId, expiresAt, randomUUID(), this.now(), id);
+			return previewHash;
+		});
+	}
 	acceptMcp(id, receipt) {
 		const accepted = this.#transaction(() => {
 			const intent = this.#intent(id), task = this.#task(intent.task_id);
@@ -219,7 +228,7 @@ export class GameIntentLedger {
 	}
 	details(id, value) {
 		this.#task(id);
-		const body = { mode: value.mode === "observe" ? "observe" : "assist", techName: String(value.techName ?? "").slice(0, 160), prompt: String(value.prompt ?? "").slice(0, 2000), provider: String(value.provider ?? "").slice(0, 256), model: String(value.model ?? "").slice(0, 256), cohortHash: String(value.cohortHash ?? "").slice(0, 64), schemaHash: String(value.schemaHash ?? "").slice(0, 64), playbookHash: String(value.playbookHash ?? "").slice(0, 64), createdAt: this.now() };
+		const body = { mode: ["observe", "assist", "autonomous"].includes(value.mode) ? value.mode : "assist", techName: String(value.techName ?? "").slice(0, 160), prompt: String(value.prompt ?? "").slice(0, 2000), provider: String(value.provider ?? "").slice(0, 256), model: String(value.model ?? "").slice(0, 256), cohortHash: String(value.cohortHash ?? "").slice(0, 64), schemaHash: String(value.schemaHash ?? "").slice(0, 64), playbookHash: String(value.playbookHash ?? "").slice(0, 64), createdAt: this.now() };
 		this.#transaction(() => this.db.prepare("INSERT INTO game_task_details(task_id,body) VALUES(?,?)").run(id, JSON.stringify(body)));
 	}
 	note(id, kind, value = {}) {

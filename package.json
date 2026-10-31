@@ -67,6 +67,7 @@
 		"test:observation": "node scripts/run-desktop-smoke.mjs --smoke-observation --observe-only --observe-max-tools 12 --observe-max-ms 10000",
 		"test:game": "node scripts/run-desktop-smoke.mjs --smoke-game",
 		"test:game-native": "node scripts/run-desktop-smoke.mjs --smoke-game --smoke-game-native",
+		"test:game-autonomous": "node scripts/run-desktop-smoke.mjs --smoke-game --smoke-game-native --smoke-game-autonomous",
 		"test:runtime-loss": "node scripts/run-desktop-smoke.mjs --smoke-runtime-loss",
 		"test:game-runtime-loss": "node scripts/run-desktop-smoke.mjs --smoke-game --smoke-runtime-loss",
 		"test:game-runtime-accepted": "node scripts/run-desktop-smoke.mjs --smoke-game --smoke-runtime-loss --smoke-runtime-accepted",

@@ -1,4 +1,5 @@
 const categories = ["input", "output", "cacheRead", "cacheWrite"];
+export const maximumUsageRequests = 256;
 const count = value => Number.isSafeInteger(value) && value >= 0 && value <= 1e15;
 
 // Prices are explicit flat USD rates per million normalized Pi tokens. Missing is not free.
@@ -39,16 +40,16 @@ function summarize(requests, responses, reportedResponses, total, pricing) {
 
 // Structured projection for the game ledger. No provider text, IDs, endpoints or raw payloads.
 export function modelUsageSnapshot(value) {
-	if (!value || value.version !== 1 || ![value.requests, value.responses, value.reportedResponses].every(count) || value.requests > 6 || value.responses > value.requests || value.reportedResponses > value.responses) throw new Error("INVALID_MODEL_USAGE");
+	if (!value || value.version !== 1 || ![value.requests, value.responses, value.reportedResponses].every(count) || value.requests > maximumUsageRequests || value.responses > value.requests || value.reportedResponses > value.responses) throw new Error("INVALID_MODEL_USAGE");
 	const total = value.tokens === null ? null : tokens(value.tokens);
 	if (Boolean(total) !== (value.reportedResponses > 0)) throw new Error("INVALID_MODEL_USAGE");
 	return summarize(value.requests, value.responses, value.reportedResponses, total, modelPricing(value.pricing));
 }
 
 export class ModelUsage {
-	constructor({ pricing, publish }) { this.pricing = modelPricing(pricing); this.publish = publish; this.requests = 0; this.finished = new Set(); this.reported = 0; this.total = null; }
+	constructor({ pricing, publish, maximumRequests = 6 }) { if (!Number.isSafeInteger(maximumRequests) || maximumRequests < 1 || maximumRequests > maximumUsageRequests) throw new Error("INVALID_MODEL_USAGE_LIMIT"); this.maximumRequests = maximumRequests; this.pricing = modelPricing(pricing); this.publish = publish; this.requests = 0; this.finished = new Set(); this.reported = 0; this.total = null; }
 	snapshot() { return summarize(this.requests, this.finished.size, this.reported, this.total && { ...this.total }, this.pricing && { ...this.pricing }); }
-	start() { if (this.requests >= 6) throw new Error("MODEL_USAGE_REQUEST_LIMIT"); const id = ++this.requests; this.publish(this.snapshot()); return id; }
+	start() { if (this.requests >= this.maximumRequests) throw new Error("MODEL_USAGE_REQUEST_LIMIT"); const id = ++this.requests; this.publish(this.snapshot()); return id; }
 	finish(id, message) {
 		if (!Number.isInteger(id) || id < 1 || id > this.requests) throw new Error("MODEL_USAGE_REQUEST_MISMATCH");
 		if (this.finished.has(id)) return;

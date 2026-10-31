@@ -2,6 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ModelUsage, modelPricing, modelUsageSnapshot } from "../apps/desktop/model-usage.mjs";
 
+test("usage accounting follows an explicit finite game budget above six and stops exactly at that budget", () => {
+	const usage = new ModelUsage({ maximumRequests: 8, publish: () => {} });
+	for (let index = 0; index < 8; index++) { const id = usage.start(); usage.finish(id, null); }
+	assert.equal(modelUsageSnapshot(usage.snapshot()).requests, 8); assert.equal(usage.snapshot().unknownResponses, 8); assert.throws(() => usage.start(), /MODEL_USAGE_REQUEST_LIMIT/);
+	for (const maximumRequests of [0, 257, Infinity]) assert.throws(() => new ModelUsage({ maximumRequests, publish: () => {} }), /INVALID_MODEL_USAGE_LIMIT/);
+});
+
 const report = (extra = {}) => ({ usage: { input: 80, output: 20, cacheRead: 10, cacheWrite: 5, reasoning: 7, totalTokens: 115, cost: { total: 0 }, ...extra } });
 const rates = { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 };
 function fixture(pricing = rates) { const events = [], usage = new ModelUsage({ pricing, publish: value => events.push(structuredClone(value)) }); return { usage, events }; }
@@ -54,7 +61,7 @@ test("ledger projection recomputes estimates and drops provider-controlled extra
 	const f = fixture(); f.usage.finish(f.usage.start(), report());
 	const before = f.usage.snapshot(), selected = modelUsageSnapshot({ ...before, text: "PRIVATE_PROVIDER_TEXT", credential: "PRIVATE_CREDENTIAL", estimate: { usd: 9999 }, tokens: { ...before.tokens, secret: "PRIVATE_TOKEN" } });
 	assert.deepEqual(selected, before); assert.ok(!JSON.stringify(selected).includes("PRIVATE_"));
-	for (const patch of [{ version: 2 }, { requests: 7 }, { responses: 2 }, { reportedResponses: -1 }, { tokens: null }, { pricing: { input: -1 } }]) assert.throws(() => modelUsageSnapshot({ ...before, ...patch }));
+	for (const patch of [{ version: 2 }, { requests: 257 }, { responses: 2 }, { reportedResponses: -1 }, { tokens: null }, { pricing: { input: -1 } }]) assert.throws(() => modelUsageSnapshot({ ...before, ...patch }));
 	for (const pricing of ["0", [], { input: "2" }, { input: NaN }, { input: 1e6 + 1 }, { unexpected: 0 }]) assert.throws(() => modelPricing(pricing), /PRICING/);
 	assert.equal(modelPricing({ input: null }), null);
 });

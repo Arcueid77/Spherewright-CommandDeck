@@ -157,6 +157,7 @@ export class ReadOnlyMcpClient {
 		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: !this.#observation && this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
 		this.metadata.gameAvailable = !this.#observation && this.#hasPlaybook && ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result"].every(name => this.#gameTools.has(name));
 		this.metadata.gameToolCount = this.#gameTools.size;
+		this.metadata.gameActionFamilies = [...new Set([...this.#gameTools.values()].filter(entry => entry.kind === "prepare").map(entry => entry.family))].sort();
 		return this.metadata;
 	}
 	supports(name) { return !this.closed && this.#stage === "ready" && this.#tools.has(name); }

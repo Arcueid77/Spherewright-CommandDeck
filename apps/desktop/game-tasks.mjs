@@ -44,7 +44,7 @@ export class GameTasks {
 		const tasks = this.ledger.tasks();
 		if (this.currentTaskId && !tasks.some(task => task.id === this.currentTaskId)) tasks.unshift({ ...this.ledger.task(this.currentTaskId), details: this.ledger.detailsFor(this.currentTaskId), intent: null });
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
-		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, awaitingConfirmation: Boolean(this.mcpSession?.pending), expiresAt: this.mcpSession?.pending?.plan.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, families: this.bridge.metadata?.gameActionFamilies ?? [], awaitingConfirmation: Boolean(this.mcpSession?.pending), awaitingAuthorization: this.mcpSession?.pending?.kind === "run", authorized: this.mcpSession?.authorized ?? false, expiresAt: this.mcpSession?.pending?.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
 	}
 	#note(kind, value) { if (this.currentTaskId) this.ledger.note(this.currentTaskId, kind, value); this.emit(); }
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
@@ -136,18 +136,21 @@ export class GameTasks {
 	startMcp(args) {
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
-		if (!["observe", "assist"].includes(args?.mode) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 2000 || Object.keys(args).some(key => !["kind", "mode", "providerId", "modelId", "prompt", "limits"].includes(key))) throw new Error("INVALID_GAME_TASK");
+		if (!["observe", "assist", "autonomous"].includes(args?.mode) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 2000 || Object.keys(args).some(key => !["kind", "mode", "providerId", "modelId", "prompt", "limits", "allowedFamilies"].includes(key))) throw new Error("INVALID_GAME_TASK");
 		const limits = gameSessionLimits(args.limits); if (args.mode === "observe") limits.writes = 0;
+		const allowedFamilies = args.mode === "autonomous" ? args.allowedFamilies : [];
+		if (args.mode === "autonomous" && (!limits.writes || !Array.isArray(allowedFamilies) || !allowedFamilies.length || allowedFamilies.length > 128 || new Set(allowedFamilies).size !== allowedFamilies.length || allowedFamilies.some(family => !this.bridge.metadata?.gameActionFamilies?.includes(family))) || args.mode !== "autonomous" && args.allowedFamilies !== undefined) throw new Error("INVALID_GAME_MCP_AUTHORIZATION_SCOPE");
 		this.currentTaskId = null; this.controller = new AbortController(); this.#confirmations.clear();
 		return this.#launch("observing", async () => {
 			await this.#reserve(true); this.#notStopped();
 			const port = this.bridgeLease.client.gamePort(this.#authority), context = await gameContext(port), playbook = await port.playbook(); this.#notStopped();
 			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
-			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", limits }); this.currentTaskId = task.id;
+			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: args.mode, limits, ...(args.mode === "autonomous" ? { allowedFamilies: [...allowedFamilies].sort() } : {}) }); this.currentTaskId = task.id;
 			this.ledger.details(task.id, { ...binding, mode: args.mode, techName: "Spherewright MCP 任务", prompt: args.prompt, provider: args.providerId, model: args.modelId });
-			this.mcpSession = new SpherewrightGameSession({ port, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
+			this.mcpSession = new SpherewrightGameSession({ port, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, goal: args.prompt, allowedFamilies, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
 			const timer = setTimeout(() => this.controller.abort(), limits.durationMs);
 			try {
+				if (args.mode === "autonomous") await this.mcpSession.authorizeRun();
 				this.#stage("planning");
 				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, nativeTools: this.mcpSession.tools(), limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
 				this.#notStopped();
@@ -158,7 +161,12 @@ export class GameTasks {
 	}
 	async callForModel(taskId, name, args) {
 		if (!this.mcpSession || taskId !== this.currentTaskId || !this.operation || this.phase !== "planning") throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
-		return this.mcpSession.call(name, args);
+		try { return await this.mcpSession.call(name, args); }
+		catch (error) {
+			const storageFailed = this.#latchStorageFault();
+			if (!storageFailed && this.mcpSession?.mode === "autonomous" && (this.ledger.unresolved().length || ["GAME_CONTEXT_CHANGED", "OWNED_GAME_WORLD_REQUIRED", "HEALTHY_GAME_WRITES_REQUIRED", "INDEPENDENT_GAME_AUDIT_REQUIRED", "GAME_MCP_CONTEXT_UNAVAILABLE", "GAME_MCP_CALL_NOT_SUPPORTED"].includes(error.message) || /^MCP_/.test(error.message))) this.controller.abort();
+			throw error;
+		}
 	}
 	async observeForModel(taskId) {
 		if (this.phase !== "planning" || taskId !== this.currentTaskId || !this.operation || !this.adapter) throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");

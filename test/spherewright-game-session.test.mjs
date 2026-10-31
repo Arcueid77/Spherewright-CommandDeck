@@ -98,3 +98,82 @@ test("generic records opt into v3 and a healthy ledger reopen retains the same p
 	let reads = 0; const ledger = new GameIntentLedger(join(f.directory, "game-tasks.sqlite"), { approvalAuthority: {}, prepareResearch: async () => { throw new Error("NO_PREPARE_ON_REOPEN"); }, readResearchProof: async () => { reads++; throw new Error("NO_AUTO_READ"); } });
 	try { assert.deepEqual(ledger.unresolved(), [original]); assert.equal(reads, 0); } finally { ledger.close(); }
 });
+
+async function authorize(f) {
+	await waitFor(() => f.host.snapshot().mcp.awaitingAuthorization);
+	const challenge = f.host.confirmation(f.host.currentTaskId, 3); assert.equal(challenge.kind, "mcp-run");
+	f.host.confirm(f.approval, challenge.nonce, 3); return challenge;
+}
+const autonomous = { mode: "autonomous", allowedFamilies: ["handcraft"] };
+
+test("autonomous task allocates no model before its actual host approval and forged permission fields cannot start it", async t => {
+	let models = 0; const f = await fixture(t, async () => { models++; });
+	assert.throws(() => f.start({ ...autonomous, approved: true }), /INVALID_GAME_TASK/);
+	assert.throws(() => f.start({ ...autonomous, allowedFamilies: ["save_import"] }), /INVALID_GAME_MCP_AUTHORIZATION_SCOPE/);
+	f.start(autonomous); await waitFor(() => f.host.snapshot().mcp.awaitingAuthorization);
+	assert.equal(models, 0); const challenge = f.host.confirmation(f.host.currentTaskId, 3);
+	assert.throws(() => f.host.confirm({}, challenge.nonce, 3), /TRUSTED_USER_APPROVAL_REQUIRED/);
+	await assert.rejects(f.host.callForModel(f.host.currentTaskId, "spherewright_get_recipe_catalog", {}), /GAME_MODEL_TOOL_UNAVAILABLE/);
+	f.host.stop(); await f.host.settled(); assert.equal(models, 0); assert.equal(f.host.ledger.unresolved().length, 0); assert.equal(f.frozen(), 0);
+});
+
+test("one task authorization permits two ordinary native commits without a second dialog and binds both receipts to its grant", async t => {
+	let models = 0;
+	const f = await fixture(t, async ({ invoke, nativeTools }) => {
+		models++; assert.ok(!nativeTools.some(tool => tool.name === "spherewright_prepare_new_game"));
+		for (let index = 0; index < 2; index++) { const receipt = await craft(invoke); await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId }); }
+	});
+	f.start(autonomous); const challenge = await authorize(f); assert.deepEqual(challenge.allowedFamilies, ["handcraft"]); await f.host.settled();
+	const tasks = f.host.ledger.tasks(), root = tasks.find(task => task.scope.kind === "mcp-session"), actions = tasks.filter(task => task.scope.kind === "mcp-action");
+	assert.ok(root.approvalId); assert.match(root.previewHash, /^sha256:/); assert.equal(root.details.mode, "autonomous"); assert.equal(models, 1);
+	assert.equal(actions.length, 2); assert.ok(actions.every(task => task.scope.autonomousAuthorizationHash === root.previewHash && task.intent.state === "completed")); assert.equal(f.host.snapshot().mcp.authorized, false); assert.equal(f.frozen(), 0);
+});
+
+test("autonomous action family and write budget remain enforced after the one-time approval", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await assert.rejects(invoke("spherewright_prepare_new_game", { galaxySeed: 42, starCount: 32 }), /GAME_MCP_TOOL_SCOPE_REJECTED/);
+		const receipt = await craft(invoke); await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId });
+		await assert.rejects(craft(invoke), /GAME_MCP_WRITE_BUDGET_OR_PENDING/);
+	});
+	f.start({ ...autonomous, limits: { writes: 1 } }); await authorize(f); await f.host.settled(); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("new-game still needs its exact plan confirmation before an autonomous run adopts the resulting world", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		const plan = await invoke("spherewright_prepare_new_game", { galaxySeed: 42, starCount: 32 }); assert.equal(plan.result.deckRequiresConfirmation, true);
+		const created = await invoke("spherewright_commit_new_game", { planToken: plan.result.planToken, idempotencyKey: "ignored-model-key" }); await invoke("spherewright_get_action_result", { actionId: created.result.actionId });
+		const crafted = await craft(invoke); await invoke("spherewright_get_action_result", { actionId: crafted.result.actionId });
+	}, "new-game");
+	f.start({ mode: "autonomous", allowedFamilies: ["new_game", "handcraft"] }); await authorize(f); await approve(f); await f.host.settled();
+	const actions = f.host.ledger.tasks().filter(task => task.scope.kind === "mcp-action"); assert.equal(actions.length, 2); assert.ok(!actions.find(task => task.scope.actionKind === "new-game").scope.autonomousAuthorizationHash); assert.ok(actions.find(task => task.scope.actionKind === "handcraft").scope.autonomousAuthorizationHash);
+});
+
+test("a stop during an autonomous accepted call preserves that original receipt and dispatches no next action", async t => {
+	let entered, release; const barrier = new Promise(resolve => { entered = resolve; });
+	const f = await fixture(t, async ({ invoke }) => { await craft(invoke); await assert.rejects(craft(invoke), /GAME_TASK_STOPPED|GAME_MCP_SESSION_STOPPED/); }, "pending");
+	const original = f.client.gamePort.bind(f.client);
+	t.mock.method(f.client, "gamePort", authority => { const port = original(authority); return { ...port, call: async (name, args) => { const reply = await port.call(name, args); if (name === "spherewright_commit_handcraft") { entered(); await new Promise(resolve => { release = resolve; }); } return reply; } }; });
+	f.start(autonomous); await authorize(f); await barrier; f.host.stop(); release(); await f.host.settled();
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1); assert.equal(f.host.ledger.unresolved()[0].state, "accepted"); assert.equal(f.host.snapshot().mcp.authorized, false); assert.equal(f.frozen(), 1);
+});
+
+test("autonomous native uncertainty revokes the run immediately instead of asking the model to keep trying", async t => {
+	const f = await fixture(t, async ({ invoke, signal }) => {
+		const receipt = await craft(invoke); await assert.rejects(invoke("spherewright_get_action_result", { actionId: receipt.result.actionId }), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+		assert.equal(signal.aborted, true); await assert.rejects(craft(invoke), /GAME_TASK_STOPPED|GAME_MCP_SESSION_STOPPED/);
+	}, "unknown");
+	f.start(autonomous); await authorize(f); await f.host.settled(); assert.equal(f.host.ledger.unresolved()[0].state, "unknown"); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("storage failure while recording run authorization starts no model and never releases the storage freeze", async t => {
+	let models = 0; const f = await fixture(t, async () => { models++; }); f.start(autonomous); await waitFor(() => f.host.snapshot().mcp.awaitingAuthorization);
+	const challenge = f.host.confirmation(f.host.currentTaskId, 3); f.host.ledger.db.exec("PRAGMA query_only=ON"); assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 3), /GAME_LEDGER_STORAGE_UNAVAILABLE/); await f.host.settled();
+	assert.equal(models, 0); assert.equal(f.host.snapshot().storageAvailable, false); assert.equal(f.frozen(), 1); f.host.ledger.db.exec("PRAGMA query_only=OFF");
+});
+
+test("persisted autonomous approval is history only and reconstructing the host schedules no model or new game call", async t => {
+	let models = 0; const f = await fixture(t, async ({ invoke }) => { models++; const receipt = await craft(invoke); await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId }); });
+	f.start(autonomous); await authorize(f); await f.host.settled(); const calls = f.client.stats.toolCalls;
+	const rebuilt = new GameTasks({ directory: f.directory, bridge: { metadata: f.client.metadata }, researchAuthority: {}, approvalAuthority: {}, freezeDevelopment: async () => { throw new Error("NO_NEW_FREEZE_EXPECTED"); }, releaseDevelopment: async () => {}, planner: async () => { models++; throw new Error("NO_AUTOMATIC_REPLAY"); } });
+	try { await rebuilt.initialize(); assert.equal(rebuilt.snapshot().mcp.authorized, false); assert.equal(rebuilt.snapshot().busy, false); assert.equal(models, 1); assert.equal(f.client.stats.toolCalls, calls); } finally { rebuilt.close(); }
+});

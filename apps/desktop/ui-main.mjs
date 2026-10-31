@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { confirmResearchFromUi } from "./research-confirmation.mjs";
+import { confirmResearchFromUi, startAutonomousGameFromUi } from "./research-confirmation.mjs";
 import { createVideoProtocol, videoScheme, videoPlaybackUrl } from "./video-protocol.mjs";
 import { recordingPermissionGate } from "./recording-permission.mjs";
 import { createRendererProtocol, rendererScheme, rendererUrl } from "./renderer-protocol.mjs";
@@ -19,6 +19,7 @@ const diagnosticSmoke = smoke && process.argv.includes("--smoke-diagnostics-ui")
 let syntheticDiagnosticAnswer = null;
 const portableSmoke = smoke && process.argv.includes("--portable-smoke"), portableRendererErrors = [];
 let syntheticGameAnswer = null;
+let syntheticGameDialogCount = 0;
 let holdSyntheticGameAnswer = false, heldSyntheticGameAnswer = null;
 let window,
 	heartbeat,
@@ -93,7 +94,8 @@ async function testCommand(message) {
 		} else if (message.name === "hold-game-confirmation" && gameSmoke) {
 			if (confirmingGame || holdSyntheticGameAnswer || heldSyntheticGameAnswer || syntheticGameAnswer !== null) throw new Error("SYNTHETIC_CONFIRMATION_ALREADY_HELD");
 			holdSyntheticGameAnswer = true; result = true;
-		} else if (message.name === "held-game-confirmation-state" && gameSmoke) result = Boolean(heldSyntheticGameAnswer);
+		} else if (message.name === "game-confirmation-count" && gameSmoke) result = syntheticGameDialogCount;
+		else if (message.name === "held-game-confirmation-state" && gameSmoke) result = Boolean(heldSyntheticGameAnswer);
 		else if (message.name === "answer-held-game-confirmation" && gameSmoke && [0, 1].includes(message.response)) {
 			if (!heldSyntheticGameAnswer) throw new Error("NO_HELD_SYNTHETIC_CONFIRMATION");
 			const resolve = heldSyntheticGameAnswer; heldSyntheticGameAnswer = null; resolve({ response: message.response }); result = true;
@@ -266,15 +268,22 @@ if (typeof process.send !== "function") {
 				if (args.action === "append") { if (!(value.bytes instanceof Uint8Array) || value.bytes.length < 1 || value.bytes.length > 2097152) throw new Error("VIDEO_CHUNK_INVALID"); value.data = Buffer.from(value.bytes).toString("base64"); delete value.bytes; }
 				return request("recording", { action: args.action, generation, args: value });
 			});
-			handle("deck:game", (args) => {
+			const confirmGame = taskId => confirmResearchFromUi({ taskId, request, showDialog: (options) => { if (gameSmoke) syntheticGameDialogCount++; if (gameSmoke && holdSyntheticGameAnswer) { holdSyntheticGameAnswer = false; return new Promise(resolve => { heldSyntheticGameAnswer = resolve; }); } if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
+			handle("deck:game", async (args) => {
 				if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
+				if (args.action === "start" && args.args?.kind === "mcp" && args.args.mode === "autonomous") {
+					if (confirmingGame || diagnosticSaving) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+					confirmingGame = true;
+					try { return await startAutonomousGameFromUi({ args, request, confirm: confirmGame }); }
+					finally { confirmingGame = false; }
+				}
 				return request("game", args);
 			});
 			handle("deck:confirm-research", async (args) => {
 				if (confirmingGame || diagnosticSaving) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
 				confirmingGame = true;
 				try {
-					return await confirmResearchFromUi({ taskId: args?.taskId, request, showDialog: (options) => { if (gameSmoke && holdSyntheticGameAnswer) { holdSyntheticGameAnswer = false; return new Promise(resolve => { heldSyntheticGameAnswer = resolve; }); } if (gameSmoke && syntheticGameAnswer !== null) { const response = syntheticGameAnswer; syntheticGameAnswer = null; return Promise.resolve({ response }); } return dialog.showMessageBox(window, options); }, hideViewport: () => request("viewport", { x: 0, y: 0, width: 1, height: 1, visible: false }), overlay: (busy) => { if (!window.isDestroyed()) window.webContents.send("deck:event", { type: "game-confirmation-state", busy }); } });
+					return await confirmGame(args?.taskId);
 				} finally { confirmingGame = false; }
 			});
 			handle("deck:diagnostic-preview", options => request("diagnostics-preview", { options, generation: documentGeneration }));

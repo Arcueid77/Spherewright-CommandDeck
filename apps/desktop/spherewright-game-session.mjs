@@ -5,6 +5,7 @@ const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(v
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const unwrap = value => { if (value?.success !== true || !object(value.result)) throw new Error("GAME_MCP_SERVICE_REJECTED"); return value.result; };
 export function gameSessionLimits(value = {}) {
+	if (!object(value)) throw new Error("INVALID_GAME_MCP_LIMITS");
 	const result = { modelRequests: value.modelRequests ?? 32, toolCalls: value.toolCalls ?? 256, writes: value.writes ?? 32, durationMs: value.durationMs ?? 900000 };
 	for (const [key, maximum] of Object.entries({ modelRequests: 256, toolCalls: 2048, writes: 256, durationMs: 7200000 })) if (!Number.isSafeInteger(result[key]) || result[key] < (key === "writes" ? 0 : 1) || result[key] > maximum) throw new Error("INVALID_GAME_MCP_LIMITS");
 	if (Object.keys(value).some(key => !Object.hasOwn(result, key))) throw new Error("INVALID_GAME_MCP_LIMITS");
@@ -30,16 +31,31 @@ export async function readMcpAction(port, request) {
 
 // A transport/authority adapter, not another factory planner or native executor.
 export class SpherewrightGameSession {
-	constructor({ port, ledger, authority, task, mode, limits, binding, signal, stage, check, now = () => Date.now() }) {
-		Object.assign(this, { port, ledger, authority, task, mode, limits, binding, signal, stage, check, now });
+	#runGrant = null;
+	constructor({ port, ledger, authority, task, mode, limits, binding, goal, allowedFamilies, signal, stage, check, now = () => Date.now() }) {
+		Object.assign(this, { port, ledger, authority, task, mode, limits, binding, goal, signal, stage, check, now });
+		this.allowedFamilies = new Set(allowedFamilies ?? []);
 		this.entries = new Map(port.tools().map(tool => [tool.name, tool])); this.context = task.scope; this.plans = new Map(); this.submissions = 0; this.calls = 0; this.pending = null; this.deadline = performance.now() + limits.durationMs; this.busy = false;
-		this.abort = () => this.cancelApproval(); signal.addEventListener("abort", this.abort);
+		this.abort = () => { this.#runGrant = null; this.cancelApproval(); }; signal.addEventListener("abort", this.abort);
 	}
-	tools() { return [...this.entries.values()].filter(tool => this.mode === "assist" || tool.kind === "read").map(({ name, description, inputSchema }) => ({ name, description, inputSchema })); }
+	get authorized() { return this.#runGrant !== null; }
+	tools() { return [...this.entries.values()].filter(tool => tool.kind === "read" || this.mode === "assist" || this.mode === "autonomous" && this.allowedFamilies.has(tool.family)).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })); }
 	assertActive() { this.check(); if (this.signal.aborted || performance.now() >= this.deadline) throw new Error("GAME_MCP_SESSION_STOPPED"); }
+	waitForApproval(pending) {
+		if (this.pending) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+		this.pending = pending;
+		return new Promise((resolve, reject) => { pending.resolve = resolve; pending.reject = reject; pending.timer = setTimeout(() => this.cancelApproval(), Math.max(1, Math.min(pending.expiresAt - this.now(), this.deadline - performance.now()))); this.stage("awaiting_approval"); });
+	}
+	async authorizeRun() {
+		this.assertActive(); if (this.mode !== "autonomous" || this.#runGrant) throw new Error("FRESH_GAME_MCP_AUTHORIZATION_REQUIRED");
+		const disclosure = { goal: this.goal, allowedFamilies: [...this.allowedFamilies].sort(), limits: { ...this.limits }, context: { ...this.context }, binding: { ...this.binding }, newGameRequiresSeparateConfirmation: true, nativeInputExclusion: false };
+		const approved = await this.waitForApproval({ kind: "run", taskId: this.task.id, disclosure, digest: digest(disclosure), expiresAt: this.now() + Math.min(120000, this.deadline - performance.now()), nonce: null, uiEpoch: null });
+		this.assertActive(); await gameContext(this.port, this.context); this.assertActive();
+		this.#runGrant = approved.digest;
+	}
 	async call(name, args) {
 		this.assertActive(); const entry = this.entries.get(name);
-		if (this.busy || !entry || !this.port.valid(name, args) || this.mode !== "assist" && entry.kind !== "read" || ++this.calls > this.limits.toolCalls) throw new Error("GAME_MCP_TOOL_SCOPE_REJECTED");
+		if (this.busy || !entry || !this.port.valid(name, args) || this.mode === "autonomous" && (!this.#runGrant || entry.kind !== "read" && !this.allowedFamilies.has(entry.family)) || this.mode === "observe" && entry.kind !== "read" || ++this.calls > this.limits.toolCalls) throw new Error("GAME_MCP_TOOL_SCOPE_REJECTED");
 		this.busy = true;
 		try {
 			if (entry.kind === "commit") return await this.commit(entry, args);
@@ -66,7 +82,7 @@ export class SpherewrightGameSession {
 			const preview = { request: publicGameValue(args), plan: publicGameValue(plan) };
 			if (JSON.stringify(preview).length > 65536) throw new Error("GAME_MCP_PREVIEW_LIMIT");
 			this.plans.set(reference, { entry, context, expiresAt, token: plan.planToken, actionKind: newWorld ? "new-game" : plan.actionKind, requestHash: digest(args), preview });
-			return { ...publicGameValue(reply), result: { ...publicGameValue(plan), planToken: reference, deckRequiresConfirmation: true } };
+			return { ...publicGameValue(reply), result: { ...publicGameValue(plan), planToken: reference, deckRequiresConfirmation: this.mode !== "autonomous" || entry.family === "new_game" } };
 		} finally { this.busy = false; }
 	}
 	async commit(entry, args) {
@@ -75,10 +91,12 @@ export class SpherewrightGameSession {
 		const fields = Object.keys(entry.inputSchema.properties);
 		if (Object.keys(args).some(key => !fields.includes(key)) || fields.includes("sessionId") && args.sessionId !== plan.context.sessionId || fields.includes("planetId") && args.planetId !== plan.context.planetId) throw new Error("GAME_MCP_COMMIT_SCOPE_MISMATCH");
 		await gameContext(this.port, plan.context, true); this.assertActive();
-		const action = this.ledger.createMcpTask({ kind: "mcp-action", parentTaskId: this.task.id, bridgeInstanceId: plan.context.bridgeInstanceId, sessionId: plan.context.sessionId, planetId: fields.includes("planetId") ? args.planetId : null, actionKind: plan.actionKind, requestHash: plan.requestHash });
+		const autonomous = this.mode === "autonomous" && entry.family !== "new_game";
+		if (autonomous && (!this.#runGrant || !this.allowedFamilies.has(entry.family))) throw new Error("FRESH_GAME_MCP_AUTHORIZATION_REQUIRED");
+		const action = this.ledger.createMcpTask({ kind: "mcp-action", parentTaskId: this.task.id, bridgeInstanceId: plan.context.bridgeInstanceId, sessionId: plan.context.sessionId, planetId: fields.includes("planetId") ? args.planetId : null, actionKind: plan.actionKind, requestHash: plan.requestHash, ...(autonomous ? { autonomousAuthorizationHash: this.#runGrant } : {}) });
 		this.ledger.details(action.id, this.binding);
-		this.pending = { taskId: this.task.id, actionId: action.id, plan, entry, nonce: null, uiEpoch: null, digest: digest({ tool: entry.name, context: plan.context, request: plan.requestHash, preview: plan.preview }) };
-		const confirmed = await new Promise((resolve, reject) => { this.pending.resolve = resolve; this.pending.reject = reject; this.pending.timer = setTimeout(() => this.cancelApproval(), Math.max(1, Math.min(plan.expiresAt - this.now(), this.deadline - performance.now()))); this.stage("awaiting_approval"); });
+		const actionDigest = digest({ tool: entry.name, context: plan.context, request: plan.requestHash, preview: plan.preview, ...(autonomous ? { authorization: this.#runGrant } : {}) });
+		const confirmed = autonomous ? { digest: actionDigest } : await this.waitForApproval({ kind: "action", taskId: this.task.id, actionId: action.id, plan, entry, expiresAt: plan.expiresAt, nonce: null, uiEpoch: null, digest: actionDigest });
 		this.assertActive(); if (!confirmed) throw new Error("GAME_MCP_CONFIRMATION_CANCELLED");
 		await gameContext(this.port, plan.context, true); this.assertActive();
 		if (plan.expiresAt <= this.now()) throw new Error("FRESH_GAME_MCP_PLAN_REQUIRED");
@@ -96,15 +114,18 @@ export class SpherewrightGameSession {
 	}
 	confirmation(uiEpoch) {
 		this.assertActive(); const pending = this.pending;
-		if (!pending || !Number.isSafeInteger(uiEpoch) || uiEpoch < 1 || pending.plan.expiresAt <= this.now()) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
+		if (!pending || !Number.isSafeInteger(uiEpoch) || uiEpoch < 1 || pending.expiresAt <= this.now()) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
 		pending.nonce = randomUUID(); pending.uiEpoch = uiEpoch;
+		if (pending.kind === "run") return { kind: "mcp-run", nonce: pending.nonce, taskId: this.task.id, ...pending.disclosure, expiresAt: pending.expiresAt };
 		return { kind: "mcp", nonce: pending.nonce, taskId: this.task.id, tool: pending.entry.name, preview: pending.plan.preview, expiresAt: pending.plan.expiresAt, remainingWrites: this.limits.writes - this.submissions };
 	}
 	confirm(nonce, uiEpoch) {
 		this.assertActive(); const pending = this.pending;
-		if (!pending || pending.nonce !== nonce || pending.uiEpoch !== uiEpoch || pending.plan.expiresAt <= this.now()) throw new Error("FRESH_GAME_MCP_APPROVAL_REQUIRED");
-		this.stage("confirming"); this.pending = null; clearTimeout(pending.timer); pending.resolve({ digest: pending.digest }); return { confirmed: true };
+		if (!pending || pending.nonce !== nonce || pending.uiEpoch !== uiEpoch || pending.expiresAt <= this.now()) throw new Error("FRESH_GAME_MCP_APPROVAL_REQUIRED");
+		this.stage("confirming");
+		if (pending.kind === "run") this.ledger.authorizeMcpRun(this.authority, this.task.id, pending.digest, this.now() + Math.max(1, this.deadline - performance.now()));
+		this.pending = null; clearTimeout(pending.timer); pending.resolve({ digest: pending.digest }); return { confirmed: true };
 	}
 	cancelApproval() { const pending = this.pending; if (pending) { this.pending = null; clearTimeout(pending.timer); pending.reject(new Error("GAME_MCP_CONFIRMATION_CANCELLED")); } }
-	close() { this.cancelApproval(); this.plans.clear(); this.signal.removeEventListener("abort", this.abort); }
+	close() { this.#runGrant = null; this.cancelApproval(); this.plans.clear(); this.signal.removeEventListener("abort", this.abort); }
 }
