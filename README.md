@@ -1,57 +1,82 @@
 # Spherewright CommandDeck
 
-A desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright.
+CommandDeck is a Windows desktop workspace for playing Dyson Sphere Program with a structured Agent and for developing and validating Spherewright. It combines a native game-window host, dockable development/observation panels, task permissions and durable game/development ledgers.
 
-**Status: M1 development and main-window docking/layout restoration have validation evidence. M2 has completed finite real shared-panel/RPC observations, connection-only UI timing and bounded reader shutdown in a dedicated idle world; loaded-factory overhead, multiple worlds and long-run evidence remain open. M3 has completed one real MiniMax → native confirmation → ordinary DSP research enqueue → original-action/queue readback → normal-save workflow. M4 has completed its first finite source → checks/CI → Lab → cold installation/recovery → basic live display → persistent diff/log/evidence navigation workflow. Native input coordination and real failure coverage remain open. The owner has deferred the unresponsive embedded DSP menu; this behavior is not an input lock.**
+Implementation stages, dependencies and acceptance gates are tracked in the Chinese [ROADMAP.md](ROADMAP.md). The planned `0.1.0` includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab; milestone numbers are not release tags.
 
-Implementation stages, dependencies and acceptance gates are tracked in [ROADMAP.md](ROADMAP.md) (Chinese). The 0.1.0 plan includes both a directly interactive native game viewport and a development workflow across Spherewright and Lab.
+## Current status
+
+| Stage | Evidence already recorded | Main remaining boundary |
+| --- | --- | --- |
+| M0 — native viewport | Native embedding/restoration and Pi integration have evidence | Embedded menu input is deferred by the owner, not passed or declared an input lock; physical input, rendering, DPI/multi-monitor and real faults remain open |
+| M1 — development workbench | First finite editing/diff/check/recovery workflow and main-window docking/layout restoration passed | Full IDE/LSP, floating-window and plugin expansion are later scope |
+| M2 — read-only bridge | Finite shared-panel/RPC observations and connection-only UI timing passed in a dedicated idle world | Loaded-factory overhead, multiple worlds and long-run measurements |
+| M3 — finite game task | One real model → confirmation → research enqueue → original-action/queue readback → normal-save workflow passed | Native input coordination, human takeover, real failures/recovery and broader real-game autonomy |
+| M4 — cross-repository delivery | First finite source → checks/CI → Lab → cold installation/recovery → display/evidence-navigation workflow passed | Later source changes need their own adoption and acceptance; do not repeat the first closed loop |
+| M5 — reliable first release | Specified portable/install/upgrade/rollback, migration and packaged-fault scenarios have evidence | New-candidate full CI/fault matrix, clean Windows, real-game recovery and final owner review |
+| M6 — extended workbench | Specified journal/playback, popout, usage/context and read-only-gateway slices have evidence | Real-world mecha observation, native recording/input, physical popout behavior and broader providers/agents |
+
+This table is a navigation summary, not new acceptance evidence. Exact candidates, test scopes and dated failures remain in [ROADMAP.md](ROADMAP.md); its milestone overview and current-remainder table take precedence over older progress paragraphs.
 
 ## Repository boundaries
 
 | Repository | Responsibility |
 | --- | --- |
-| [Spherewright](https://github.com/Arcueid77/Spherewright) | Game Plugin, local Bridge, MCP contracts, native observations and controlled actions. |
-| [Spherewright-Lab](https://github.com/Arcueid77/Spherewright-Lab) | Scenarios, acceptance evidence and version locks across the product repositories. |
-| [Spherewright-CommandDeck](https://github.com/Arcueid77/Spherewright-CommandDeck) | Desktop UI, native game-window host, development workspaces, task permissions and the game-action ledger. |
-| [Spherewright-Pi](https://github.com/Arcueid77/Spherewright-Pi) | Source fork of the Pi Agent runtime, included here as the vendor/pi submodule. |
+| [Spherewright](https://github.com/Arcueid77/Spherewright) | Game Plugin, local Bridge, MCP contracts, native observations and controlled actions |
+| [Spherewright-Lab](https://github.com/Arcueid77/Spherewright-Lab) | Scenarios, acceptance evidence and version locks across product repositories |
+| [Spherewright-CommandDeck](https://github.com/Arcueid77/Spherewright-CommandDeck) | Desktop UI, native host, development workspaces, permissions and ledgers |
+| [Spherewright-Pi](https://github.com/Arcueid77/Spherewright-Pi) | Pi Agent runtime fork, pinned as `vendor/pi` |
 
-Lab belongs in a Spherewright **development workspace**, alongside the game-control source and CommandDeck. It is an independent repository and is not a required dependency of the CommandDeck application build or installed runtime. Existing checkouts can stay in their current locations; the workspace UI supports multiple explicitly authorized roots.
-
-Conceptual layout, rather than a requirement to move existing repositories:
+Lab is an independent development-workspace member, not a CommandDeck build or installed-runtime dependency. Existing checkouts need not move; the workspace supports multiple explicitly authorized roots.
 
 ~~~text
 Development workspace
   Spherewright/                 game-control source
   Spherewright-Lab/             scenarios and acceptance evidence
   Spherewright-CommandDeck/     desktop application source
-    vendor/pi/                  Spherewright-Pi Git submodule
+    vendor/pi/                  pinned Spherewright-Pi submodule
 ~~~
 
-## Pi source dependency
+## Quick start
 
-The fork preserves the complete upstream monorepo and its license notices. Upstream is [earendil-works/pi](https://github.com/earendil-works/pi), formerly badlogic/pi-mono.
-
-The initial submodule baseline is upstream v1.3.0, commit 71023aec1546d6d677a65669c5665c0927ce0dd0. The parent repository pins an exact commit; it does not automatically follow the fork's default branch. Future CommandDeck releases must record both the application commit and the Pi submodule commit.
-
-Clone with the pinned dependency:
+Prerequisites: Git, Node.js 22.19 or newer, and the .NET 8 SDK with Windows desktop support. The native fixture targets Windows x64.
 
 ~~~powershell
 git clone --recurse-submodules https://github.com/Arcueid77/Spherewright-CommandDeck.git
+cd Spherewright-CommandDeck
+npm ci --ignore-scripts
+node node_modules/electron/install.js
+npm run pi:install
+npm run pi:hydrate
+npm run pi:build
+npm run pi:verify
+npm run build
+npm run typecheck
+npm test
+npm run test:native
+npm start -- --demo-fixture
 ~~~
 
-For an existing checkout:
+For an existing checkout, run `git submodule update --init --recursive` before the setup commands. The demo starts only this repository's simulated game host; it does not launch DSP or adopt an arbitrary process.
 
-~~~powershell
-git submodule update --init --recursive
-~~~
+## Pi source dependency
 
-Changes to Pi are committed and pushed in Spherewright-Pi first. CommandDeck then records the new submodule commit in a separate integration change. Check out an explicit development branch before editing the submodule; an ordinary submodule checkout is detached.
+The fork preserves the complete upstream monorepo and license notices. Upstream is [earendil-works/pi](https://github.com/earendil-works/pi), formerly badlogic/pi-mono. The initial submodule baseline is upstream v1.3.0, commit `71023aec1546d6d677a65669c5665c0927ce0dd0`; the parent pins an exact commit rather than following a branch.
 
-The prototype imports the built coding-agent entry directly from the submodule. `pi:verify` checks the exact commit, compiled entries and internal workspace links. Pi source is unchanged at this baseline. Its ignored model catalog is restored from the matching versioned npm artifact using the integrity in `pi-model-data-lock.json`; only JSON catalog data is copied, not registry runtime modules. End-user packaging remains a later milestone.
+Commit and push Pi changes in Spherewright-Pi first, then update CommandDeck's submodule in a separate integration change. Use an explicit development branch inside the submodule. `pi:verify` checks the exact commit, built entries and internal workspace links. The ignored model catalog is restored from the matching versioned npm artifact using `pi-model-data-lock.json`; only JSON catalog data is copied, not registry runtime modules.
 
-## Run the Windows development prototype
+## Documentation map
 
-Developer prerequisites: Git, Node.js 22.19 or newer, and the .NET 8 SDK with Windows desktop support. The current native fixture targets Windows x64; this is a source prototype, not an installer.
+- [ROADMAP.md](ROADMAP.md): current milestone/remainder tables, exact candidate evidence and acceptance boundaries.
+- [Native window hosting](docs/native-window-hosting.md): ownership model, native supervision, fault handling and real-game limitations.
+- [External Agent read-only gateway](docs/agent-gateway.md): `deck_observe`, lifecycle, privacy and client compatibility.
+- Sections below: development, packaging, installer, recovery, diagnostics, tray, power, journal and other validation commands with their exact limits.
+
+## Development and validation notes
+
+The remaining sections are a validation reference, not a claim that every listed command has passed on the current HEAD. Check the Roadmap and exact run evidence before treating a scenario as accepted.
+
+### Portable command helper and Pi runtime
 
 The command helper can also be published as a self-contained Windows x64 cohort from clean committed source:
 
@@ -73,6 +98,8 @@ npm run test:portable-pi -- --require-clean-source
 This materializes the actual runtime dependency graph, including nested versions and the fixed fork's seven internal packages, into a new physical temporary tree outside the checkout. It preserves package resolution without shipping workspace links, refuses registry substitutes for internal Pi packages, and records file hashes and missing optional dependencies. The copied desktop runtime completes an offline synthetic tool roundtrip with global Node package lookup disabled and developer tools absent from PATH. The existing absolute Node test runner is still used; this is dependency portability evidence, not the full Electron bundle, installer or clean-Windows acceptance. The normal checkout continues resolving these same paths through its pinned workspace links.
 
 `npm run test:renamed-ui` runs the existing workbench integration check with a separate Electron distribution whose executable is renamed `Spherewright-CommandDeck.exe`. The supervisor admits only its own current Electron executable in the explicit UI role; the registered creation handle remains necessary for termination. The check covers UI reload/replacement and single command execution. It still loads the source checkout and does not validate a complete installed bundle.
+
+### Desktop bundle and development installer
 
 Build an unpacked Windows x64 desktop candidate from clean committed source:
 
@@ -102,6 +129,8 @@ npm run test:installer -- --source artifacts/installer-test
 The compiler is the pinned official Inno Setup 7.1.0 distribution, checked by download hash, publisher signature and all 132 extracted file hashes, in an unregistered local portable toolchain. Each output directory is new; the wrapper records the exact bundle and builder revisions separately. Installation uses the current user, keeps each source revision in its own `releases` directory, never auto-starts the app/game and asks for normal closure when installed Deck/helper processes are still running or their identity cannot be verified. It does not edit user profiles. Uninstall removes registered program files and retains unregistered files; there are no wildcard cleanup rules. These installers are unsigned development candidates, not published releases.
 
 The automated check accepts only an explicitly compiled test identity, requires its marked temporary installation directory and creates no Start-menu shortcuts. It verifies installation, running-process refusal, direct installed-app startup, same-candidate repair, profile preservation and normal uninstall. Both startup checks include a same-profile synthetic-history reopen, for four actual installed application runs. It launches the installed executable itself, rather than testing a copy extracted from the installation. Its app mode is fixture-only and cannot reach a real game/model. Upgrade/rollback, profile-schema migration and a clean Windows VM remain separate gates; implementing the test entry does not by itself prove those or M5 passed.
+
+### Startup, recovery and fault matrices
 
 Supervisor startup acquires its existing profile's single-instance lock before importing task/ledger modules. A second launch exits before creating or migrating a game ledger. The packaged app keeps the source application's identity rather than adding a different `productName` that would select another default profile; installer and window display names remain separate. `npm run test:profile-lock` checks the source entry with a real OS lock holder; add `-- --source artifacts/portable-desktop` to check a built bundle. All test profiles are isolated.
 
@@ -137,21 +166,7 @@ npm run test:installer-upgrade -- --baseline artifacts/installer-test-old --cand
 
 Both must have been built with the same isolated test identity and different source revisions. The check refuses an existing registration or unknown registry state. It installs the baseline, seeds closed synthetic history through the existing installed-app check, then upgrades, rolls back and returns to the candidate using the same physical isolated profile and original history digest. Each version selection is checked against registry metadata and complete payload hashes. Installer operations must preserve every profile byte; normal app starts separately verify the original tasks/draft/key/action/receipts. Final normal uninstall must remove both registered releases while preserving the profile and an unregistered file. On failure the context, registration and evidence remain for targeted recovery. This proves only the tested version pair and compatible existing schemas. A manually dispatched `windows-upgrade.yml` workflow builds both exact commits and runs the same check; it uploads anonymous summaries/manifests, never private profile/registry/trace files. Existing single-version installation tests remain separate.
 
-After cloning recursively, run from the repository root:
-
-~~~powershell
-npm ci --ignore-scripts
-node node_modules/electron/install.js
-npm run pi:install
-npm run pi:hydrate
-npm run pi:build
-npm run pi:verify
-npm run build
-npm run typecheck
-npm test
-npm run test:native
-npm start -- --demo-fixture
-~~~
+For the basic checkout/setup commands, see [Quick start](#quick-start).
 
 The demo starts only this repository's simulated game host and embeds the Electron UI as its child. The central native grid has click, drag, wheel and key handlers. Its ownership design and remaining limitations are described in [native-window-hosting.md](docs/native-window-hosting.md). The desktop can also discover an explicitly enabled game adapter; it never launches DSP or adopts an arbitrary selected process.
 
