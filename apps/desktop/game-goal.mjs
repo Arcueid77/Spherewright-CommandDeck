@@ -253,10 +253,10 @@ export class GameGoalController {
 	}
 	async call(name, args) {
 		if (["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify"].includes(name) && (!object(args) || Object.keys(args).length)) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
-		if (gameGoalTools.some(tool => tool.name === name) || name === "deck_goal_guidance_access") {
+		if (gameGoalTools.some(tool => tool.name === name) || ["deck_goal_guidance_access", "deck_goal_catalog_access"].includes(name)) {
 			this.assertToolBudget(); this.coordinationCalls++; this.persist();
 		}
-		if (name === "deck_goal_guidance_access") { this.assertActive(); return { allowed: true }; }
+		if (["deck_goal_guidance_access", "deck_goal_catalog_access"].includes(name)) { this.assertActive(); return { allowed: true }; }
 		if (name === "deck_goal_next_decision") return this.nextDecision();
 		if (name === "deck_goal_status") return this.view();
 		if (name === "deck_goal_plan") return this.plan(args);

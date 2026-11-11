@@ -36,6 +36,26 @@ test("pinned Pi directly receives discovered Spherewright schemas and invokes na
 	const result = await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name, description: "Read the native recipe catalog", inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false } }], limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async (tool, args) => { invoked.push({ tool, args }); return { success: true, result: { items: [{ itemId: 1001 }] } }; } });
 	assert.deepEqual(result.tools, [name]); assert.deepEqual(invoked, [{ tool: name, args: {} }]); assert.deepEqual(f.seen[0].tools.map(tool => tool.function.name), [name]); assert.equal(result.requestCount, 2); assert.equal(Object.hasOwn(result, "gameCommits"), false);
 });
+test("sustained Pi reads compact native indexes and exact selected catalog details within its existing tool budget", async t => {
+	const source = "spherewright_get_recipe_catalog", invoked = [];
+	const reply = { success: true, result: { capturedAtGameTick: 123, items: [], recipes: [{ recipeId: 2, name: "Synthetic circuit", unlocked: true, inputs: [{ itemId: 1, count: 2 }], outputs: [{ itemId: 3, count: 1 }] }] } };
+	const f = await fixture(t, (data, index) => {
+		if (index === 1) return call(source, {});
+		const response = JSON.parse(data.messages.filter(message => message.role === "tool").at(-1).content);
+		if (index === 2) {
+			assert.equal(response.catalogView.detailsTool, "deck_goal_catalog");
+			assert.equal(response.result.recipes[0].inputs, undefined);
+			return call("deck_goal_catalog", { source, collection: "recipes", ids: [2] });
+		}
+		assert.deepEqual(response.result.rows[0], reply.result.recipes[0]);
+		assert.equal(response.result.capturedAtGameTick, 123);
+		return [{ content: "已读取近期原生配方详情。" }];
+	});
+	await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name: source, description: "Native catalog", inputSchema: { type: "object", properties: {}, additionalProperties: false } }], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async name => { invoked.push(name); return name === "deck_goal_next_decision" ? { continue: false } : name === "deck_goal_catalog_access" ? { allowed: true } : reply; } });
+	assert.equal(invoked.filter(name => name === source).length, 1);
+	assert.equal(invoked.filter(name => name === "deck_goal_catalog_access").length, 1);
+});
+
 test("real Pi normalized stream usage is captured once per response with explicit prices and unknown missing reports", async t => {
 	const f = await fixture(t, (_data, index) => index === 1 ? { deltas: call("observe_research", {}), usage: reportedUsage } : { deltas: [{ content: "只读建议。" }] }, { pricing: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 } });
 	const result = await f.run({ mode: "observe" });
