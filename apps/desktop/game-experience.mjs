@@ -7,17 +7,32 @@ const text = (value, maximum) => typeof value === "string" && value.trim().lengt
 export const initialGameLessons = ["whole-chain", "research-material-flow", "original-outcome", "observable-progress"];
 
 export function validateGameExperienceCatalog(value) {
-	if (value?.schemaVersion !== 1 || !Array.isArray(value.lessons) || !value.lessons.length || value.lessons.length > 32 || new Set(value.lessons.map(lesson => lesson?.id)).size !== value.lessons.length || JSON.stringify(value).length > 49152) throw new Error("INVALID_GAME_EXPERIENCE");
+	if (value?.schemaVersion !== 1 || !Array.isArray(value.lessons)
+		|| !value.lessons.length || value.lessons.length > 32
+		|| new Set(value.lessons.map(lesson => lesson?.id)).size !== value.lessons.length
+		|| JSON.stringify(value).length > 49152) throw new Error("INVALID_GAME_EXPERIENCE");
 	for (const lesson of value.lessons) {
 		if (!object(lesson)) throw new Error("INVALID_GAME_EXPERIENCE");
-		if (!/^[a-z][a-z0-9-]{1,63}$/.test(lesson.id ?? "") || ![lesson.title?.en, lesson.title?.zhCN].every(value => text(value, 160)) || ![lesson.guidance?.en, lesson.guidance?.zhCN].every(value => text(value, 1800)) || !Array.isArray(lesson.topics) || !lesson.topics.length || lesson.topics.length > 8 || lesson.topics.some(topic => !/^[a-z-]{1,40}$/.test(topic)) || !Array.isArray(lesson.sources) || !lesson.sources.length || lesson.sources.length > 4 || lesson.sources.some(source => !/^operations\/[a-zA-Z0-9./-]+\.md$/.test(source.path ?? "") || source.path.includes("..") || !text(source.section, 160))) throw new Error("INVALID_GAME_EXPERIENCE");
+		if (!/^[a-z][a-z0-9-]{1,63}$/.test(lesson.id ?? "")
+			|| ![lesson.title?.en, lesson.title?.zhCN].every(value => text(value, 160))
+			|| ![lesson.guidance?.en, lesson.guidance?.zhCN].every(value => text(value, 1800))
+			|| !Array.isArray(lesson.topics) || !lesson.topics.length || lesson.topics.length > 8
+			|| lesson.topics.some(topic => !/^[a-z-]{1,40}$/.test(topic))
+			|| !Array.isArray(lesson.sources) || !lesson.sources.length || lesson.sources.length > 4
+			|| lesson.sources.some(source => !/^operations\/[a-zA-Z0-9./-]+\.md$/.test(source.path ?? "")
+				|| source.path.includes("..") || !text(source.section, 160))) throw new Error("INVALID_GAME_EXPERIENCE");
 	}
 	return structuredClone(value);
 }
 
 export function validateGameExperienceRecord(value) {
 	const source = value?.source;
-	if (value?.version !== 1 || source?.repository !== "Arcueid77/Spherewright-Lab" || !/^[a-f0-9]{40}$/.test(source.revision ?? "") || source.path !== "knowledge/game-agent-lessons.json" || !/^[a-f0-9]{64}$/.test(source.fileSha256 ?? "") || !Array.isArray(value.lessonIds) || value.lessonIds.length > 32 || new Set(value.lessonIds).size !== value.lessonIds.length || value.lessonIds.some(id => !/^[a-z][a-z0-9-]{1,63}$/.test(id))) throw new Error("INVALID_GAME_EXPERIENCE_RECORD");
+	if (value?.version !== 1 || source?.repository !== "Arcueid77/Spherewright-Lab"
+		|| !/^[a-f0-9]{40}$/.test(source.revision ?? "") || source.path !== "knowledge/game-agent-lessons.json"
+		|| !/^[a-f0-9]{64}$/.test(source.fileSha256 ?? "")
+		|| !Array.isArray(value.lessonIds) || value.lessonIds.length > 32
+		|| new Set(value.lessonIds).size !== value.lessonIds.length
+		|| value.lessonIds.some(id => !/^[a-z][a-z0-9-]{1,63}$/.test(id))) throw new Error("INVALID_GAME_EXPERIENCE_RECORD");
 	return { version: 1, source: { repository: source.repository, revision: source.revision, path: source.path, fileSha256: source.fileSha256 }, lessonIds: [...value.lessonIds] };
 }
 
@@ -31,7 +46,10 @@ export async function loadGameExperience() {
 }
 
 export function gameExperienceRead(experience, args = {}) {
-	if (!object(args) || Object.keys(args).some(key => !["ids", "topic"].includes(key)) || args.ids !== undefined && (!Array.isArray(args.ids) || !args.ids.length || args.ids.length > 4 || new Set(args.ids).size !== args.ids.length || args.ids.some(id => !experience.lessonIds.includes(id))) || args.topic !== undefined && !/^[a-z-]{1,40}$/.test(args.topic)) throw new Error("INVALID_GAME_EXPERIENCE_QUERY");
+	if (!object(args) || Object.keys(args).some(key => !["ids", "topic"].includes(key))
+		|| args.ids !== undefined && (!Array.isArray(args.ids) || !args.ids.length || args.ids.length > 4
+			|| new Set(args.ids).size !== args.ids.length || args.ids.some(id => !experience.lessonIds.includes(id)))
+		|| args.topic !== undefined && !/^[a-z-]{1,40}$/.test(args.topic)) throw new Error("INVALID_GAME_EXPERIENCE_QUERY");
 	const lessons = experience.lessons.filter(lesson => (!args.ids || args.ids.includes(lesson.id)) && (!args.topic || lesson.topics.includes(args.topic))).slice(0, 4);
 	return { source: experience.source, lessons: lessons.map(lesson => ({ id: lesson.id, title: lesson.title.zhCN, guidance: lesson.guidance.zhCN, sources: lesson.sources })) };
 }
