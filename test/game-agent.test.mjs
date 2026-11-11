@@ -9,7 +9,7 @@ import { runGamePlanner, researchForModel } from "../apps/desktop/game-agent.mjs
 import { gameGoalTools } from "../apps/desktop/game-goal.mjs";
 
 const observation = { sessionId: "PRIVATE_SESSION", selectionStateHash: "PRIVATE_HASH", capturedAtGameTick: 100, techQueue: [99], technologies: [{ techId: 100, name: "Synthetic target", unlocked: false, isQueued: false, prerequisiteTechIds: [98], nativeCredential: "PRIVATE_TOKEN" }, { techId: 98, name: "Synthetic prerequisite", unlocked: true, isQueued: false, prerequisiteTechIds: [] }, { techId: 101, name: "Unrelated", unlocked: false, isQueued: false, prerequisiteTechIds: [] }] };
-async function fixture(t, respond, { maxTokens = 1024, pricing } = {}) {
+async function fixture(t, respond, { maxTokens = 1024, pricing, modelId = "fixture", reasoning = false } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-agent-")), events = [], seen = [];
 	const server = createServer(async (request, response) => {
 		let body = ""; for await (const part of request) body += part; const data = JSON.parse(body); seen.push(data);
@@ -21,8 +21,8 @@ async function fixture(t, respond, { maxTokens = 1024, pricing } = {}) {
 	});
 	await new Promise((done) => server.listen(0, "127.0.0.1", done));
 	const models = join(directory, "models.json"), baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
-	await writeFile(models, JSON.stringify({ providers: { "commanddeck-fixture": { api: "openai-completions", baseUrl, apiKey: "synthetic", models: [{ id: "fixture", contextWindow: 65536, maxTokens, ...(pricing ? { cost: pricing } : {}) }] } } }));
-	const run = (extra = {}) => runGamePlanner({ directory: join(directory, "private"), task: { id: randomUUID(), scope: { techId: 100 } }, mode: "assist", prompt: "Normally queue only selected research", providerId: "commanddeck-fixture", modelId: "fixture", playbook: "Synthetic playbook: preserve original action", observation, signal: new AbortController().signal, observe: async () => observation, event: (kind, value) => events.push({ kind, ...value }), testModelsPath: models, ...extra });
+	await writeFile(models, JSON.stringify({ providers: { "commanddeck-fixture": { api: "openai-completions", baseUrl, apiKey: "synthetic", models: [{ id: modelId, reasoning, contextWindow: 65536, maxTokens, ...(pricing ? { cost: pricing } : {}) }] } } }));
+	const run = (extra = {}) => runGamePlanner({ directory: join(directory, "private"), task: { id: randomUUID(), scope: { techId: 100 } }, mode: "assist", prompt: "Normally queue only selected research", providerId: "commanddeck-fixture", modelId, playbook: "Synthetic playbook: preserve original action", observation, signal: new AbortController().signal, observe: async () => observation, event: (kind, value) => events.push({ kind, ...value }), testModelsPath: models, ...extra });
 	t.after(async () => { server.closeAllConnections(); server.close(); const absolute = await realpath(directory); assert.equal(dirname(absolute).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(absolute).startsWith("commanddeck-game-agent-")); await rm(absolute, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 }); });
 	return { directory, baseUrl, events, seen, run };
 }
@@ -125,6 +125,18 @@ test("sustained menu tasks reserve enough reasoning output and initially expose 
 	assert.ok(JSON.stringify(f.seen[0].messages).includes("球面世界坐标"));
 	assert.ok(JSON.stringify(f.seen[0].messages).includes("后续 prepare 会替换旧引用"));
 	assert.equal(result.requestCount, 2);
+});
+
+test("sustained MiniMax Flash requests explicitly select low thinking while other configured models retain their mapping", async t => {
+	for (const modelId of ["MiniMax-M3.1-Flash", "fixture"]) {
+		const f = await fixture(t, (data, index) => {
+			assert.equal(data.model, modelId);
+			assert.equal(data.reasoning_effort, modelId === "MiniMax-M3.1-Flash" ? "low" : undefined);
+			assert.equal(data.max_tokens ?? data.max_completion_tokens, 16384);
+			return index === 1 ? call("spherewright_get_session_state", {}) : [{ content: "已核对当前现场。" }];
+		}, { modelId, reasoning: true, maxTokens: 131072 });
+		await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name: "spherewright_get_session_state", description: "Native session", inputSchema: { type: "object", properties: {}, additionalProperties: false } }], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async name => name === "deck_goal_next_decision" ? { continue: false } : { success: true, result: { gameLoaded: true } } });
+	}
 });
 
 test("a truncated final response after a proposal never becomes a completed plan or an automatic retry", async (t) => {

@@ -166,6 +166,8 @@ Sustained Pi sessions receive native technology, recipe and building indexes wit
 
 The game prompt explains spherical world coordinates, radial height and local tangent steps. Ground samples provide surface evidence, and an original movement terminal establishes actual progress. The prompt also requires serial native preparation and commit, followed by original-action reconciliation before another write. Conditions use each discovered read schema and the exact registered tool names.
 
+Sustained `MiniMax-M3.1-Flash` sessions using the OpenAI-compatible protocol explicitly select `low` thinking. The provider defaults an omitted effort field to `max`, so an explicit setting bounds routine decision latency and reasoning output. [MiniMax request parameters](https://platform.minimax.io/docs/api-reference/text-openai-api)
+
 | Step | Deliverable | Acceptance focus |
 | --- | --- | --- |
 | 1 | Implemented durable goals, stages and Current goal/action snapshots | Preserve the goal and original actions after conversational stop, UI reload and host reconstruction, with completion surviving normal close |

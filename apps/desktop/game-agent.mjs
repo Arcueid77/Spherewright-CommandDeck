@@ -31,6 +31,8 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 	const runtime = protectedProfile ? await createProtectedRuntime(protectedProfile, signal) : await ModelRuntime.create({ authPath: join(cwd, "auth.json"), modelsPath, modelsStorePath: join(cwd, "models-store.json"), allowModelNetwork: false });
 	const model = runtime.getModel(providerId, modelId); if (!model) throw new Error("CONFIGURED_MODEL_UNAVAILABLE");
 	const outputLimit = Math.min(model.maxTokens, goalTools ? maximumGoalOutputTokens : maximumOutputTokens);
+	// MiniMax-M3.1-Flash defaults omitted reasoning_effort to max.
+	const thinkingLevel = goalTools && model.api === "openai-completions" && model.id === "MiniMax-M3.1-Flash" ? "low" : "off";
 	let requests = 0, calls = 0, proposedTechId = null, session, response = "", rejectedEcho = false;
 	const usage = new ModelUsage({ maximumRequests: requestLimit, pricing: protectedProfile?.pricing ?? (modelsPath ? readModelPricing(modelsPath, providerId, modelId) : null), publish: value => event("usage", value) });
 	const stream = runtime.streamSimple.bind(runtime);
@@ -96,7 +98,7 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 	};
 	const abort = () => { session?.clearQueue(); void session?.abort(); };
 	try {
-		({ session } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime, model: { ...model, maxTokens: outputLimit }, thinkingLevel: "off", sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), resourceLoader: loader, noTools: "all", tools: names, customTools: tools, settingsManager: SettingsManager.inMemory({ compaction: { enabled: Boolean(goalTools) }, retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0, timeoutMs: 60000 } }, cacheWarming: "off" }) }));
+		({ session } = await createAgentSession({ cwd, agentDir: cwd, modelRuntime: runtime, model: { ...model, maxTokens: outputLimit }, thinkingLevel, sessionManager: SessionManager.create(cwd, join(cwd, "sessions")), resourceLoader: loader, noTools: "all", tools: names, customTools: tools, settingsManager: SettingsManager.inMemory({ compaction: { enabled: Boolean(goalTools) }, retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0, timeoutMs: 60000 } }, cacheWarming: "off" }) }));
 		if (JSON.stringify(session.getActiveToolNames().sort()) !== JSON.stringify(names) || JSON.stringify(session.getCallableToolNames().sort()) !== JSON.stringify(names)) throw new Error("PI_GAME_TOOL_SET_MISMATCH");
 		if (goalTools && observation?.loaded === false) {
 			const menuTools = new Set(["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result", "spherewright_prepare_new_game", "spherewright_commit_new_game", ...goalTools.map(tool => tool.name), "deck_goal_guidance"]);
