@@ -281,11 +281,11 @@ export class GameTasks {
 	}
 	resolveStoppedAction(authority, intentId, priorFailure) {
 		this.#requireStorage();
-		if (authority !== this.#approvalAuthority || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		if (authority !== this.hostApproval || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
 		return this.#launch("reconciling", async () => {
 			if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
 			this.#reconnectOriginal = true;
-			try { await this.ledger.resolveStoppedAction(authority, intentId, priorFailure); this.#stage("failed"); }
+			try { await this.ledger.resolveStoppedAction(this.#approvalAuthority, intentId, priorFailure); this.#stage("failed"); }
 			finally { this.#reconnectOriginal = false; }
 		});
 	}

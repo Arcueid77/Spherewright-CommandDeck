@@ -51,6 +51,23 @@ test("MCP catalog compiles native nested schemas and refuses consent operations 
 	assert.deepEqual(publicGameValue({ planToken: "secret", saveName: "private", nested: { resumeToken: "secret", count: 2 }, beltPath: [1, 2] }), { nested: { count: 2 }, beltPath: [1, 2] });
 });
 
+test("stopped-action resolution accepts only host authority and translates it to the private ledger authority", async t => {
+	const f = await fixture(t, async () => {});
+	let called = false;
+	f.host.ledger.resolveStoppedAction = async (authority, id, proof) => {
+		assert.notEqual(authority, f.approval);
+		assert.equal(id, "retained-original");
+		assert.equal(proof.state, "action_failed");
+		called = true;
+	};
+	assert.throws(() => f.host.resolveStoppedAction({}, "retained-original", {}), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
+	f.host.resolveStoppedAction(f.approval, "retained-original", { state: "action_failed" });
+	await f.host.settled();
+	assert.equal(called, true);
+	assert.equal(f.host.snapshot().error, null);
+	assert.equal(f.frozen(), 0);
+});
+
 test("one stdio discovery supports two native actions through one host ledger without per-action adapters", async t => {
 	let nativeTools;
 	const f = await fixture(t, async ({ invoke, nativeTools: tools }) => {
