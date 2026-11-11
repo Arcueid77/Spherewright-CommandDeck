@@ -6,6 +6,7 @@ import { mkdtemp, rm, realpath, writeFile, readdir, readFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { runGamePlanner, researchForModel } from "../apps/desktop/game-agent.mjs";
+import { gameGoalTools } from "../apps/desktop/game-goal.mjs";
 
 const observation = { sessionId: "PRIVATE_SESSION", selectionStateHash: "PRIVATE_HASH", capturedAtGameTick: 100, techQueue: [99], technologies: [{ techId: 100, name: "Synthetic target", unlocked: false, isQueued: false, prerequisiteTechIds: [98], nativeCredential: "PRIVATE_TOKEN" }, { techId: 98, name: "Synthetic prerequisite", unlocked: true, isQueued: false, prerequisiteTechIds: [] }, { techId: 101, name: "Unrelated", unlocked: false, isQueued: false, prerequisiteTechIds: [] }] };
 async function fixture(t, respond, { maxTokens = 1024, pricing } = {}) {
@@ -88,6 +89,20 @@ test("research reasoning has a bounded 4096 output allowance while request and t
 	const result = await f.run();
 	assert.equal(result.requestCount, 3); assert.equal(result.toolCalls, 2); assert.equal(result.proposedTechId, 100); assert.equal(result.gameCommits, 0);
 	assert.ok(f.seen.every((request) => (request.max_tokens ?? request.max_completion_tokens) === 4096));
+});
+
+test("sustained menu tasks reserve enough reasoning output and initially expose menu operations", async t => {
+	const f = await fixture(t, (data, index) => {
+		assert.equal(data.max_tokens ?? data.max_completion_tokens, 16384);
+		const names = data.tools.map(tool => tool.function.name);
+		assert.ok(names.includes("spherewright_prepare_new_game"));
+		assert.ok(names.includes("deck_goal_plan"));
+		assert.ok(!names.includes("spherewright_prepare_harvest"));
+		return index === 1 ? call("spherewright_get_session_state", {}) : [{ content: "菜单观察完成。" }];
+	}, { maxTokens: 131072 });
+	const definition = name => ({ name, description: "Synthetic native operation", inputSchema: { type: "object", properties: {}, additionalProperties: false } });
+	const result = await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: false }, nativeTools: [definition("spherewright_get_session_state"), definition("spherewright_prepare_new_game"), definition("spherewright_commit_new_game"), definition("spherewright_prepare_harvest")], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 1, durationMs: 10000 }, invoke: async name => name === "deck_goal_next_decision" ? { continue: false } : { success: true, result: { gameLoaded: false } } });
+	assert.equal(result.requestCount, 2);
 });
 
 test("a truncated final response after a proposal never becomes a completed plan or an automatic retry", async (t) => {

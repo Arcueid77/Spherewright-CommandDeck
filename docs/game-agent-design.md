@@ -106,6 +106,8 @@ Context summaries reference persistent facts and original receipts. Older observ
 
 Start with composable skills for basic power, supplying a material, building a small production chain, diagnosing starvation and verifying throughput. Each skill describes prerequisites, relevant MCP capabilities, expected changes and failure handling. Material ratios derive from Spherewright's actual catalog, with execution conditions decided by native prepare.
 
+Sustained tasks use the configured model output allowance up to 16384 tokens per request. The initial menu loadout exposes status, new-world and goal coordination tools. Later stages select other registered tools.
+
 Tools remain dynamically discovered from Spherewright. Each stage prioritizes relevant tools for the model while the host enforces the complete authorization scope. The program handles repetitive observations and action waiting, leaving strategy choices to the model.
 
 ## 6. Current goal and Current action panels
