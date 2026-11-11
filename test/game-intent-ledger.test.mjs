@@ -28,11 +28,12 @@ function acceptance(intent, extra = {}) { return { accepted: true, actionKind: "
 function completion(f, intent, extra = {}) {
 	return { actionId: "action-fixture", actionKind: "select-research", sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, terminal: true, succeeded: true, state: "completed", completedAtGameTick: 1201, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: [99, 100], previousCurrentTechId: 99, currentTechId: 99, inventoryPreserved: true, researchProgressPreserved: true }, ...extra };
 }
-function stoppedHarvest(f) {
-	const task = f.ledger.createMcpTask({ ...f.scope, kind: "mcp-action", parentTaskId: "synthetic-parent", actionKind: "harvest", requestHash: "sha256:" + "c".repeat(64) });
+function stoppedHarvest(f, actionKind = "harvest") {
+	const task = f.ledger.createMcpTask({ ...f.scope, kind: "mcp-action", parentTaskId: "synthetic-parent", actionKind, requestHash: "sha256:" + "c".repeat(64) });
 	const intent = f.ledger.beginMcpIntent(f.authority, task.id, "sha256:" + "d".repeat(64), f.context().observedAt + 30000);
-	f.ledger.acceptMcp(intent.intentId, { accepted: true, actionId: "stopped-harvest-fixture", actionKind: "harvest", idempotencyKey: intent.idempotencyKey });
-	const terminal = { actionId: "stopped-harvest-fixture", actionKind: "harvest", sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, state: "action_failed", terminal: true, succeeded: false, recoveryRequired: false, failureKind: "position_stalled", stalled: true, doNotRetrySameTarget: true, startedAtGameTick: 1200, completedAtGameTick: 1201, afterStateHash: "sha256:" + "e".repeat(64) };
+	f.ledger.acceptMcp(intent.intentId, { accepted: true, actionId: "stopped-harvest-fixture", actionKind, idempotencyKey: intent.idempotencyKey });
+	const terminal = { actionId: "stopped-harvest-fixture", actionKind, sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, state: "action_failed", terminal: true, succeeded: false, recoveryRequired: false, failureKind: "position_stalled", stalled: true, doNotRetrySameTarget: true, startedAtGameTick: 1200, completedAtGameTick: 1201, beforeStateHash: "sha256:" + "d".repeat(64), afterStateHash: "sha256:" + "e".repeat(64) };
+	if (actionKind === "handcraft") Object.assign(terminal, { failureKind: null, stalled: false, doNotRetrySameTarget: false, targetItemId: 6, requestedCount: 5, itemDeltas: [{ itemId: 1102, beforeCount: 20, afterCount: 10, delta: -10 }] });
 	const context = { ...f.context(), capturedAtGameTick: 1202 };
 	f.setProofReply(request => ({ request, terminal, context }));
 	return { task, intent, terminal, context };
@@ -48,6 +49,24 @@ test("an exact native stopped harvest closes as a failure and preserves the orig
 	assert.equal(result.actionId, action.terminal.actionId);
 	assert.equal(f.ledger.task(action.task.id).state, "failed");
 	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("a closed handcraft failure preserves its observed input effects without claiming product success", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f, "handcraft");
+	const result = await f.ledger.reconcile(action.intent.intentId);
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(result.terminal.requestedCount, 5);
+	assert.deepEqual(result.terminal.itemDeltas, action.terminal.itemDeltas);
+	assert.equal(result.terminal.doNotRetrySameTarget, false);
+	assert.equal(f.ledger.task(action.task.id).state, "failed");
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("handcraft failure with inconsistent item effects remains isolated", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f, "handcraft");
+	action.terminal.itemDeltas[0].delta = -9;
+	await assert.rejects(f.ledger.reconcile(action.intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	assert.equal(f.ledger.unresolved()[0].state, "unknown");
 });
 
 test("legacy stopped-action classification requires trusted unchanged original proof and healthy context", async t => {

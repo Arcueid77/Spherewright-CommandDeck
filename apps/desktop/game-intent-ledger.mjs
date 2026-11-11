@@ -212,7 +212,18 @@ export class GameIntentLedger {
 			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || !newWorld && context.sessionId !== scope.sessionId || context.owned !== true || context.accessRestricted !== false) throw new Error("GAME_CONTEXT_CHANGED");
 			if (stopped && (context.writeHealth !== "healthy" || context.planetId !== scope.planetId || !tick(context.capturedAtGameTick) || context.capturedAtGameTick < terminal.completedAtGameTick)) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
 			if (newWorld && (!opaque(terminal.sessionId) || terminal.sessionId !== context.sessionId || !positive(terminal.planetId) || terminal.planetId !== context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
-			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify({ actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: !stopped, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true, ...(stopped ? { failureKind: terminal.failureKind, doNotRetrySameTarget: true, targetObjectId: terminal.targetObjectId ?? null, proofHash: hash(terminal), resolvedStoppedAction: resolvingStoppedAction } : {}) }), id);
+			const summary = { actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: !stopped, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true };
+			if (stopped) Object.assign(summary, {
+				failureKind: terminal.failureKind ?? null,
+				doNotRetrySameTarget: terminal.doNotRetrySameTarget === true,
+				targetObjectId: terminal.targetObjectId ?? null,
+				targetItemId: terminal.targetItemId ?? null,
+				requestedCount: terminal.requestedCount ?? null,
+				itemDeltas: (terminal.itemDeltas ?? []).map(({ itemId, beforeCount, afterCount, delta }) => ({ itemId, beforeCount, afterCount, delta })),
+				proofHash: hash(terminal),
+				resolvedStoppedAction: resolvingStoppedAction,
+			});
+			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify(summary), id);
 			this.db.prepare("UPDATE game_tasks SET state=? WHERE id=?").run(stopped ? "failed" : "completed", intent.task_id); this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id); return null;
 		});
 		if (outcome) throw new Error(outcome); return this.intent(id);
