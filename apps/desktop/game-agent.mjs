@@ -115,6 +115,7 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		if (goalTools) input += "\n这是持续目标。先观察，用 deck_goal_plan 保存阶段、原因、下一步和原生只读 completionChecks。验收路径必须来自实际观察到的字段，数据缺失时读取原工具并解释、修订方案。用户指定的产量与时间窗口由宿主固定核验。用 deck_goal_wait 等待制造、科研或持续产量窗口。用 deck_goal_verify 核验目标。根据阶段选择相关原生工具；对话收尾后宿主提供下一轮现场简报，累计预算不重置。";
 		if (goalTools) input += `\n可按阶段通过 deck_goal_plan.activeTools 载入的原生工具名称：${nativeTools.map(tool => tool.name).join(", ")}。菜单阶段先新建世界，载入后再选择相关工具与推进开局阶段。`;
 		if (goalTools) input += "\n原生科技、配方和建筑目录提供完整索引。用 deck_goal_catalog 按 ID 或名称读取近期所需的原始详情。每轮选择近期动作，完成后再规划下一步。";
+		if (goalTools) input += "\n星球使用球面世界坐标。用径向距离和原生 groundAltitudeMetres 等证据判断高度，短步行目标应位于玩家径向法线的切平面并投影到表面半径。地表采样提供地面证据，路线可达性依靠真实移动终态核验。每次只保留一个原生预检方案，取得 planToken 后尽快提交匹配动作；后续 prepare 会替换旧引用。每个已受理动作均须读取原 get_action_result 或用 deck_goal_wait 核销，再开始下一次写入。目标条件的 args 遵循对应只读工具的实际 schema，零参数读取使用 {}，activeTools 使用已注册的准确名称。";
 		for (;;) {
 			await session.prompt(input);
 			await tail;

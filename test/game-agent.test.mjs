@@ -122,6 +122,8 @@ test("sustained menu tasks reserve enough reasoning output and initially expose 
 	}, { maxTokens: 131072 });
 	const definition = name => ({ name, description: "Synthetic native operation", inputSchema: { type: "object", properties: {}, additionalProperties: false } });
 	const result = await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: false }, nativeTools: [definition("spherewright_get_session_state"), definition("spherewright_prepare_new_game"), definition("spherewright_commit_new_game"), definition("spherewright_prepare_harvest")], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 1, durationMs: 10000 }, invoke: async name => name === "deck_goal_next_decision" ? { continue: false } : { success: true, result: { gameLoaded: false } } });
+	assert.ok(JSON.stringify(f.seen[0].messages).includes("球面世界坐标"));
+	assert.ok(JSON.stringify(f.seen[0].messages).includes("后续 prepare 会替换旧引用"));
 	assert.equal(result.requestCount, 2);
 });
 

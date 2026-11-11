@@ -164,6 +164,8 @@ Waiting on an unavailable field returns structural evidence immediately for the 
 
 Sustained Pi sessions receive native technology, recipe and building indexes with observation metadata. `deck_goal_catalog` retrieves full selected rows by ID or name in bounded pages from that session's observed source. Refreshing the native source updates the cached index and details. Detail queries share the existing tool allowance, while native prepare continues checking current unlock state, materials and action conditions.
 
+The game prompt explains spherical world coordinates, radial height and local tangent steps. Ground samples provide surface evidence, and an original movement terminal establishes actual progress. The prompt also requires serial native preparation and commit, followed by original-action reconciliation before another write. Conditions use each discovered read schema and the exact registered tool names.
+
 | Step | Deliverable | Acceptance focus |
 | --- | --- | --- |
 | 1 | Implemented durable goals, stages and Current goal/action snapshots | Preserve the goal and original actions after conversational stop, UI reload and host reconstruction, with completion surviving normal close |
