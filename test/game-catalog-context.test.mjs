@@ -13,6 +13,7 @@ test("native catalog indexing preserves IDs, current metadata and prerequisites 
 	const cache = new Map([[source, { args: { sessionId: "synthetic" }, reply }]]);
 	const details = gameCatalogDetails(cache, { source, collection: "technologies", ids: [1] });
 	assert.deepEqual(details.result.rows, reply.result.technologies);
+	assert.deepEqual(details.result.sourcePaths, ["/result/technologies/0"]);
 	details.result.rows[0].itemRequirements[0].count = 99;
 	details.result.sourceArgs.sessionId = "changed";
 	assert.equal(reply.result.technologies[0].itemRequirements[0].count, 10);
@@ -24,6 +25,9 @@ test("catalog detail selection pages native rows and rejects unsupported or exce
 	const cache = new Map([[source, { args: {}, reply: { success: true, result: { recipes: rows } } }]]);
 	const page = gameCatalogDetails(cache, { source, collection: "recipes", query: "SYNTHETIC", offset: 4, limit: 4 });
 	assert.deepEqual(page.result.rows, rows.slice(4, 8));
+	assert.deepEqual(page.result.sourcePaths, [4, 5, 6, 7].map(index => "/result/recipes/" + index));
+	const selected = gameCatalogDetails(cache, { source, collection: "recipes", ids: [2, 10] });
+	assert.deepEqual(selected.result.sourcePaths, ["/result/recipes/1", "/result/recipes/9"]);
 	assert.equal(page.result.nextOffset, 8);
 	assert.equal(page.result.total, 12);
 	assert.equal(gameCatalogDetails(new Map(), { source, collection: "recipes" }).error.code, "GAME_CATALOG_SOURCE_REQUIRED");
