@@ -256,6 +256,20 @@ test("storage failure on goal persistence freezes the existing host before any n
 	f.host.ledger.db.exec("PRAGMA query_only=OFF");
 });
 
+test("an authoritative read refusal reaches the agent so it can continue other safe goal work", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		const refusal = await invoke("spherewright_get_recipe_catalog", {});
+		assert.equal(refusal.success, false);
+		assert.equal(refusal.error.code, "RECIPE_LOCKED");
+		await invoke("deck_goal_plan", plan(0));
+		assert.equal((await invoke("deck_goal_verify", {})).completed, true);
+	}, "refused-read");
+	f.start(); await f.host.settled();
+	assert.equal(f.host.snapshot().error, null);
+	assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal(f.host.snapshot().goal.usage.writes, 0);
+});
+
 test("known native refusal reaches the model and repeated identical attempts block without a commit", async t => {
 	const f = await fixture(t, async ({ invoke }) => {
 		await invoke("deck_goal_plan", plan(1));

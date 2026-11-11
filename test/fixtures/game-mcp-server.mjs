@@ -24,6 +24,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 	let reply;
 	if (name === "spherewright_get_status") reply = { success: true, status: { bridgeConnected: true, protocolVersion: 1, bridgeInstanceId: bridge, gameLoaded: loaded, writesConfigured: true, writeHealth: "healthy", syntheticCommitCount: commits } };
 	else if (name === "spherewright_get_session_state") reply = { success: true, result: { bridgeConnected: true, gameLoaded: loaded, ownedBySpherewright: loaded, accessRestricted: !loaded, sessionId: loaded ? session : null, localPlanetId: loaded ? 1 : null, gameTick: productionTick, revision: commits, writesAllowed: true, writeHealth: "healthy", peacefulMode: "confirmed_peaceful", writeBlockers: [] } };
+	else if (name === "spherewright_get_recipe_catalog" && mode === "refused-read") reply = { success: false, error: { code: "RECIPE_LOCKED", message: "Synthetic recipe is not unlocked" }, result: null };
 	else if (name === "spherewright_get_recipe_catalog") reply = { success: true, result: { items: [{ itemId: 1001, name: "Synthetic ore" }], saveName: "PRIVATE_SYNTHETIC_SAVE", resumeToken: "PRIVATE_SYNTHETIC_TICKET" } };
 	else if (name?.startsWith("spherewright_prepare_") && mode === "refused") reply = { success: false, error: { code: "INSUFFICIENT_ITEMS", message: "Synthetic material shortage" }, result: { prepared: false, commitAllowedNow: false, commitBlockers: ["Synthetic material shortage"] } };
 	else if (name?.startsWith("spherewright_prepare_")) {
@@ -45,5 +46,5 @@ for await (const line of createInterface({ input: process.stdin })) {
 		const rate = commits === 0 ? 0 : mode === "goal-low-rate" ? 30 : 60, producedCount = rate / 6;
 		reply = { success: true, result: { sessionId: session, snapshotId: "synthetic-production-" + productionTick, capturedAtGameTick: productionTick, requestedItemIds: args.itemIds, totalFactoryCount: 1, returnedFactoryCount: 1, nextCursor: null, window: { state: "ready", startGameTick: productionTick - 599, endGameTick: productionTick, elapsedGameTicks: 600, elapsedGameSeconds: 10, crossedSessionBoundary: false }, planets: [{ planetId: 1, capturedAtGameTick: productionTick, production: [{ itemId: args.itemIds[0], itemName: "Synthetic matrix", producedCount, consumedCount: 0, actualProductionPerMinute: rate, actualConsumptionPerMinute: 0, rateSource: "native_factory_statistics_level_0" }] }] } };
 	} else reply = { success: false, error: "UNSUPPORTED" };
-	send(id, { content: [{ type: "text", text: "Synthetic result" }], structuredContent: reply, ...(mode === "refused" && name?.startsWith("spherewright_prepare_") ? { isError: true } : {}) });
+	send(id, { content: [{ type: "text", text: "Synthetic result" }], structuredContent: reply, ...(mode === "refused" && name?.startsWith("spherewright_prepare_") || mode === "refused-read" && name === "spherewright_get_recipe_catalog" ? { isError: true } : {}) });
 }
