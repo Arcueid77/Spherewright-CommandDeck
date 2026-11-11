@@ -89,6 +89,18 @@ test("a goal executes through the same stdio gateway and waits for its original 
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
 });
 
+test("a wait returns missing-field evidence immediately so the agent can correct its condition", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		const result = await invoke("deck_goal_wait", { reason: "检查观察路径", timeoutSeconds: 120, condition: { ...check(1), path: "/missing" } });
+		assert.equal(result.satisfied, false);
+		assert.equal(result.timedOut, false);
+		assert.equal(result.reason, "GAME_GOAL_WAIT_FIELD_UNAVAILABLE");
+		assert.ok(result.goal.observations.at(-1).availableFields.includes("status"));
+		assert.equal(result.goal.status, "running");
+	});
+	f.start(); await f.host.settled();
+});
+
 test("native read conditions can be revised during observation", async t => {
 	const f = await fixture(t, async ({ invoke }) => {
 		await assert.rejects(invoke("deck_goal_plan", { ...plan(1), completionChecks: [{ ...check(1), tool: "spherewright_commit_handcraft" }] }), /GAME_GOAL_READ_CONDITION_REQUIRED/);

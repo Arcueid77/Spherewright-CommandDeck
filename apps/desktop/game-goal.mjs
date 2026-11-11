@@ -161,7 +161,7 @@ export class GameGoalController {
 		if (!condition && !this.pending().length && !productionWait) throw new Error("GAME_GOAL_WAIT_CONDITION_REQUIRED");
 		const deadline = performance.now() + args.timeoutSeconds * 1000;
 		this.goal.status = "waiting"; this.goal.wait = { reason: args.reason, deadlineAt: this.now() + args.timeoutSeconds * 1000 }; this.persist(); this.stage("waiting");
-		let satisfied = false;
+		let satisfied = false, unavailable = false;
 		let sampledAt = -Infinity;
 		try {
 			do {
@@ -169,16 +169,20 @@ export class GameGoalController {
 				if (this.goal.objective.kind === "production" && !this.pending().length && performance.now() - sampledAt >= 2000) {
 					await this.production(); sampledAt = performance.now();
 				}
-				if (condition) satisfied = (await this.check(condition)).passed;
+				if (condition) {
+					const observation = await this.check(condition);
+					satisfied = observation.passed;
+					unavailable = !observation.available;
+				}
 				else if (productionWait) satisfied = this.goal.verification?.state === "verified";
 				else { await this.reconcile(); satisfied = !this.pending().length; }
-				if (satisfied || performance.now() >= deadline) break;
+				if (satisfied || unavailable || performance.now() >= deadline) break;
 				await this.pause(Math.min(1000, Math.max(1, deadline - performance.now())), this.signal);
 			} while (true);
 		} finally {
 			if (!this.done) { this.goal.status = "running"; this.goal.wait = null; this.persist(); this.stage("planning"); }
 		}
-		return { satisfied, timedOut: !satisfied, goal: this.view() };
+		return { satisfied, timedOut: !satisfied && !unavailable, ...(unavailable ? { reason: "GAME_GOAL_WAIT_FIELD_UNAVAILABLE" } : {}), goal: this.view() };
 	}
 	pending() { return this.ledger.unresolved().filter(intent => this.ledger.task(intent.taskId).scope.parentTaskId === this.task.id); }
 	async reconcile() {
