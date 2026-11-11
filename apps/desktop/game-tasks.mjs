@@ -206,7 +206,9 @@ export class GameTasks {
 		}
 		catch (error) {
 			const storageFailed = this.#latchStorageFault();
-			if (!storageFailed && this.mcpSession?.mode === "autonomous" && (this.ledger.unresolved().length || ["GAME_CONTEXT_CHANGED", "OWNED_GAME_WORLD_REQUIRED", "HEALTHY_GAME_WRITES_REQUIRED", "INDEPENDENT_GAME_AUDIT_REQUIRED", "GAME_MCP_CONTEXT_UNAVAILABLE", "GAME_MCP_CALL_NOT_SUPPORTED"].includes(error.message) || /^MCP_/.test(error.message))) this.controller.abort();
+			const pending = this.ledger.unresolved();
+			const pendingGuard = ["GAME_MCP_WRITE_BUDGET_OR_PENDING", "FRESH_GAME_MCP_PLAN_REQUIRED"].includes(error.message) && pending.every(intent => intent.state === "accepted" && intent.actionId);
+			if (!storageFailed && this.mcpSession?.mode === "autonomous" && (pending.length && !pendingGuard || ["GAME_CONTEXT_CHANGED", "OWNED_GAME_WORLD_REQUIRED", "HEALTHY_GAME_WRITES_REQUIRED", "INDEPENDENT_GAME_AUDIT_REQUIRED", "GAME_MCP_CONTEXT_UNAVAILABLE", "GAME_MCP_CALL_NOT_SUPPORTED"].includes(error.message) || /^MCP_/.test(error.message))) this.controller.abort();
 			throw error;
 		}
 	}

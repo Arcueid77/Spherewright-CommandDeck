@@ -163,6 +163,22 @@ test("one task authorization permits two ordinary native commits without a secon
 	assert.equal(actions.length, 2); assert.ok(actions.every(task => task.scope.autonomousAuthorizationHash === root.previewHash && task.intent.state === "completed")); assert.equal(f.host.snapshot().mcp.authorized, false); assert.equal(f.frozen(), 0);
 });
 
+test("an early next preparation remains blocked while the agent can reconcile the accepted original and continue", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		const original = await craft(invoke);
+		await assert.rejects(craft(invoke), /GAME_MCP_WRITE_BUDGET_OR_PENDING/);
+		assert.equal(f.host.snapshot().mcp.authorized, true);
+		for (let read = 0; read < 2; read++) await invoke("spherewright_get_action_result", { actionId: original.result.actionId });
+		assert.equal(f.host.snapshot().unresolved.length, 0);
+		const next = await craft(invoke);
+		for (let read = 0; read < 2; read++) await invoke("spherewright_get_action_result", { actionId: next.result.actionId });
+	}, "goal");
+	f.start(autonomous); await authorize(f); await f.host.settled();
+	assert.equal(f.host.snapshot().error, null);
+	assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 2);
+});
+
 test("autonomous action family and write budget remain enforced after the one-time approval", async t => {
 	const f = await fixture(t, async ({ invoke }) => {
 		await assert.rejects(invoke("spherewright_prepare_new_game", { galaxySeed: 42, starCount: 32 }), /GAME_MCP_TOOL_SCOPE_REJECTED/);
