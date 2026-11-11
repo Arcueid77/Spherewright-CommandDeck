@@ -6,7 +6,7 @@ Updated 2026-11-11. The design baseline is CommandDeck `e2d75d11e3b84b4bc01a00ae
 
 The game Agent works continuously toward a verifiable objective. Deck stores the goal, stages, facts, budgets and action evidence. Pi chooses the next step when a decision is needed, and Spherewright supplies native observations and actions. Deck's Current goal and Current action panels display that same task state.
 
-This document records the discussed design direction. The goal controller, condition waiting, production verification and panel projection below remain planned work, with the implementation order in section 8. Section 1 describes the existing implementation. Milestone status remains in the [Roadmap](../ROADMAP.md).
+The goal controller, condition waiting, bounded continuation, throughput verifier and Current goal/action panels are implemented with source and synthetic desktop validation. Real MiniMax also completed planning, one craft and verification against a synthetic game service. A blue-matrix production line in a dedicated real new world still awaits validation. Section 8 records implementation and acceptance scope. Milestone status remains in the [Roadmap](../ROADMAP.md).
 
 ## 1. Existing foundation and remaining work
 
@@ -14,7 +14,7 @@ The current game mode uses `createAgentSession()` to assemble models, sessions, 
 
 The execution layer already maintains finite goal authorization, action scope, durable intent before dispatch, single submission, original-action reconciliation and unknown-result quarantine. General game tasks have source and synthetic desktop evidence. Evidence for the real research-enqueue workflow has its own scope. [Game execution session](../apps/desktop/spherewright-game-session.mjs) · [Action ledger](../apps/desktop/game-intent-ledger.mjs) · [Roadmap](../ROADMAP.md)
 
-Today `startMcp()` invokes the planner once. Pi can call tools repeatedly within that run. When the planner returns, the host either reconciles unresolved actions or ends the round. A sustained objective still needs explicit stages, condition waiting, progress detection and production verification. A normal model stop indicates the end of that conversational round. [Task scheduling](../apps/desktop/game-tasks.mjs)
+For a sustained objective, `startMcp()` creates a host goal controller. After each normal conversational stop, the Pi session receives a current task briefing and continues or ends according to verification, progress and remaining budget. Existing callers retain their single-round semantics. Version 1 goal metadata stores stages, conditions and usage in the existing v3 game ledger, with original action records retaining their format. [Task scheduling](../apps/desktop/game-tasks.mjs) · [Goal controller](../apps/desktop/game-goal.mjs) · [State contract](../apps/desktop/game-goal-contract.mjs)
 
 ## 2. Responsibilities and customization points
 
@@ -150,14 +150,20 @@ Completion requires the automatic supply chain, relevant facilities and connecti
 
 Record at least time to first matrix, sustained throughput, actual model/tool calls, resource consumption, human interventions and failure reasons. Lab records stage interruptions, original action outcomes and save coverage so behavior can be reproduced for the same version.
 
-## 8. Implementation order and acceptance
+## 8. Implementation and acceptance status
+
+In Game Agent, select a model, enter the objective and enable sustained goal execution. Native-condition verification displays conditions proposed by the Agent. Sustained-production verification selects a matrix, target rate and game-time window. Proposed conditions can be revised from observed evidence, with previous/new conditions and the reason recorded. The host continues enforcing the user-selected production rate and sustained window. Comparison normalizes numeric and boolean literals against the observed native field type, retaining the requested value, comparison value and readback. Missing fields provide structural hints and keep verification pending.
+
+`deck_goal_plan` records stages and plans and can select relevant tools. `deck_goal_wait` waits for original actions, native conditions or the production window. `deck_goal_verify` evaluates fresh native data. `deck_goal_guidance` reads the selected service guide in sections. Coordination, guidance and game calls share one cumulative tool allowance.
+
+Continue or revise this goal retains its identity with a new revision, supports another selected model and preserves cumulative spending and the original deadline. The normal task entry point confirms the next run authorization. Completion, unresolved actions and remaining allowance determine available controls.
 
 | Step | Deliverable | Acceptance focus |
 | --- | --- | --- |
-| 1 | Durable goals, stages and Current goal/action snapshots | Retain the objective when a conversation ends, and display the same task and original actions after UI reload |
-| 2 | Condition waiting, current briefings and bounded continuation | Observe only as needed while waiting, wake decisions on events, accumulate budgets and freeze new submissions promptly on pause |
-| 3 | Production verifier and live blue-matrix run | Actual sustained production meets the objective, with original receipts, measurement windows and intervention records preserved |
-| 4 | Skills and context policies informed by actual failures | Compare progress, cost and human intervention using the same acceptance criteria |
+| 1 | Implemented durable goals, stages and Current goal/action snapshots | Preserve the goal and original actions after conversational stop, UI reload and host reconstruction, with completion surviving normal close |
+| 2 | Implemented condition waiting, current briefings, stage tool selection, sectioned guidance and bounded continuation | Cover early stops, timeouts, lack of progress, repeated refusals, storage faults, cumulative budgets and pause |
+| 3 | Implemented throughput verifier, with the real blue-matrix line awaiting acceptance | Synthetic desktop checks cover continuous native windows and UI reload; real acceptance must prove facilities, supply, power and sustained output |
+| 4 | Stage context and on-demand guidance connected, with production skills refined through live work | Compare progress, cost and human intervention using the same acceptance criteria |
 
 Changes primarily belong in the existing game tasks, Pi assembly, execution session, ledger and game panel. Concrete storage fields and migration are determined with step 1. [Task scheduling](../apps/desktop/game-tasks.mjs) · [Pi assembly](../apps/desktop/game-agent.mjs) · [Execution session](../apps/desktop/spherewright-game-session.mjs) · [Action ledger](../apps/desktop/game-intent-ledger.mjs) · [Game panel](../apps/renderer/src/game-tasks.tsx)
 

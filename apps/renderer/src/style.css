@@ -99,6 +99,21 @@ textarea {
 .game-tasks-panel label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 12px; }
 .game-tasks-panel textarea { resize: vertical; line-height: 1.7; }
 .game-task-settings { margin: 18px 0; }
+.game-goal { border: 1px solid #4b655d; border-radius: 6px; padding: 16px; margin: 8px 0 24px; background: #13232b; }
+.game-goal-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.game-goal-heading h3 { margin: 0; }
+.game-goal-heading span { font-size: 12px; color: #b8d6c7; }
+.game-goal-title { line-height: 1.7; overflow-wrap: anywhere; }
+.game-goal dl { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px 12px; font-size: 12px; line-height: 1.7; }
+.game-goal dt { color: #9ab1b8; }
+.game-goal dd { margin: 0; overflow-wrap: anywhere; }
+.game-goal-measurement { padding: 12px 0; border-top: 1px solid #36515a; }
+.game-goal-measurement p { margin: 8px 0; font-size: 12px; }
+.game-goal-evidence { margin-top: 16px; font-size: 12px; }
+.game-goal-evidence li { margin: 10px 0; overflow-wrap: anywhere; }
+.game-goal-evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.game-tasks-panel .game-goal-toggle { flex-direction: row; align-items: center; margin: 16px 0; }
+.game-goal-toggle input { width: auto; }
 .game-task-settings summary { cursor: pointer; margin-bottom: 14px; font-size: 12px; color: #adbea9; }
 .game-tasks-panel small { display: block; margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
 .game-task-stage { padding: 10px 12px; margin: 18px 0 10px; border: 1px solid #4b655d; color: #a9c9b8; border-radius: 5px; font-size: 12px; }

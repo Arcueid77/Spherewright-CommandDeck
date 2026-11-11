@@ -4,11 +4,12 @@ import { GameIntentLedger } from "./game-intent-ledger.mjs";
 import { ResearchAdapter } from "./research-adapter.mjs";
 import { positive, opaque } from "./research-contract.mjs";
 import { SpherewrightGameSession, gameContext, gameSessionLimits, readMcpAction } from "./spherewright-game-session.mjs";
+import { GameGoalController, gameGoalProjection, gameObjective, gameGoalTools } from "./game-goal.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]{1,128}$/.test(error?.message) ? error.message : "GAME_TASK_FAILED";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 
-// One host coordinator; model tools only observe and propose. Neither can approve or commit.
+// One host coordinator owns authorization, native submission and original-action reconciliation.
 export class GameTasks {
 	#authority; #approvalAuthority = {}; #confirmations = new Map(); #reconnectOriginal = false;
 	constructor({ directory, bridge, researchAuthority, approvalAuthority, freezeDevelopment, releaseDevelopment, planner, emit = () => {}, now = () => Date.now(), pollMilliseconds = 15000, syntheticOnly = false }) {
@@ -21,8 +22,15 @@ export class GameTasks {
 			readResearchProof: (request) => this.#readOriginal(request),
 		});
 		const pending = this.ledger.unresolved();
-		if (pending.length) { this.currentTaskId = pending[0].taskId; this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"; }
-		else this.currentTaskId = this.ledger.tasks()[0]?.id ?? null;
+		if (pending.length) {
+			const action = this.ledger.task(pending[0].taskId), parent = action.scope.parentTaskId;
+			this.currentTaskId = parent && this.ledger.detailsFor(parent).goal ? parent : action.id;
+			this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES";
+		}
+		else {
+			const latest = this.ledger.tasks()[0], parent = latest?.scope.parentTaskId;
+			this.currentTaskId = parent && this.ledger.detailsFor(parent).goal ? parent : latest?.id ?? null;
+		}
 	}
 	async initialize() { if (this.ledger.unresolved().length) { await this.freezeDevelopment(); this.developmentHeld = true; } }
 	runtimeUnavailable() {
@@ -44,9 +52,17 @@ export class GameTasks {
 		const tasks = this.ledger.tasks();
 		if (this.currentTaskId && !tasks.some(task => task.id === this.currentTaskId)) tasks.unshift({ ...this.ledger.task(this.currentTaskId), details: this.ledger.detailsFor(this.currentTaskId), intent: null });
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
-		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, families: this.bridge.metadata?.gameActionFamilies ?? [], awaitingConfirmation: Boolean(this.mcpSession?.pending), awaitingAuthorization: this.mcpSession?.pending?.kind === "run", authorized: this.mcpSession?.authorized ?? false, expiresAt: this.mcpSession?.pending?.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
+		const storedGoal = tasks.find(task => task.id === this.currentTaskId)?.details.goal;
+		const goal = storedGoal ? gameGoalProjection(storedGoal, this.ledger.children(this.currentTaskId), { active: Boolean(this.goalController && this.operation), now: this.now() }) : null;
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, goal, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, families: this.bridge.metadata?.gameActionFamilies ?? [], awaitingConfirmation: Boolean(this.mcpSession?.pending), awaitingAuthorization: this.mcpSession?.pending?.kind === "run", authorized: this.mcpSession?.authorized ?? false, expiresAt: this.mcpSession?.pending?.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
 	}
-	#note(kind, value) { if (this.currentTaskId) this.ledger.note(this.currentTaskId, kind, value); this.emit(); }
+	#note(kind, value) {
+		if (this.currentTaskId) {
+			if (kind === "usage") this.goalController?.usage(value);
+			this.ledger.note(this.currentTaskId, kind, value);
+		}
+		this.emit();
+	}
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
 	#notStopped() { this.#requireRuntime(); if (this.closing || this.controller?.signal.aborted) throw new Error("GAME_TASK_STOPPED"); }
 	#launch(phase, action) {
@@ -57,7 +73,7 @@ export class GameTasks {
 		this.operation = operation;
 		operation.done = Promise.resolve().then(action).catch((error) => {
 			if (!this.#latchStorageFault()) { this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : !this.runtimeAvailable ? "runtime_unavailable" : this.controller?.signal.aborted ? "cancelled" : "failed"; }
-			try { this.#note("error", { code: this.error }); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
+			try { this.goalController?.stop(this.controller?.signal.aborted ? "paused" : "blocked", this.error); this.#note("error", { code: this.error }); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
 		}).finally(async () => {
 			try { if (!this.#latchStorageFault() && !this.ledger.unresolved().length && !["awaiting_approval", "planning", "preparing"].includes(this.phase)) await this.#release(); }
 			catch { this.phase = "blocked"; this.error = "DEVELOPMENT_GATE_RELEASE_UNCONFIRMED"; }
@@ -113,6 +129,7 @@ export class GameTasks {
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
 		if (!args || !["observe", "assist"].includes(args.mode) || !positive(args.techId) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || args.prompt.length > 2000) throw new Error("INVALID_GAME_TASK");
+		this.goalController = null;
 		const catalog = args.catalogId ? this.catalogue : null;
 		if (args.catalogId && (!catalog || catalog.id !== args.catalogId || catalog.expiresAt <= this.now() || !catalog.items.some((tech) => tech.techId === args.techId))) throw new Error("FRESH_RESEARCH_CATALOG_REQUIRED");
 		this.currentTaskId = null; this.controller = new AbortController(); this.#confirmations.clear();
@@ -136,32 +153,57 @@ export class GameTasks {
 	startMcp(args) {
 		this.#requireRuntime();
 		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length) throw new Error("GAME_TASK_START_BLOCKED");
-		if (!["observe", "assist", "autonomous"].includes(args?.mode) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 2000 || Object.keys(args).some(key => !["kind", "mode", "providerId", "modelId", "prompt", "limits", "allowedFamilies"].includes(key))) throw new Error("INVALID_GAME_TASK");
+		if (!["observe", "assist", "autonomous"].includes(args?.mode) || !opaque(args.providerId) || typeof args.modelId !== "string" || !args.modelId.length || args.modelId.length > 256 || typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 2000 || Object.keys(args).some(key => !["kind", "mode", "providerId", "modelId", "prompt", "limits", "allowedFamilies", "objective", "continueTaskId"].includes(key))) throw new Error("INVALID_GAME_TASK");
+		const objective = args.objective === undefined ? null : gameObjective(args.objective);
+		if (objective && args.mode === "observe") throw new Error("GAME_GOAL_EXECUTION_MODE_REQUIRED");
 		const limits = gameSessionLimits(args.limits); if (args.mode === "observe") limits.writes = 0;
+		let previous = null;
+		if (args.continueTaskId !== undefined) {
+			if (!objective || !opaque(args.continueTaskId)) throw new Error("INVALID_GAME_GOAL_CONTINUATION");
+			previous = this.ledger.detailsFor(args.continueTaskId).goal;
+			if (!previous || previous.status === "completed" || !Number.isFinite(previous.deadlineAt)) throw new Error("INVALID_GAME_GOAL_CONTINUATION");
+			for (const key of ["modelRequests", "toolCalls", "writes"]) if (limits[key] > previous.limits[key] - previous.usage[key]) throw new Error("GAME_GOAL_REMAINING_BUDGET_REQUIRED");
+			if (limits.durationMs > previous.deadlineAt - this.now()) throw new Error("GAME_GOAL_REMAINING_BUDGET_REQUIRED");
+		}
+		this.goalController = null;
 		const allowedFamilies = args.mode === "autonomous" ? args.allowedFamilies : [];
 		if (args.mode === "autonomous" && (!limits.writes || !Array.isArray(allowedFamilies) || !allowedFamilies.length || allowedFamilies.length > 128 || new Set(allowedFamilies).size !== allowedFamilies.length || allowedFamilies.some(family => !this.bridge.metadata?.gameActionFamilies?.includes(family))) || args.mode !== "autonomous" && args.allowedFamilies !== undefined) throw new Error("INVALID_GAME_MCP_AUTHORIZATION_SCOPE");
 		this.currentTaskId = null; this.controller = new AbortController(); this.#confirmations.clear();
 		return this.#launch("observing", async () => {
 			await this.#reserve(true); this.#notStopped();
 			const port = this.bridgeLease.client.gamePort(this.#authority), context = await gameContext(port), playbook = await port.playbook(); this.#notStopped();
+			if (previous && (context.bridgeInstanceId !== previous.context.bridgeInstanceId || context.sessionId !== previous.context.sessionId || context.planetId !== previous.context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
 			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
-			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: args.mode, limits, ...(args.mode === "autonomous" ? { allowedFamilies: [...allowedFamilies].sort() } : {}) }); this.currentTaskId = task.id;
+			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: args.mode, limits, ...(objective ? { objective } : {}), ...(args.mode === "autonomous" ? { allowedFamilies: [...allowedFamilies].sort() } : {}) }); this.currentTaskId = task.id;
 			this.ledger.details(task.id, { ...binding, mode: args.mode, techName: "Spherewright MCP 任务", prompt: args.prompt, provider: args.providerId, model: args.modelId });
 			this.mcpSession = new SpherewrightGameSession({ port, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, goal: args.prompt, allowedFamilies, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
 			const timer = setTimeout(() => this.controller.abort(), limits.durationMs);
 			try {
+				this.goalController = objective ? new GameGoalController({ ledger: this.ledger, task, session: this.mcpSession, objective, prompt: args.prompt, previous, stage: phase => this.#stage(phase), emit: this.emit, signal: this.controller.signal, now: this.now }) : null;
 				if (args.mode === "autonomous") await this.mcpSession.authorizeRun();
 				this.#stage("planning");
-				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, nativeTools: this.mcpSession.tools(), limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
+				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, nativeTools: this.mcpSession.tools(), goalTools: objective ? gameGoalTools : null, limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
 				this.#notStopped();
 				if (this.ledger.unresolved().length) this.#stage("reconciling");
-				else { this.ledger.advised(task.id); this.#stage("advised"); }
-			} finally { clearTimeout(timer); this.mcpSession.close(); this.mcpSession = null; }
+				else if (this.goalController?.goal.status === "completed") this.#stage("goal_completed");
+				else { this.ledger.advised(task.id); this.#stage(this.goalController ? "goal_blocked" : "advised"); }
+			} finally {
+				clearTimeout(timer);
+				try { if (this.goalController && !this.goalController.done && this.ledger.storageAvailable) this.goalController.stop(this.controller.signal.aborted ? "paused" : "blocked", "GAME_GOAL_DECISION_ENDED"); }
+				finally { this.mcpSession.close(); this.mcpSession = null; }
+			}
 		});
 	}
 	async callForModel(taskId, name, args) {
-		if (!this.mcpSession || taskId !== this.currentTaskId || !this.operation || this.phase !== "planning") throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
-		try { return await this.mcpSession.call(name, args); }
+		const finishing = this.goalController?.done && ["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify"].includes(name);
+		if (!this.mcpSession || taskId !== this.currentTaskId || !this.operation || !finishing && !["planning", "waiting", "verifying"].includes(this.phase)) throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
+		try {
+			if (name.startsWith("deck_goal_")) {
+				if (!this.goalController) throw new Error("GAME_GOAL_TOOL_UNAVAILABLE");
+				return await this.goalController.call(name, args);
+			}
+			return this.goalController ? await this.goalController.native(name, args) : await this.mcpSession.call(name, args);
+		}
 		catch (error) {
 			const storageFailed = this.#latchStorageFault();
 			if (!storageFailed && this.mcpSession?.mode === "autonomous" && (this.ledger.unresolved().length || ["GAME_CONTEXT_CHANGED", "OWNED_GAME_WORLD_REQUIRED", "HEALTHY_GAME_WRITES_REQUIRED", "INDEPENDENT_GAME_AUDIT_REQUIRED", "GAME_MCP_CONTEXT_UNAVAILABLE", "GAME_MCP_CALL_NOT_SUPPORTED"].includes(error.message) || /^MCP_/.test(error.message))) this.controller.abort();
@@ -181,7 +223,12 @@ export class GameTasks {
 		const details = this.ledger.detailsFor(taskId);
 		return { id: taskId, kind: "agent", state: "running", provider: details.provider, model: details.model };
 	}
-	plannerEvent(taskId, kind, value) { if (taskId === this.currentTaskId && this.operation && (["usage", "context"].includes(kind) || this.phase === "planning" && !this.closing && !this.controller?.signal.aborted)) { try { this.#note(kind, value); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); } } }
+	plannerEvent(taskId, kind, value) {
+		const visible = ["planning", "waiting", "verifying", "goal_completed"].includes(this.phase);
+		if (taskId !== this.currentTaskId || !this.operation || !["usage", "context"].includes(kind) && (!visible || this.closing || this.controller?.signal.aborted)) return;
+		try { this.#note(kind, value); }
+		catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); }
+	}
 	confirmation(taskId, uiEpoch) {
 		this.#requireRuntime();
 		if (this.mcpSession && taskId === this.currentTaskId && this.phase === "awaiting_approval") return { ...this.mcpSession.confirmation(uiEpoch), syntheticOnly: this.syntheticOnly };
@@ -247,7 +294,7 @@ export class GameTasks {
 	stop() {
 		this.#confirmations.clear(); this.controller?.abort();
 		if (this.#latchStorageFault()) { this.emit(); return this.snapshot(); }
-		try { if (this.currentTaskId) this.ledger.stop(this.currentTaskId); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); return this.snapshot(); }
+		try { this.goalController?.stop("paused"); if (this.currentTaskId) this.ledger.stop(this.currentTaskId); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); return this.snapshot(); }
 		this.phase = this.ledger.unresolved().length ? "reconciling" : "cancelled";
 		if (!this.operation) return this.#launch(this.phase, async () => {});
 		this.emit(); return this.snapshot();
@@ -255,6 +302,7 @@ export class GameTasks {
 	async settled() { await this.operation?.done; return this.snapshot(); }
 	async drain() {
 		this.closing = true; this.catalogue = null; this.#confirmations.clear(); this.controller?.abort();
+		if (this.ledger.storageAvailable) this.goalController?.stop("paused");
 		if (this.ledger.storageAvailable && this.currentTaskId && !this.ledger.unresolved().length) { try { this.ledger.stop(this.currentTaskId); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; } }
 		await this.operation?.done;
 		// Durable unresolved intents remain blocked next launch. No new action is sent during shutdown.

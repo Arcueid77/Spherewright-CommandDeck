@@ -6,7 +6,9 @@ export async function confirmResearchFromUi({ taskId, request, showDialog, hideV
 	if (challenge.kind === "mcp-run") {
 		try {
 			overlay(true); await hideViewport();
-			const scope = challenge.context.loaded ? "当前 Spherewright 受管世界" : "当前主菜单；只可在另次确认的新世界中继续";
+			let scope = challenge.context.loaded ? "当前 Spherewright 受管世界" : "当前主菜单；只可在另次确认的新世界中继续";
+			if (challenge.objective?.kind === "production") scope += `\n产量验收 · 物品 #${challenge.objective.itemId} · 至少 ${challenge.objective.minimumPerMinute}/分钟 · 连续 ${challenge.objective.windowSeconds} 游戏秒`;
+			else if (challenge.objective) scope += "\n现场条件验收 · Agent 提出的原生观察条件将在任务中展示";
 			const answer = await showDialog({ type: "question", title: challenge.syntheticOnly ? "合成验收 · NO DSP · 授权本轮自主执行" : "授权本轮自主执行", message: challenge.goal, detail: `${challenge.syntheticOnly ? "仅连接替身，不操作 DSP。\n\n" : ""}${scope}\n\n允许的原生操作类型：${challenge.allowedFamilies.join("、")}\n最多${challenge.limits.modelRequests}次模型请求、${challenge.limits.toolCalls}次工具调用、${challenge.limits.writes}次提交，最长${Math.round(challenge.limits.durationMs / 60000)}分钟（包含本次授权等待）。\n\n这些类型内的普通操作${challenge.allowedFamilies.includes("save") ? "及当前受管世界的正常保存" : ""}会连续执行，不逐次询问。新建世界仍需另次核对精确预检；读档、导入、恢复、解除隔离没有获得授权。\n\n程序限制世界、操作类型、次数和时间，目标由 Agent 根据现场解释。结果不明立即停写。玩家输入尚未互斥；接手按钮只停止后续提交，已受理操作继续核销。重开不恢复本轮授权。`, buttons: ["取消", "授权并开始"], defaultId: 0, cancelId: 0, noLink: true });
 			if (answer.response !== 1) { await request("game", { action: "stop" }); return { cancelled: true }; }
 			return await request("game-confirmed", { nonce: challenge.nonce });

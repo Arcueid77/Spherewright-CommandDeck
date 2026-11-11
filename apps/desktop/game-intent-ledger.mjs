@@ -6,6 +6,7 @@ import { matchResearchBudget, nativeResearchStateHash, researchId } from "./rese
 import { modelUsageSnapshot } from "./model-usage.mjs";
 import { modelContextSnapshot } from "./model-context.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
+import { validateGameGoal } from "./game-goal-contract.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -17,7 +18,7 @@ const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const pendingStates = "'recorded','accepted','unknown'";
 const auditReasons = ["ACCEPTANCE_BINDING_MISMATCH", "ORIGINAL_ACTION_BINDING_MISMATCH", "NATIVE_OUTCOME_REQUIRES_AUDIT"];
 
-// Durable bounded research ledger. Trusted host ports own transport and approval provenance.
+// Durable game-task ledger. Trusted host ports own transport and approval provenance.
 export class GameIntentLedger {
 	#authority; #prepareResearch; #readResearchProof; #preparing = new Map(); #reading = new Map(); #plans = new Map(); #faulted = false;
 	constructor(file, { approvalAuthority, prepareResearch, readResearchProof, now = () => Date.now() } = {}) {
@@ -216,6 +217,28 @@ export class GameIntentLedger {
 	stop(id) { this.#plans.delete(id); this.#preparing.delete(id); return this.#transaction(() => { const intent = this.db.prepare("SELECT id,state FROM game_intents WHERE task_id=?").get(id); this.db.prepare("UPDATE game_tasks SET state=? WHERE id=? AND state<>'completed'").run(intent ? "reconciling" : "cancelled", id); return this.task(id); }); }
 	task(id) { const value = this.#task(id); return { id: value.id, state: value.state, scope: value.scope, previewHash: value.preview_hash, expiresAt: value.expires_at, approvalId: value.approval_id }; }
 	detailsFor(id) { this.#task(id); return JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"); }
+	children(parentTaskId) {
+		return this.db.prepare("SELECT id FROM game_tasks WHERE json_extract(scope,'$.parentTaskId')=? ORDER BY rowid DESC LIMIT 256").all(parentTaskId).map(({ id }) => {
+			const row = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id);
+			return { ...this.task(id), intent: row ? this.intent(row.id) : null };
+		});
+	}
+	goal(id, value) {
+		const goal = validateGameGoal(value);
+		this.#transaction(() => {
+			if (this.#task(id).scope.kind !== "mcp-session") throw new Error("GAME_GOAL_TASK_REQUIRED");
+			const row = this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id);
+			if (!row) throw new Error("GAME_GOAL_TASK_REQUIRED");
+			if (goal.status === "completed" && this.unresolved().length) throw new Error("UNRESOLVED_GAME_INTENT_BLOCKS_WRITES");
+			const previous = JSON.parse(row.body).goal;
+			if (previous && JSON.stringify(previous.completionChecks) !== JSON.stringify(goal.completionChecks)) {
+				const body = { at: this.now(), text: "验收方案已更新", name: "deck_goal_plan", code: null, revision: goal.checkRevision, reason: goal.stages.at(-1)?.reason ?? null, previousChecks: previous.completionChecks, checks: goal.completionChecks };
+				this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,'result',?)").run(id, JSON.stringify(body));
+			}
+			this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify({ ...JSON.parse(row.body), goal }), id);
+			if (goal.status === "completed") this.db.prepare("UPDATE game_tasks SET state='completed' WHERE id=?").run(id);
+		});
+	}
 	intent(id) { const value = this.#intent(id); return { intentId: value.id, taskId: value.task_id, state: value.state, idempotencyKey: value.idempotency_key, actionId: value.action_id, acceptance: value.acceptance ? JSON.parse(value.acceptance) : null, terminal: value.terminal ? JSON.parse(value.terminal) : null }; }
 	unresolved() { return this.db.prepare(`SELECT id FROM game_intents WHERE state IN (${pendingStates})`).all().map(({ id }) => this.intent(id)); }
 	tasks() { return this.db.prepare("SELECT id FROM game_tasks ORDER BY rowid DESC LIMIT 32").all().map(({ id }) => ({ ...this.task(id), details: JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"), intent: (() => { const value = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id); return value ? this.intent(value.id) : null; })() })); }

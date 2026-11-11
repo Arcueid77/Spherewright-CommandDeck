@@ -11,7 +11,7 @@ Implementation stages, dependencies and acceptance gates are tracked in the Chin
 | M0 — native viewport | Native embedding/restoration and Pi integration have evidence | Embedded menu input is deferred by the owner, not passed or declared an input lock; physical input, rendering, DPI/multi-monitor and real faults remain open |
 | M1 — development workbench | First finite editing/diff/check/recovery workflow and main-window docking/layout restoration passed | Full IDE/LSP, floating-window and plugin expansion are later scope |
 | M2 — read-only bridge | Finite shared-panel/RPC observations and connection-only UI timing passed in a dedicated idle world | Loaded-factory overhead, multiple worlds and long-run measurements |
-| M3 — finite game task | One real model → confirmation → research enqueue → original-action/queue readback → normal-save workflow passed | Native input coordination, human takeover, real failures/recovery and broader real-game autonomy |
+| M3 — finite game task | One real research workflow passed; persistent goals, condition waiting, bounded continuation and goal/action panels now have source and synthetic desktop evidence | Native input coordination, human takeover, real failures/recovery and broader real-game autonomy |
 | M4 — cross-repository delivery | First finite source → checks/CI → Lab → cold installation/recovery → display/evidence-navigation workflow passed | Later source changes need their own adoption and acceptance; do not repeat the first closed loop |
 | M5 — reliable first release | Specified portable/install/upgrade/rollback, migration and packaged-fault scenarios have evidence | New-candidate full CI/fault matrix, clean Windows, real-game recovery and final owner review |
 | M6 — extended workbench | Specified journal/playback, popout, usage/context and read-only-gateway slices have evidence | Real-world mecha observation, native recording/input, physical popout behavior and broader providers/agents |
@@ -68,7 +68,7 @@ Commit and push Pi changes in Spherewright-Pi first, then update CommandDeck's s
 ## Documentation map
 
 - [ROADMAP.md](ROADMAP.md): current milestone/remainder tables, exact candidate evidence and acceptance boundaries.
-- [Game Agent goal execution and status display](docs/game-agent-design.md) ([简体中文](docs/game-agent-design.zh-CN.md)): Pi customization, sustained goals, condition waiting, production verification and the shared Current goal/action UI state. The new controller and display behavior are planned work.
+- [Game Agent goal execution and status display](docs/game-agent-design.md) ([简体中文](docs/game-agent-design.zh-CN.md)): Pi customization, sustained goals, condition waiting, production verification and the shared Current goal/action UI state. The controller and panels have source and synthetic desktop validation; real production acceptance remains open.
 - [Native window hosting](docs/native-window-hosting.md): ownership model, native supervision, fault handling and real-game limitations.
 - [External Agent read-only gateway](docs/agent-gateway.md): `deck_observe`, lifecycle, privacy and client compatibility.
 - Sections below: development, packaging, installer, recovery, diagnostics, tray, power, journal and other validation commands with their exact limits.

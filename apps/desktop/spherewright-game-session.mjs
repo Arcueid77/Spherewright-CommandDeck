@@ -48,7 +48,7 @@ export class SpherewrightGameSession {
 	}
 	async authorizeRun() {
 		this.assertActive(); if (this.mode !== "autonomous" || this.#runGrant) throw new Error("FRESH_GAME_MCP_AUTHORIZATION_REQUIRED");
-		const disclosure = { goal: this.goal, allowedFamilies: [...this.allowedFamilies].sort(), limits: { ...this.limits }, context: { ...this.context }, binding: { ...this.binding }, newGameRequiresSeparateConfirmation: true, nativeInputExclusion: false };
+		const disclosure = { goal: this.goal, ...(this.task.scope.objective ? { objective: this.task.scope.objective } : {}), allowedFamilies: [...this.allowedFamilies].sort(), limits: { ...this.limits }, context: { ...this.context }, binding: { ...this.binding }, newGameRequiresSeparateConfirmation: true, nativeInputExclusion: false };
 		const approved = await this.waitForApproval({ kind: "run", taskId: this.task.id, disclosure, digest: digest(disclosure), expiresAt: this.now() + Math.min(120000, this.deadline - performance.now()), nonce: null, uiEpoch: null });
 		this.assertActive(); await gameContext(this.port, this.context); this.assertActive();
 		this.#runGrant = approved.digest;
@@ -75,6 +75,10 @@ export class SpherewrightGameSession {
 			}
 			const reply = await this.port.call(name, args); this.assertActive();
 			if (entry.kind !== "prepare") return publicGameValue(reply);
+			if (reply?.success === false || reply?.result?.prepared === false || reply?.result?.commitAllowedNow === false || reply?.result?.commitAllowed === false) {
+				this.plans.clear();
+				return { ...publicGameValue(reply), success: false };
+			}
 			const plan = unwrap(reply), newWorld = entry.family === "new_game", expiresAt = Date.parse(plan.expiresAtUtc);
 			if (typeof plan.planToken !== "string" || plan.planToken.length < 20 || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000 || (newWorld ? context.loaded || plan.commitAllowed !== true || plan.peacefulMode !== true || plan.sandboxMode !== false || plan.resourceMultiplier !== 1 : plan.prepared !== true || plan.commitAllowedNow !== true || !Array.isArray(plan.commitBlockers) || plan.commitBlockers.length || typeof plan.actionKind !== "string" || !plan.actionKind.length)) throw new Error("GAME_MCP_PLAN_REJECTED");
 			await gameContext(this.port, context); this.assertActive();

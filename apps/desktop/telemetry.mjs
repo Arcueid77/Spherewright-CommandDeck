@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { runtimePerformanceDatum } from "./runtime-performance.mjs";
 import { projectMechaState } from "./mecha-state.mjs";
 
+export { windowOf as productionWindow, production as projectProduction };
+
 const text = (value, max = 200) => typeof value === "string" && value.length <= max ? value : null;
 const integer = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
