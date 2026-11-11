@@ -170,7 +170,15 @@ export class GameIntentLedger {
 			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || context.sessionId !== scope.sessionId || context.planetId !== scope.planetId || context.owned !== true || context.accessRestricted !== false || context.writeHealth !== "healthy" || !Number.isFinite(context.observedAt) || Math.abs(this.now() - context.observedAt) > 2000) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
 			if (intent.state === "unknown") {
 				const details = this.detailsFor(task.id);
-				if (!lookupProof || lookupProof.kind !== "expired-original-idempotency" || lookupProof.idempotencyKey !== intent.idempotency_key || lookupProof.bridgeInstanceId !== scope.bridgeInstanceId || lookupProof.cohortHash !== details.cohortHash || lookupProof.schemaHash !== details.schemaHash || lookupProof.planExpiresAt !== task.expires_at || !Number.isFinite(lookupProof.lookupAt) || lookupProof.lookupAt <= task.expires_at || !Number.isSafeInteger(lookupProof.retentionMs) || lookupProof.retentionMs <= 0 || lookupProof.lookupAt >= task.approval_at + lookupProof.retentionMs || !["PLAN_EXPIRED", "PLAN_NOT_FOUND"].includes(reply.error.code) || !stateHash(lookupProof.evidenceHash)) throw new Error("ORIGINAL_IDEMPOTENCY_LOOKUP_PROOF_REQUIRED");
+				const sameOriginal = lookupProof?.kind === "expired-original-idempotency"
+					&& lookupProof.idempotencyKey === intent.idempotency_key
+					&& lookupProof.bridgeInstanceId === scope.bridgeInstanceId
+					&& lookupProof.cohortHash === details.cohortHash && lookupProof.schemaHash === details.schemaHash;
+				const expiredOriginal = Number.isFinite(lookupProof?.lookupAt)
+					&& lookupProof.planExpiresAt === task.expires_at && lookupProof.lookupAt > task.expires_at;
+				const insideRetention = Number.isSafeInteger(lookupProof?.retentionMs) && lookupProof.retentionMs > 0
+					&& lookupProof.lookupAt < task.approval_at + lookupProof.retentionMs;
+				if (!sameOriginal || !expiredOriginal || !insideRetention || !["PLAN_EXPIRED", "PLAN_NOT_FOUND"].includes(reply.error.code) || !stateHash(lookupProof?.evidenceHash)) throw new Error("ORIGINAL_IDEMPOTENCY_LOOKUP_PROOF_REQUIRED");
 			}
 			const terminal = { state: "not_accepted", succeeded: false, errorCode: reply.error.code, nativeTerminalOnly: false, proofHash: hash(reply), ...(lookupProof ? { originalLookup: { evidenceHash: lookupProof.evidenceHash, lookupAt: lookupProof.lookupAt, retentionMs: lookupProof.retentionMs } } : {}) };
 			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify(terminal), id);

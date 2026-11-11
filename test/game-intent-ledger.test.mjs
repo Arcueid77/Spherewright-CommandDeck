@@ -73,7 +73,7 @@ function unacceptedHandcraft(f) {
 	const task = f.ledger.createMcpTask({ ...f.scope, kind: "mcp-action", parentTaskId: "synthetic-parent", actionKind: "handcraft", requestHash: "sha256:" + "c".repeat(64) });
 	const expiresAt = f.context().observedAt + 30000;
 	const intent = f.ledger.beginMcpIntent(f.authority, task.id, "sha256:" + "d".repeat(64), expiresAt);
-	const binding = { cohortHash: "a".repeat(64), schemaHash: "sha256:" + "b".repeat(64) };
+	const binding = { cohortHash: "a".repeat(64), schemaHash: "b".repeat(64) };
 	f.ledger.details(task.id, binding);
 	return { task, intent, expiresAt, binding };
 }
