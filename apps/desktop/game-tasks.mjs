@@ -279,6 +279,16 @@ export class GameTasks {
 		}
 		this.#stage("reconciling");
 	}
+	resolveStoppedAction(authority, intentId, priorFailure) {
+		this.#requireStorage();
+		if (authority !== this.#approvalAuthority || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#launch("reconciling", async () => {
+			if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
+			this.#reconnectOriginal = true;
+			try { await this.ledger.resolveStoppedAction(authority, intentId, priorFailure); this.#stage("failed"); }
+			finally { this.#reconnectOriginal = false; }
+		});
+	}
 	reconcile(intentId) {
 		this.#requireStorage();
 		const intent = this.ledger.unresolved().find((value) => value.intentId === intentId);

@@ -28,6 +28,55 @@ function acceptance(intent, extra = {}) { return { accepted: true, actionKind: "
 function completion(f, intent, extra = {}) {
 	return { actionId: "action-fixture", actionKind: "select-research", sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, terminal: true, succeeded: true, state: "completed", completedAtGameTick: 1201, researchQueueReadback: { capturedAtGameTick: 1201, beforeQueue: [99], afterQueue: [99, 100], previousCurrentTechId: 99, currentTechId: 99, inventoryPreserved: true, researchProgressPreserved: true }, ...extra };
 }
+function stoppedHarvest(f) {
+	const task = f.ledger.createMcpTask({ ...f.scope, kind: "mcp-action", parentTaskId: "synthetic-parent", actionKind: "harvest", requestHash: "sha256:" + "c".repeat(64) });
+	const intent = f.ledger.beginMcpIntent(f.authority, task.id, "sha256:" + "d".repeat(64), f.context().observedAt + 30000);
+	f.ledger.acceptMcp(intent.intentId, { accepted: true, actionId: "stopped-harvest-fixture", actionKind: "harvest", idempotencyKey: intent.idempotencyKey });
+	const terminal = { actionId: "stopped-harvest-fixture", actionKind: "harvest", sessionId: f.scope.sessionId, planetId: f.scope.planetId, idempotencyKey: intent.idempotencyKey, state: "action_failed", terminal: true, succeeded: false, recoveryRequired: false, failureKind: "position_stalled", stalled: true, doNotRetrySameTarget: true, startedAtGameTick: 1200, completedAtGameTick: 1201, afterStateHash: "sha256:" + "e".repeat(64) };
+	const context = { ...f.context(), capturedAtGameTick: 1202 };
+	f.setProofReply(request => ({ request, terminal, context }));
+	return { task, intent, terminal, context };
+}
+
+test("an exact native stopped harvest closes as a failure and preserves the original intent", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f);
+	const result = await f.ledger.reconcile(action.intent.intentId);
+	assert.equal(result.state, "completed");
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(result.terminal.state, "action_failed");
+	assert.equal(result.terminal.doNotRetrySameTarget, true);
+	assert.equal(result.actionId, action.terminal.actionId);
+	assert.equal(f.ledger.task(action.task.id).state, "failed");
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("legacy stopped-action classification requires trusted unchanged original proof and healthy context", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f), id = action.intent.intentId;
+	// Simulate an older host that classified this exact stopped order as unknown.
+	f.ledger.markUnknown(id);
+	f.ledger.db.prepare("UPDATE game_gate SET reason='NATIVE_OUTCOME_REQUIRES_AUDIT' WHERE intent_id=?").run(id);
+	await assert.rejects(f.ledger.reconcile(id), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	await assert.rejects(f.ledger.resolveStoppedAction({}, id, action.terminal), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
+	await assert.rejects(f.ledger.resolveStoppedAction(f.authority, id, { ...action.terminal, state: "outcome_unknown" }), /KNOWN_STOPPED_ACTION_REQUIRED/);
+	await assert.rejects(f.ledger.resolveStoppedAction(f.authority, id, { ...action.terminal, targetObjectId: 99 }), /STOPPED_ACTION_PROOF_CHANGED/);
+	f.setProofReply(request => ({ request, terminal: action.terminal, context: { ...action.context, writeHealth: "quarantined" } }));
+	await assert.rejects(f.ledger.resolveStoppedAction(f.authority, id, action.terminal), /HEALTHY_GAME_WRITES_REQUIRED/);
+	assert.equal(f.ledger.unresolved()[0].state, "unknown");
+	f.setProofReply(request => ({ request, terminal: action.terminal, context: action.context }));
+	const result = await f.ledger.resolveStoppedAction(f.authority, id, action.terminal);
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(result.terminal.resolvedStoppedAction, true);
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("stalled native failures with quarantine, missing stop proof or wrong binding retain the audit gate", async t => {
+	for (const extra of [{ recoveryRequired: true }, { doNotRetrySameTarget: false }, { afterStateHash: null }, { idempotencyKey: "wrong-key" }]) {
+		const f = await fixture(t), action = stoppedHarvest(f);
+		f.setProofReply(request => ({ request, terminal: { ...action.terminal, ...extra }, context: action.context }));
+		await assert.rejects(f.ledger.reconcile(action.intent.intentId), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+		assert.equal(f.ledger.unresolved()[0].state, "unknown");
+	}
+});
 const progression = (f, extra = {}) => ({ sessionId: f.scope.sessionId, planetId: f.scope.planetId, capturedAtGameTick: 1202, observedAt: f.context().observedAt, selectionStateHash: "sha256:" + "b".repeat(64), techQueue: [99, 100], ...extra });
 
 test("usage survives transcript pruning and ledger reopen without modifying action or approval state", async t => {

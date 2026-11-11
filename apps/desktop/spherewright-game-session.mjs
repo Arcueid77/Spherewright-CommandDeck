@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
+import { stoppedGameAction } from "./game-action-outcome.mjs";
 
 const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -18,15 +19,16 @@ export async function gameContext(port, expected, writing = false) {
 	if (expected && (expected.bridgeInstanceId !== context.bridgeInstanceId || expected.sessionId !== context.sessionId)) throw new Error("GAME_CONTEXT_CHANGED");
 	if (context.loaded && (!context.owned || context.accessRestricted || typeof context.sessionId !== "string" || !context.sessionId.length)) throw new Error("OWNED_GAME_WORLD_REQUIRED");
 	if (writing && (value.writesConfigured !== true || value.writeHealth !== "healthy" || context.loaded && (session.writesAllowed !== true || session.writeHealth !== "healthy" || session.peacefulMode !== "confirmed_peaceful" || !Array.isArray(session.writeBlockers) || session.writeBlockers.length))) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
-	return context;
+	return { ...context, writeHealth: value.writeHealth };
 }
 export async function readMcpAction(port, request) {
 	const status = await port.call("spherewright_get_status", {});
 	if (status?.success !== true || status.status?.bridgeInstanceId !== request.bridgeInstanceId) throw new Error("GAME_CONTEXT_CHANGED");
 	const terminal = unwrap(await port.call("spherewright_get_action_result", { actionId: request.actionId }));
 	// Return native safety outcomes before a later context read can obscure them.
-	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || ["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true) return { request, terminal, context: null };
-	return { request, terminal, context: await gameContext(port, request.actionKind === "new-game" ? undefined : request) };
+	const stopped = stoppedGameAction(terminal);
+	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || ["outcome_unknown", "recovery_required"].includes(terminal.state) || terminal.state === "action_failed" && !stopped || terminal.recoveryRequired === true) return { request, terminal, context: null };
+	return { request, terminal, context: await gameContext(port, request.actionKind === "new-game" ? undefined : request, stopped) };
 }
 
 // A transport/authority adapter, not another factory planner or native executor.

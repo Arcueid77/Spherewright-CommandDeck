@@ -36,7 +36,7 @@ export function gameGoalProjection(goal, actions, { active = false, now = Date.n
 	const action = actions[0] ?? null, pending = actions.find(task => task.intent && ["recorded", "accepted", "unknown"].includes(task.intent.state));
 	let behavior = { state: value.status === "waiting" ? "waiting" : active ? "deciding" : "idle", label: value.wait?.reason ?? stage?.title ?? "观察当前世界", actionId: null, taskId: null, terminal: null };
 	if (pending) behavior = { state: pending.intent.state === "unknown" ? "reconciling" : pending.intent.state === "accepted" ? "executing" : "submitting", label: pending.scope.actionKind, actionId: pending.intent.actionId, taskId: pending.id, terminal: null };
-	else if (!active && value.status !== "waiting" && action?.intent?.terminal) behavior = { state: "verified", label: action.scope.actionKind, actionId: action.intent.actionId, taskId: action.id, terminal: action.intent.terminal };
+	else if (!active && value.status !== "waiting" && action?.intent?.terminal) behavior = { state: action.intent.terminal.succeeded === false ? "failed" : "verified", label: action.scope.actionKind, actionId: action.intent.actionId, taskId: action.id, terminal: action.intent.terminal };
 	if (!pending && active && value.activity) behavior = { ...behavior, ...value.activity };
 	const verification = value.verification && { ...value.verification, ageMs: Math.max(0, now - value.verification.observedAt), stale: now - value.verification.observedAt > 15000 };
 	const recordedStatus = value.status;

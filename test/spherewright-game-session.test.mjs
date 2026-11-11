@@ -9,6 +9,23 @@ import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { spherewrightCatalog, validSpherewrightArguments, publicGameValue } from "../apps/desktop/spherewright-tool-catalog.mjs";
+import { readMcpAction } from "../apps/desktop/spherewright-game-session.mjs";
+
+test("a stopped original route requires a fresh healthy owned context before failure reconciliation", async () => {
+	const request = { bridgeInstanceId: "bridge", sessionId: "session", planetId: 1, actionId: "action", actionKind: "harvest", idempotencyKey: "key" };
+	const terminal = { ...request, state: "action_failed", terminal: true, succeeded: false, recoveryRequired: false, failureKind: "position_stalled", stalled: true, doNotRetrySameTarget: true, startedAtGameTick: 10, completedAtGameTick: 20, afterStateHash: "sha256:" + "a".repeat(64) };
+	let health = "healthy";
+	const port = { async call(name) {
+		if (name === "spherewright_get_status") return { success: true, status: { bridgeConnected: true, protocolVersion: 1, bridgeInstanceId: "bridge", writesConfigured: true, writeHealth: health } };
+		if (name === "spherewright_get_action_result") return { success: true, result: terminal };
+		return { success: true, result: { bridgeConnected: true, gameLoaded: true, ownedBySpherewright: true, accessRestricted: false, sessionId: "session", localPlanetId: 1, gameTick: 21, writesAllowed: true, writeHealth: health, peacefulMode: "confirmed_peaceful", writeBlockers: [] } };
+	} };
+	const result = await readMcpAction(port, request);
+	assert.deepEqual(result.terminal, terminal);
+	assert.equal(result.context.writeHealth, "healthy");
+	health = "quarantined";
+	await assert.rejects(readMcpAction(port, request), /HEALTHY_GAME_WRITES_REQUIRED/);
+});
 
 async function fixture(t, planner, mode = "normal") {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-unified-game-")), authority = {}, approval = {};

@@ -160,6 +160,8 @@ In Game Agent, select a model, enter the objective and enable sustained goal exe
 
 Continue or revise this goal retains its identity with a new revision, supports another selected model and preserves cumulative spending and the original deadline. The normal task entry point confirms the next run authorization. Completion, unresolved actions and remaining allowance determine available controls.
 
+Waiting on an unavailable field returns structural evidence immediately for the Agent to revise its condition. A native `position_stalled` move or harvest can close as a failed action after proof that the exact owned order stopped and a fresh owned context remains healthy. Its original identity and failed receipt remain recorded, and the Agent receives the native route-recovery guidance. A trusted host can correct an older misclassification only against the unchanged original stopped-action proof. Unknown outcomes, recovery-required actions and binding mismatches retain their existing gates.
+
 | Step | Deliverable | Acceptance focus |
 | --- | --- | --- |
 | 1 | Implemented durable goals, stages and Current goal/action snapshots | Preserve the goal and original actions after conversational stop, UI reload and host reconstruction, with completion surviving normal close |

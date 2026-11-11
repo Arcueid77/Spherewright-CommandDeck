@@ -7,6 +7,7 @@ import { modelUsageSnapshot } from "./model-usage.mjs";
 import { modelContextSnapshot } from "./model-context.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 import { validateGameGoal } from "./game-goal-contract.mjs";
+import { stoppedGameAction } from "./game-action-outcome.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -187,17 +188,32 @@ export class GameIntentLedger {
 		catch (error) { if (error?.message === "ORIGINAL_ACTION_BINDING_MISMATCH") { this.#transaction(() => this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH")); throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED"); } const failure = new Error(/^[A-Z_]+$/.test(error?.message) ? error.message : "ORIGINAL_ACTION_READ_FAILED"); if (error.nativeResult) failure.nativeResult = error.nativeResult; throw failure; }
 		finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
 	}
-	#completeMcp(id, terminal, context) {
+	async resolveStoppedAction(authority, id, priorFailure) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		const gate = this.db.prepare("SELECT * FROM game_gate WHERE id=1").get();
+		const intent = this.#intent(id), scope = this.#task(intent.task_id).scope;
+		if (gate?.reason !== "NATIVE_OUTCOME_REQUIRES_AUDIT" || gate.intent_id !== id || scope.kind !== "mcp-action" || intent.state !== "unknown" || !stoppedGameAction(priorFailure) || this.#reading.has(id)) throw new Error("KNOWN_STOPPED_ACTION_REQUIRED");
+		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: scope.actionKind, actionId: intent.action_id, idempotencyKey: intent.idempotency_key, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId, generic: true });
+		this.#reading.set(id, request);
+		try {
+			const reply = await this.#readResearchProof(request);
+			if (this.#reading.get(id) !== request || !equal(reply?.request, request) || !equal(reply.terminal, priorFailure)) throw new Error("STOPPED_ACTION_PROOF_CHANGED");
+			return this.#completeMcp(id, reply.terminal, reply.context, true);
+		} finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
+	}
+	#completeMcp(id, terminal, context, resolvingStoppedAction = false) {
 		const outcome = this.#transaction(() => {
 			const intent = this.#intent(id), scope = this.#task(intent.task_id).scope, newWorld = scope.actionKind === "new-game";
-			if (auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
+			const stopped = stoppedGameAction(terminal);
+			if (resolvingStoppedAction && !stopped || !resolvingStoppedAction && auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
 			if (!terminal || terminal.actionId !== intent.action_id || terminal.actionKind !== scope.actionKind || (!newWorld || terminal.idempotencyKey != null) && terminal.idempotencyKey !== intent.idempotency_key || !newWorld && (terminal.sessionId !== scope.sessionId || scope.planetId !== null && terminal.planetId !== scope.planetId)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
-			if (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true || terminal.terminal === true && terminal.succeeded !== true) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
-			if (terminal.terminal !== true || terminal.succeeded !== true || terminal.state !== "completed") throw new Error("ORIGINAL_ACTION_PENDING");
+			if (!stopped && (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true || terminal.terminal === true && terminal.succeeded !== true)) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
+			if (!stopped && (terminal.terminal !== true || terminal.succeeded !== true || terminal.state !== "completed")) throw new Error("ORIGINAL_ACTION_PENDING");
 			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || !newWorld && context.sessionId !== scope.sessionId || context.owned !== true || context.accessRestricted !== false) throw new Error("GAME_CONTEXT_CHANGED");
+			if (stopped && (context.writeHealth !== "healthy" || context.planetId !== scope.planetId || !tick(context.capturedAtGameTick) || context.capturedAtGameTick < terminal.completedAtGameTick)) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
 			if (newWorld && (!opaque(terminal.sessionId) || terminal.sessionId !== context.sessionId || !positive(terminal.planetId) || terminal.planetId !== context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
-			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify({ actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: true, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true }), id);
-			this.db.prepare("UPDATE game_tasks SET state='completed' WHERE id=?").run(intent.task_id); this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id); return null;
+			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify({ actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: !stopped, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true, ...(stopped ? { failureKind: terminal.failureKind, doNotRetrySameTarget: true, targetObjectId: terminal.targetObjectId ?? null, proofHash: hash(terminal), resolvedStoppedAction: resolvingStoppedAction } : {}) }), id);
+			this.db.prepare("UPDATE game_tasks SET state=? WHERE id=?").run(stopped ? "failed" : "completed", intent.task_id); this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id); return null;
 		});
 		if (outcome) throw new Error(outcome); return this.intent(id);
 	}

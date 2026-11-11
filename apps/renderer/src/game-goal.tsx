@@ -19,7 +19,7 @@ export type GameGoal = {
 };
 
 const statuses: Record<string, string> = { running: "推进中", waiting: "等待条件", verifying: "核验目标", blocked: "需要处理", paused: "已暂停", ready: "等待验收", completed: "目标已达成" };
-const behaviors: Record<string, string> = { deciding: "选择下一步", observing: "读取现场", planned: "计划中", preparing: "原生预检中", waiting: "等待中", executing: "执行中", submitting: "等待提交回执", reconciling: "核销原动作", verified: "原动作已核对", idle: "当前无在途动作" };
+const behaviors: Record<string, string> = { deciding: "选择下一步", observing: "读取现场", planned: "计划中", preparing: "原生预检中", waiting: "等待中", executing: "执行中", submitting: "等待提交回执", reconciling: "核销原动作", verified: "原动作已核对", failed: "原动作已失败", idle: "当前无在途动作" };
 const actions: Record<string, string> = { handcraft: "手工制造", build: "建设设施", move: "移动", "select-research": "科研入队", "new-game": "创建世界", save: "正常保存" };
 const problems: Record<string, string> = {
 	GAME_GOAL_NO_PROGRESS: "连续决策没有观察到进展，请核对缺口或调整目标。",
