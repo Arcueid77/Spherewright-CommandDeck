@@ -19,3 +19,8 @@ export function stoppedGameAction(value) {
 	return ["move", "harvest"].includes(value.actionKind) && value.failureKind === "position_stalled"
 		&& value.stalled === true && value.doNotRetrySameTarget === true;
 }
+
+export function rejectedGameCommit(reply) {
+	return reply?.success === false && reply.result == null
+		&& ["STALE_STATE", "PLAN_EXPIRED", "PLAN_NOT_FOUND"].includes(reply.error?.code);
+}

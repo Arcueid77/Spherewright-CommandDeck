@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { rejectedGameCommit } from "./game-action-outcome.mjs";
 import { createHash } from "node:crypto";
 import { readFile, readdir, lstat, realpath } from "node:fs/promises";
 import { basename, dirname, join, toNamespacedPath } from "node:path";
@@ -204,6 +205,8 @@ export class ReadOnlyMcpClient {
 		if (reply?.isError === true) {
 			const failure = reply.structuredContent;
 			if (["read", "prepare"].includes(this.#gameTools.get(name)?.kind) && failure?.success === false && /^[A-Z0-9_]{1,128}$/.test(failure.error?.code ?? "")) return failure;
+			const entry = this.#gameTools.get(name);
+			if (entry?.kind === "commit" && entry.family !== "new_game" && rejectedGameCommit(failure)) return failure;
 			throw new Error("MCP_TOOL_REJECTED");
 		}
 		if (!reply?.structuredContent || typeof reply.structuredContent !== "object" || Array.isArray(reply.structuredContent)) throw new Error("MCP_STRUCTURED_RESULT_REQUIRED");

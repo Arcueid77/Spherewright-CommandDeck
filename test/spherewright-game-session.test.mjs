@@ -179,6 +179,24 @@ test("an early next preparation remains blocked while the agent can reconcile th
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 2);
 });
 
+test("a known native stale commit retains its original key as unaccepted and permits fresh preparation", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		for (let index = 0; index < 2; index++) {
+			const reply = await craft(invoke);
+			assert.equal(reply.success, false);
+			assert.equal(reply.error.code, "STALE_STATE");
+			assert.equal(f.host.snapshot().unresolved.length, 0);
+			assert.equal(f.host.snapshot().mcp.authorized, true);
+		}
+	}, "stale-commit");
+	f.start({ ...autonomous, limits: { writes: 2 } }); await authorize(f); await f.host.settled();
+	assert.equal(f.host.snapshot().error, null);
+	const actions = f.host.ledger.tasks().filter(task => task.scope.kind === "mcp-action");
+	assert.equal(actions.length, 2);
+	assert.ok(actions.every(action => action.intent.terminal.state === "not_accepted"));
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
 test("autonomous action family and write budget remain enforced after the one-time approval", async t => {
 	const f = await fixture(t, async ({ invoke }) => {
 		await assert.rejects(invoke("spherewright_prepare_new_game", { galaxySeed: 42, starCount: 32 }), /GAME_MCP_TOOL_SCOPE_REJECTED/);

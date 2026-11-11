@@ -7,7 +7,7 @@ import { modelUsageSnapshot } from "./model-usage.mjs";
 import { modelContextSnapshot } from "./model-context.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 import { validateGameGoal } from "./game-goal-contract.mjs";
-import { stoppedGameAction } from "./game-action-outcome.mjs";
+import { stoppedGameAction, rejectedGameCommit } from "./game-action-outcome.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -160,6 +160,24 @@ export class GameIntentLedger {
 			return { intentId, idempotencyKey, commit: { sessionId: task.scope.sessionId, planetId: task.scope.planetId, planToken: plan.token, idempotencyKey } };
 		});
 		this.#plans.delete(id); return result; // Caller may send only after this durable transaction returns.
+	}
+	rejectMcpIntent(authority, id, reply, context, lookupProof = null) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const intent = this.#intent(id), task = this.#task(intent.task_id), scope = task.scope;
+			const gate = this.db.prepare("SELECT * FROM game_gate WHERE id=1").get();
+			if (scope.kind !== "mcp-action" || scope.actionKind === "new-game" || intent.action_id || intent.acceptance || !["recorded", "unknown"].includes(intent.state) || !rejectedGameCommit(reply) || gate && (gate.intent_id !== id || gate.reason !== "COMMIT_RECEIPT_UNAVAILABLE")) throw new Error("NATIVE_UNACCEPTED_COMMIT_PROOF_REQUIRED");
+			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || context.sessionId !== scope.sessionId || context.planetId !== scope.planetId || context.owned !== true || context.accessRestricted !== false || context.writeHealth !== "healthy" || !Number.isFinite(context.observedAt) || Math.abs(this.now() - context.observedAt) > 2000) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
+			if (intent.state === "unknown") {
+				const details = this.detailsFor(task.id);
+				if (!lookupProof || lookupProof.kind !== "expired-original-idempotency" || lookupProof.idempotencyKey !== intent.idempotency_key || lookupProof.bridgeInstanceId !== scope.bridgeInstanceId || lookupProof.cohortHash !== details.cohortHash || lookupProof.schemaHash !== details.schemaHash || lookupProof.planExpiresAt !== task.expires_at || !Number.isFinite(lookupProof.lookupAt) || lookupProof.lookupAt <= task.expires_at || !Number.isSafeInteger(lookupProof.retentionMs) || lookupProof.retentionMs <= 0 || lookupProof.lookupAt >= task.approval_at + lookupProof.retentionMs || !["PLAN_EXPIRED", "PLAN_NOT_FOUND"].includes(reply.error.code) || !stateHash(lookupProof.evidenceHash)) throw new Error("ORIGINAL_IDEMPOTENCY_LOOKUP_PROOF_REQUIRED");
+			}
+			const terminal = { state: "not_accepted", succeeded: false, errorCode: reply.error.code, nativeTerminalOnly: false, proofHash: hash(reply), ...(lookupProof ? { originalLookup: { evidenceHash: lookupProof.evidenceHash, lookupAt: lookupProof.lookupAt, retentionMs: lookupProof.retentionMs } } : {}) };
+			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify(terminal), id);
+			this.db.prepare("UPDATE game_tasks SET state='failed' WHERE id=?").run(task.id);
+			this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id);
+			return this.intent(id);
+		});
 	}
 	markUnknown(id, reason = "COMMIT_RECEIPT_UNAVAILABLE") {
 		if (!["COMMIT_RECEIPT_UNAVAILABLE", "ACCEPTANCE_BINDING_MISMATCH", "ORIGINAL_ACTION_BINDING_MISMATCH", "RESEARCH_TERMINAL_PROOF_INCOMPLETE", "ORIGINAL_ACTION_NOT_FOUND"].includes(reason)) reason = "COMMIT_RECEIPT_UNAVAILABLE";

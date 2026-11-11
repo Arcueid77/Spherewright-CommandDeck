@@ -30,7 +30,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 	else if (name?.startsWith("spherewright_prepare_")) {
 		prepared = { family: name.slice("spherewright_prepare_".length), token: "PRIVATE_SYNTHETIC_NATIVE_TOKEN_" + String(commits), args };
 		reply = { success: true, result: { ...(prepared.family === "new_game" ? { commitAllowed: true, peacefulMode: true, sandboxMode: false, resourceMultiplier: 1 } : { prepared: true, actionKind: "handcraft", commitAllowedNow: true, commitBlockers: [], itemBudget: [{ itemId: 1001, count: args.count }], completionCondition: "Native handcraft queue accepts requested count" }), planToken: prepared.token, expiresAtUtc: new Date(Date.now() + 30000).toISOString(), saveName: "PRIVATE_SYNTHETIC_SAVE" } };
-	} else if (name?.startsWith("spherewright_commit_")) {
+	} else if (name?.startsWith("spherewright_commit_") && mode === "stale-commit") reply = { success: false, result: null, error: { code: "STALE_STATE", message: "Synthetic player state changed before admission" } };
+	else if (name?.startsWith("spherewright_commit_")) {
 		if (!prepared || args.planToken !== prepared.token) throw new Error("BAD_SYNTHETIC_PLAN");
 		commits++; const newGame = prepared.family === "new_game"; loaded = true;
 		actionReads = 0;
@@ -46,5 +47,5 @@ for await (const line of createInterface({ input: process.stdin })) {
 		const rate = commits === 0 ? 0 : mode === "goal-low-rate" ? 30 : 60, producedCount = rate / 6;
 		reply = { success: true, result: { sessionId: session, snapshotId: "synthetic-production-" + productionTick, capturedAtGameTick: productionTick, requestedItemIds: args.itemIds, totalFactoryCount: 1, returnedFactoryCount: 1, nextCursor: null, window: { state: "ready", startGameTick: productionTick - 599, endGameTick: productionTick, elapsedGameTicks: 600, elapsedGameSeconds: 10, crossedSessionBoundary: false }, planets: [{ planetId: 1, capturedAtGameTick: productionTick, production: [{ itemId: args.itemIds[0], itemName: "Synthetic matrix", producedCount, consumedCount: 0, actualProductionPerMinute: rate, actualConsumptionPerMinute: 0, rateSource: "native_factory_statistics_level_0" }] }] } };
 	} else reply = { success: false, error: "UNSUPPORTED" };
-	send(id, { content: [{ type: "text", text: "Synthetic result" }], structuredContent: reply, ...(mode === "refused" && name?.startsWith("spherewright_prepare_") || mode === "refused-read" && name === "spherewright_get_recipe_catalog" ? { isError: true } : {}) });
+	send(id, { content: [{ type: "text", text: "Synthetic result" }], structuredContent: reply, ...(mode === "refused" && name?.startsWith("spherewright_prepare_") || mode === "refused-read" && name === "spherewright_get_recipe_catalog" || mode === "stale-commit" && name?.startsWith("spherewright_commit_") ? { isError: true } : {}) });
 }

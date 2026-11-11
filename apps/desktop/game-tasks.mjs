@@ -281,6 +281,18 @@ export class GameTasks {
 		}
 		this.#stage("reconciling");
 	}
+	resolveUnacceptedCommit(authority, intentId, reply, lookupProof) {
+		this.#requireStorage();
+		if (authority !== this.hostApproval || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#launch("reconciling", async () => {
+			const intent = this.ledger.intent(intentId), task = this.ledger.task(intent.taskId), details = this.ledger.detailsFor(task.id);
+			await this.#reserve(true);
+			if (details.cohortHash !== this.bridgeLease.selection.cohortHash || details.schemaHash !== this.bridgeLease.client.metadata.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
+			const context = await gameContext(this.bridgeLease.client.gamePort(this.#authority), task.scope, true);
+			this.ledger.rejectMcpIntent(this.#approvalAuthority, intentId, reply, context, lookupProof);
+			this.#stage("failed");
+		});
+	}
 	resolveStoppedAction(authority, intentId, priorFailure) {
 		this.#requireStorage();
 		if (authority !== this.hostApproval || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");

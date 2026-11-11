@@ -69,6 +69,44 @@ test("handcraft failure with inconsistent item effects remains isolated", async 
 	assert.equal(f.ledger.unresolved()[0].state, "unknown");
 });
 
+function unacceptedHandcraft(f) {
+	const task = f.ledger.createMcpTask({ ...f.scope, kind: "mcp-action", parentTaskId: "synthetic-parent", actionKind: "handcraft", requestHash: "sha256:" + "c".repeat(64) });
+	const expiresAt = f.context().observedAt + 30000;
+	const intent = f.ledger.beginMcpIntent(f.authority, task.id, "sha256:" + "d".repeat(64), expiresAt);
+	const binding = { cohortHash: "a".repeat(64), schemaHash: "sha256:" + "b".repeat(64) };
+	f.ledger.details(task.id, binding);
+	return { task, intent, expiresAt, binding };
+}
+
+test("a definitive native pre-admission refusal closes the same recorded intent as unaccepted", async t => {
+	const f = await fixture(t), action = unacceptedHandcraft(f);
+	const reply = { success: false, result: null, error: { code: "STALE_STATE" } };
+	const result = f.ledger.rejectMcpIntent(f.authority, action.intent.intentId, reply, f.context());
+	assert.equal(result.actionId, null);
+	assert.equal(result.idempotencyKey, action.intent.idempotencyKey);
+	assert.equal(result.terminal.state, "not_accepted");
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("a lost acknowledgement requires an exact expired-key lookup inside verified native retention", async t => {
+	const f = await fixture(t), action = unacceptedHandcraft(f), id = action.intent.intentId;
+	f.ledger.markUnknown(id);
+	f.advance(31000);
+	const reply = { success: false, result: null, error: { code: "PLAN_EXPIRED" } };
+	const proof = { kind: "expired-original-idempotency", idempotencyKey: action.intent.idempotencyKey, bridgeInstanceId: f.scope.bridgeInstanceId, ...action.binding, planExpiresAt: action.expiresAt, lookupAt: f.context().observedAt, retentionMs: 1800000, evidenceHash: "sha256:" + "e".repeat(64) };
+	for (const invalid of [null, { ...proof, idempotencyKey: "wrong" }, { ...proof, planExpiresAt: action.expiresAt + 1 }, { ...proof, cohortHash: "wrong" }, { ...proof, retentionMs: 1000 }]) {
+		assert.throws(() => f.ledger.rejectMcpIntent(f.authority, id, reply, f.context(), invalid), /ORIGINAL_IDEMPOTENCY_LOOKUP_PROOF_REQUIRED/);
+		assert.equal(f.ledger.unresolved()[0].state, "unknown");
+	}
+	assert.throws(() => f.ledger.rejectMcpIntent({}, id, reply, f.context(), proof), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
+	const result = f.ledger.rejectMcpIntent(f.authority, id, reply, f.context(), proof);
+	assert.equal(result.actionId, null);
+	assert.equal(result.idempotencyKey, action.intent.idempotencyKey);
+	assert.equal(result.terminal.originalLookup.evidenceHash, proof.evidenceHash);
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
 test("legacy stopped-action classification requires trusted unchanged original proof and healthy context", async t => {
 	const f = await fixture(t), action = stoppedHarvest(f), id = action.intent.intentId;
 	// Simulate an older host that classified this exact stopped order as unknown.

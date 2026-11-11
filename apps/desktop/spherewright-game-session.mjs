@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
-import { stoppedGameAction } from "./game-action-outcome.mjs";
+import { stoppedGameAction, rejectedGameCommit } from "./game-action-outcome.mjs";
 
 const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -19,7 +19,7 @@ export async function gameContext(port, expected, writing = false) {
 	if (expected && (expected.bridgeInstanceId !== context.bridgeInstanceId || expected.sessionId !== context.sessionId)) throw new Error("GAME_CONTEXT_CHANGED");
 	if (context.loaded && (!context.owned || context.accessRestricted || typeof context.sessionId !== "string" || !context.sessionId.length)) throw new Error("OWNED_GAME_WORLD_REQUIRED");
 	if (writing && (value.writesConfigured !== true || value.writeHealth !== "healthy" || context.loaded && (session.writesAllowed !== true || session.writeHealth !== "healthy" || session.peacefulMode !== "confirmed_peaceful" || !Array.isArray(session.writeBlockers) || session.writeBlockers.length))) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
-	return { ...context, writeHealth: value.writeHealth };
+	return { ...context, writeHealth: value.writeHealth, observedAt: Date.now() };
 }
 export async function readMcpAction(port, request) {
 	const status = await port.call("spherewright_get_status", {});
@@ -113,6 +113,13 @@ export class SpherewrightGameSession {
 		let reply;
 		try { reply = await this.port.call(entry.name, { ...Object.fromEntries(fields.filter(key => ["sessionId", "planetId"].includes(key)).map(key => [key, args[key]])), planToken: plan.token, idempotencyKey: intent.idempotencyKey }); }
 		catch { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
+		if (plan.actionKind !== "new-game" && rejectedGameCommit(reply)) {
+			this.plans.clear();
+			const context = await gameContext(this.port, plan.context, true);
+			this.ledger.rejectMcpIntent(this.authority, intent.intentId, reply, context);
+			this.stage("planning");
+			return publicGameValue(reply);
+		}
 		const receipt = unwrap(reply), newWorld = plan.actionKind === "new-game";
 		this.ledger.acceptMcp(intent.intentId, { ...receipt, ...(newWorld ? { actionKind: "new-game", idempotencyKey: intent.idempotencyKey, idempotencyEchoed: false } : {}) });
 		this.stage("planning");
