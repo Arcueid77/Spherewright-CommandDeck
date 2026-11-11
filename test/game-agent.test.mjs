@@ -71,7 +71,37 @@ test("autonomous Pi receives typed execution tools that reuse the native prepara
 		invoked.push({ name, args: value });
 		return name === "deck_goal_next_decision" ? { continue: false } : { success: true, result: { terminal: true, succeeded: true } };
 	} });
-	assert.deepEqual(invoked[0], { name: "deck_goal_execute_action", args: { prepareTool, args } });
+	assert.deepEqual(invoked.find(value => value.name === "deck_goal_execute_action"), { name: "deck_goal_execute_action", args: { prepareTool, args, freshContext: true } });
+});
+
+test("Pi receives the pinned Lab brief, retrieves a targeted lesson and records supplied provenance", async t => {
+	const f = await fixture(t, (data, index) => {
+		const context = JSON.stringify(data.messages);
+		assert.ok(context.includes("research-material-flow"));
+		assert.ok(context.includes("EXP-338"));
+		assert.ok(context.includes("当前授权、预算及新鲜原生证据"));
+		if (index === 1) return call("deck_goal_experience", { ids: ["movement-progress"] });
+		const value = JSON.parse(data.messages.filter(message => message.role === "tool").at(-1).content);
+		assert.equal(value.lessons[0].id, "movement-progress");
+		assert.match(value.source.revision, /^[a-f0-9]{40}$/);
+		return [{ content: "已读取原生移动进展经验。" }];
+	});
+	await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name: "spherewright_get_status", description: "Native status", inputSchema: { type: "object", properties: {} } }], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async name => name === "deck_goal_next_decision" ? { continue: false } : {} });
+	const supplied = f.events.filter(event => event.kind === "experience");
+	assert.equal(supplied.length, 2);
+	assert.equal(supplied[0].lessonIds.length, 4);
+	assert.ok(supplied[1].lessonIds.includes("movement-progress"));
+});
+
+test("host feedback also reaches the next model request after tool validation errors", async t => {
+	let checkpoints = 0;
+	const f = await fixture(t, (data, index) => {
+		if (index === 1) return call("spherewright_get_status", { unexpected: true });
+		assert.ok(JSON.stringify(data.messages).includes("synthetic-progress-feedback"));
+		return [{ content: "已收到宿主阶段反馈。" }];
+	});
+	await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, observation: { loaded: true }, nativeTools: [{ name: "spherewright_get_status", description: "Native status", inputSchema: { type: "object", properties: {}, additionalProperties: false } }], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 0, durationMs: 10000 }, invoke: async name => name === "deck_goal_next_decision" ? { continue: false } : name === "deck_goal_checkpoint" && ++checkpoints >= 2 ? { feedback: { message: "synthetic-progress-feedback" } } : {} });
+	assert.equal(checkpoints, 2);
 });
 
 test("real Pi normalized stream usage is captured once per response with explicit prices and unknown missing reports", async t => {

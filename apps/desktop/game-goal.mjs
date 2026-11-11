@@ -4,6 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
 import { extendProductionGoal, productionGoalSample } from "./game-production-goal.mjs";
+import { validateGameExperienceRecord } from "./game-experience.mjs";
+import { resolveGameActionContext } from "./game-action-context.mjs";
+import { observeGameProgress, gameProgressKey, recordGameMotion } from "./game-goal-progress.mjs";
 
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
@@ -51,6 +54,10 @@ export class GameGoalController {
 		this.goal = createGameGoal(prompt, objective, { ...session.context }, now());
 		this.baseUsage = previous ? { ...previous.usage } : { modelRequests: 0, toolCalls: 0, writes: 0 };
 		this.coordinationCalls = 0;
+		this.observedEndpoints = new Map();
+		this.goal.progressFacts = structuredClone(previous?.progressFacts ?? {});
+		this.goal.observedEffects = previous?.observedEffects ?? 0;
+		this.goal.motionActionIds = [...(previous?.motionActionIds ?? [])];
 		this.goal.id = previous?.id ?? task.id;
 		this.goal.previousTaskId = previous?.taskId ?? null;
 		this.goal.taskId = task.id;
@@ -89,6 +96,7 @@ export class GameGoalController {
 		this.assertActive();
 		this.assertToolBudget();
 		const reply = await this.session.call(name, args);
+		observeGameProgress(this.goal, name, args, reply);
 		this.goal.context = { ...this.session.context }; this.persist();
 		return reply;
 	}
@@ -135,12 +143,13 @@ export class GameGoalController {
 	}
 	async executeAction(args) {
 		this.assertActive();
-		if (!object(args) || Object.keys(args).some(key => !["prepareTool", "args"].includes(key)) || !object(args.args)) throw new Error("INVALID_GAME_ACTION_ARGUMENTS");
+		if (!object(args) || Object.keys(args).some(key => !["prepareTool", "args", "freshContext"].includes(key)) || !object(args.args) || args.freshContext !== undefined && typeof args.freshContext !== "boolean") throw new Error("INVALID_GAME_ACTION_ARGUMENTS");
 		const entry = this.session.entries.get(args.prepareTool);
 		if (this.session.mode !== "autonomous" || !this.session.authorized || entry?.kind !== "prepare" || entry.family === "new_game") throw new Error("AUTONOMOUS_GAME_ACTION_REQUIRED");
 		const commit = [...this.session.entries.values()].find(value => value.kind === "commit" && value.family === entry.family);
 		if (!commit) throw new Error("GAME_MCP_CALL_NOT_SUPPORTED");
-		const prepared = await this.native(entry.name, args.args);
+		const observed = args.freshContext ? await resolveGameActionContext(this.session, entry, args.args, (name, value) => this.read(name, value), id => this.observedEndpoints.get(this.session.context.planetId + ":" + id)) : { args: args.args, player: null };
+		const prepared = await this.native(entry.name, observed.args);
 		if (prepared?.success !== true) return prepared;
 		const commitArgs = { planToken: prepared.result.planToken, idempotencyKey: randomUUID() };
 		for (const field of ["sessionId", "planetId"]) if (Object.hasOwn(commit.inputSchema.properties, field)) commitArgs[field] = this.session.context[field];
@@ -148,7 +157,13 @@ export class GameGoalController {
 		if (receipt?.success !== true) return receipt;
 		const outcome = await this.wait({ reason: "核对原生 " + entry.family + " 原动作", timeoutSeconds: 120 });
 		const terminal = outcome.originalActions.at(-1);
-		return { success: true, result: { ...receipt.result, ...terminal, terminal: terminal?.terminal === true, succeeded: terminal?.succeeded === true, stillPending: !outcome.satisfied, itemBudget: prepared.result.itemBudget } };
+		let motion = null;
+		if (terminal?.succeeded === true && entry.family === "move" && observed.player) {
+			const after = await this.read("spherewright_get_player_state", { sessionId: this.session.context.sessionId, planetId: this.session.context.planetId });
+			const target = { x: observed.args.targetX, y: observed.args.targetY, z: observed.args.targetZ };
+			motion = recordGameMotion(this.goal, terminal.actionId, observed.player.position, after.result.position, target); this.persist();
+		}
+		return { success: true, result: { ...receipt.result, ...terminal, terminal: terminal?.terminal === true, succeeded: terminal?.succeeded === true, stillPending: !outcome.satisfied, itemBudget: prepared.result.itemBudget, ...(motion ? { motion } : {}) } };
 	}
 	async native(name, args) {
 		this.assertActive();
@@ -156,6 +171,8 @@ export class GameGoalController {
 		this.goal.activity = { state: this.session.entries.get(name)?.kind === "read" ? "observing" : "preparing", label: name }; this.persist();
 		try {
 			const result = await this.session.call(name, args);
+			observeGameProgress(this.goal, name, args, result);
+			if (name === "spherewright_inspect_factory_entity" && result?.success === true && args.planetId === this.session.context.planetId && result.result?.objectId === args.objectId && /^sha256:[a-f0-9]{64}$/.test(result.result.endpointStateHash ?? "")) this.observedEndpoints.set(args.planetId + ":" + args.objectId, result.result.endpointStateHash);
 			if (result?.success === false) this.failure(name, args);
 			this.goal.context = { ...this.session.context }; this.goal.activity = { state: "deciding", label: this.goal.stages.at(-1)?.title ?? "观察现场" }; this.persist(); return result;
 		} catch (error) {
@@ -244,7 +261,10 @@ export class GameGoalController {
 			for (const condition of this.goal.completionChecks) results.push(await this.check(condition));
 			if (this.goal.objective.kind === "production") await this.production();
 			const passed = results.length > 0 && results.every(value => value.passed) && (this.goal.objective.kind !== "production" || this.goal.verification?.state === "verified");
-			if (passed) { this.goal.status = "completed"; this.goal.completedAt = this.now(); this.goal.problem = null; }
+			if (passed) {
+				this.goal.status = "completed"; this.goal.completedAt = this.now(); this.goal.problem = null;
+				if (this.goal.activityProgress) this.goal.activityProgress = { ...this.goal.activityProgress, idleDecisions: 0, feedback: null };
+			}
 			this.persist(); return { completed: passed, reason: results.length ? null : "GAME_GOAL_COMPLETION_CHECKS_REQUIRED", goal: this.view() };
 		} finally {
 			if (!this.done) this.goal.status = "running";
@@ -257,15 +277,28 @@ export class GameGoalController {
 		if (this.pending().length) await this.wait({ reason: "核对已受理的原动作", timeoutSeconds: 120 });
 		await this.verify();
 		if (this.done) return { continue: false, goal: this.view() };
-		const completed = this.ledger.children(this.task.id).filter(value => value.intent?.state === "completed").length;
-		const key = hash({ completed, observations: this.goal.observations.map(({ label, actual, passed }) => ({ label, actual, passed })), coverage: this.goal.verification?.seconds ?? null });
+		const key = gameProgressKey(this.goal, this.ledger.children(this.task.id));
 		this.goal.stalledDecisions = key === this.goal.lastProgress ? this.goal.stalledDecisions + 1 : 0;
 		this.goal.lastProgress = key;
 		if (this.goal.stalledDecisions >= 3) this.stop("blocked", "GAME_GOAL_NO_PROGRESS");
 		else this.persist();
 		return { continue: !this.done, goal: this.view() };
 	}
+	checkpoint() {
+		if (this.done) return { feedback: null };
+		const key = gameProgressKey(this.goal, this.ledger.children(this.task.id)), previous = this.goal.activityProgress;
+		const idleDecisions = this.pending().length || previous?.key !== key ? 0 : (previous.idleDecisions ?? 0) + 1;
+		const feedback = idleDecisions >= 8 ? { code: "GAME_GOAL_ACTIVITY_NO_PROGRESS", message: "连续模型决策尚未观察到新的游戏推进。核对当前阶段缺口，读取必要事实后选择近期执行动作，并按原回执检查效果。", lessonIds: ["whole-chain", "observable-progress", "original-outcome"] } : null;
+		this.goal.activityProgress = { key, idleDecisions, feedback }; this.persist();
+		return { feedback };
+	}
 	usage(value) { if (integer(value?.requests)) this.goal.usage.modelRequests = this.baseUsage.modelRequests + value.requests; this.persist(); }
+	experience(value) {
+		const record = validateGameExperienceRecord(value), previous = this.goal.experience;
+		if (previous && JSON.stringify(previous.source) !== JSON.stringify(record.source)) throw new Error("GAME_EXPERIENCE_SOURCE_CHANGED");
+		record.lessonIds = [...new Set([...(previous?.lessonIds ?? []), ...record.lessonIds])];
+		this.goal.experience = record; this.persist();
+	}
 	stop(status = "paused", problem = null) {
 		if (this.goal.status === "completed") return;
 		if (this.goal.status === "blocked" && status === "paused") return;
@@ -273,11 +306,15 @@ export class GameGoalController {
 		this.goal.status = status; this.goal.problem = problem; this.goal.wait = null; this.persist();
 	}
 	async call(name, args) {
+		if (name === "deck_goal_checkpoint") {
+			if (!object(args) || Object.keys(args).length) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
+			return this.checkpoint();
+		}
 		if (["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify"].includes(name) && (!object(args) || Object.keys(args).length)) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
-		if (gameGoalTools.some(tool => tool.name === name) || ["deck_goal_guidance_access", "deck_goal_catalog_access"].includes(name)) {
+		if (gameGoalTools.some(tool => tool.name === name) || ["deck_goal_guidance_access", "deck_goal_catalog_access", "deck_goal_experience_access"].includes(name)) {
 			this.assertToolBudget(); this.coordinationCalls++; this.persist();
 		}
-		if (["deck_goal_guidance_access", "deck_goal_catalog_access"].includes(name)) { this.assertActive(); return { allowed: true }; }
+		if (["deck_goal_guidance_access", "deck_goal_catalog_access", "deck_goal_experience_access"].includes(name)) { this.assertActive(); return { allowed: true }; }
 		if (name === "deck_goal_next_decision") return this.nextDecision();
 		if (name === "deck_goal_status") return this.view();
 		if (name === "deck_goal_plan") return this.plan(args);

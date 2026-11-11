@@ -14,6 +14,13 @@ const tools = [
 	tool("spherewright_prepare_save_import", { sessionId: "string" }, false), tool("spherewright_commit_save_import", { planToken: "string", idempotencyKey: "string" }, false, true),
 ];
 const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+const playerHash = "sha256:" + "a".repeat(64);
+if (mode === "context") {
+	tools.push(tool("spherewright_get_player_state", { sessionId: "string", planetId: "integer" }));
+	const prepare = tools.find(entry => entry.name === "spherewright_prepare_handcraft");
+	prepare.inputSchema.properties.expectedPlayerStateHash = { type: "string" };
+	prepare.inputSchema.required.push("expectedPlayerStateHash");
+}
 for await (const line of createInterface({ input: process.stdin })) {
 	const request = JSON.parse(line), id = request.id, name = request.params?.name, args = request.params?.arguments ?? {};
 	if (id === undefined) continue;
@@ -22,6 +29,12 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (request.method === "resources/list") { send(id, { resources: [{ uri, name: "Synthetic playbook" }] }); continue; }
 	if (request.method === "resources/read") { send(id, { contents: [{ uri, text: "Synthetic only. Use fresh prepare, native confirmation, one commit and original-action readback." }] }); continue; }
 	let reply;
+	if (name === "spherewright_get_player_state" && mode === "context") {
+		send(id, { structuredContent: { success: true, result: { stateHash: playerHash, inventory: [], position: { x: 0, y: 0, z: 200 } } } }); continue;
+	}
+	if (name === "spherewright_prepare_handcraft" && mode === "context" && args.expectedPlayerStateHash !== playerHash) {
+		send(id, { structuredContent: { success: false, result: null, error: { code: "STALE_STATE" } } }); continue;
+	}
 	if (name === "spherewright_get_status") reply = { success: true, status: { bridgeConnected: true, protocolVersion: 1, bridgeInstanceId: bridge, gameLoaded: loaded, writesConfigured: true, writeHealth: "healthy", syntheticCommitCount: commits } };
 	else if (name === "spherewright_get_session_state") reply = { success: true, result: { bridgeConnected: true, gameLoaded: loaded, ownedBySpherewright: loaded, accessRestricted: !loaded, sessionId: loaded ? session : null, localPlanetId: loaded ? 1 : null, gameTick: productionTick, revision: commits, writesAllowed: true, writeHealth: "healthy", peacefulMode: "confirmed_peaceful", writeBlockers: [] } };
 	else if (name === "spherewright_get_recipe_catalog" && mode === "refused-read") reply = { success: false, error: { code: "RECIPE_LOCKED", message: "Synthetic recipe is not unlocked" }, result: null };

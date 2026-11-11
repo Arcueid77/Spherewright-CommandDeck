@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile, mkdtemp, cp, rename, realpath, rm, mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, dirname, basename, relative, isAbsolute, sep } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
@@ -57,7 +57,15 @@ if (renamedElectron) {
 	await rename(original, executable);
 }
 const environment = gatewaySmoke ? { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key))), COMMANDDECK_SMOKE_RUN_ID: runId, COMMANDDECK_PI_CONFIG_DIR: join(root, ".local/gateway-smoke", runId, "no-user-provider-configuration"), PI_OFFLINE: "1" } : { ...process.env, COMMANDDECK_SMOKE_RUN_ID: runId, ...(mcpLoss ? { COMMANDDECK_MCP_FIXTURE_ROOT: mcpTemporary, COMMANDDECK_PI_CONFIG_DIR: join(mcpTemporary, "no-user-provider-configuration") } : {}) };
-child = spawn(executable, [root, "--smoke", ...args], {
+let entryPoint = root;
+if (args.includes("--smoke-game") && !controlledFault) {
+	const context = join(root, ".local/source-smoke", runId), profile = join(context, "profile");
+	await mkdir(profile, { recursive: true });
+	entryPoint = join(context, "entry.mjs");
+	await writeFile(entryPoint, 'import { app } from "electron";\napp.setName(' + JSON.stringify("CommandDeck game smoke " + runId) + ');\napp.setPath("userData",' + JSON.stringify(profile) + ');\nawait import(' + JSON.stringify(pathToFileURL(join(root, "apps/desktop/main.mjs")).href) + ');\n', { flag: "wx" });
+	await writeFile(join(context, "context.private.json"), JSON.stringify({ runId, profile, syntheticOnly: true }), { flag: "wx" });
+}
+child = spawn(executable, [entryPoint, "--smoke", ...args], {
 	cwd: root,
 	stdio: "inherit",
 	windowsHide: false,

@@ -158,7 +158,7 @@ In Game Agent, select a model, enter the objective and enable sustained goal exe
 
 `deck_goal_plan` records stages and plans and can select relevant tools. `deck_goal_wait` waits for original actions, native conditions or the production window. `deck_goal_verify` evaluates fresh native data. `deck_goal_guidance` reads the selected service guide in sections. Coordination, guidance and game calls share one cumulative tool allowance.
 
-Ordinary autonomous writes use typed `deck_execute_*` tools with the discovered native preparation arguments. The host serializes native preparation, one matching commit and bounded original-result polling through the existing game session and ledger. `deck_goal_execute_action` provides the same coordination directly. Each native call and submission spends the current allowance. Native unknown outcomes preserve their original intent. Assisted actions and new-world creation use their respective confirmation flows.
+Ordinary autonomous writes use typed `deck_execute_*` action intents. The host supplies current session/planet and supported volatile player, resource, storage, research-selection and save-revision bindings through fresh public MCP reads. Storage refresh requires the previously observed endpoint identity to match. Common device modes use their proper mutable/configuration hash domain. Explicit endpoint, blueprint and specialized mode evidence remains in the request. The host serializes native preparation, one matching commit and bounded original-result polling through the existing game session and ledger. `deck_goal_execute_action` also accepts the full native preparation arguments. Each native call and submission spends the current allowance. Native unknown outcomes preserve their original intent. Assisted actions and new-world creation use their respective confirmation flows.
 
 Continue or revise this goal retains its identity with a new revision, supports another selected model and preserves cumulative spending and the original deadline. The normal task entry point confirms the next run authorization. Completion, unresolved actions and remaining allowance determine available controls.
 
@@ -184,3 +184,22 @@ Sustained `MiniMax-M3.1-Flash` sessions using the OpenAI-compatible protocol exp
 Changes primarily belong in the existing game tasks, Pi assembly, execution session, ledger and game panel. Concrete storage fields and migration are determined with step 1. [Task scheduling](../apps/desktop/game-tasks.mjs) · [Pi assembly](../apps/desktop/game-agent.mjs) · [Execution session](../apps/desktop/spherewright-game-session.mjs) · [Action ledger](../apps/desktop/game-intent-ledger.mjs) · [Game panel](../apps/renderer/src/game-tasks.tsx)
 
 Targeted regressions cover an early model stop, condition satisfaction/timeout, repeated lack of progress, stale data, exhausted budgets, unknown original actions, and task ownership after UI reload, application restart or model changes. Retain the existing execution safety contract and declare the exact runtime version, world scope and measurement conditions for live validation.
+
+## Lab experience audit and application
+
+The earlier game path supplied the selected Native playbook. It already contained research-buffer accounting guidance. Pi had no direct Lab lesson source or persistent lesson provenance, and the handcraft validator still required inventory products after task release. The integration gap covered both context delivery and executable semantics.
+
+The default runtime now loads a versioned, bounded snapshot of [Lab's reusable catalog](https://github.com/Arcueid77/Spherewright-Lab/blob/faf7bd3d563e47313a3d33cad5dcff6ee0829496/knowledge/game-agent-lessons.json). Eight bilingual lessons are indexed, four core lessons enter the initial prompt, and `deck_goal_experience` retrieves selected details. Task storage and Current goal/action record the source revision, file digest and supplied lesson IDs. Update the snapshot with `node scripts/sync-game-experience.mjs <Lab repository>`. The packaged application carries this snapshot as ordinary context data.
+
+| Lab source | Application | Offline coverage |
+| --- | --- | --- |
+| Whole-chain retrospective | Initial objective/stage guidance and targeted planning lookup | Initial Pi context and bounded lesson retrieval |
+| EXP-344 and current Native hash contracts | Host-owned volatile context, stable endpoint verification and explicit specialized evidence | Changed identity, unavailable evidence and distinct hash domains |
+| EXP-338 | Automatic research stock guidance and original native forge completion proof in Spherewright | Inventory/automatic use, partial cancellation, pending, invalid bindings |
+| EXP-334 | One original accepted action through bounded waiting and unknown preservation | Same action/key, pending results and zero replay |
+| Movement/caller reliability retrospective | Read actual post-move displacement and distinguish effective route advance | Near-tolerance motion and real physical advance |
+| Observable stages and realistic DTOs | Check progress before every model decision, including tool-validation loops | Clock/energy-only changes, refused attempts and fresh research progress |
+
+Eight unchanged-progress decisions produce diagnostic feedback within the existing run. Pending originals keep their normal waiting flow. Progress follows verified action effects, material/research changes and production coverage. Saves, rejected submissions and timestamps keep their own evidence scope. The existing cumulative budget and terminal verifier govern execution. This guidance adds no conversation approval step.
+
+This update has offline and synthetic-entry evidence. Real blue-matrix gameplay, installed-cohort acceptance and package-level delivery retain their pending status.

@@ -1,4 +1,6 @@
 export type GameGoal = {
+	experience?: { source: { revision: string }; lessonIds: string[] };
+	activityProgress?: { idleDecisions: number; feedback: { message: string } | null };
 	title: string;
 	revision: number;
 	status: string;
@@ -47,7 +49,9 @@ export function GameGoalPanel({ goal, connected, canConfirm, canContinue, onConf
 			{goal.reason && <><dt>行为原因</dt><dd>{goal.reason}</dd></>}
 			{goal.nextStep && goal.status !== "completed" && <><dt>下一步</dt><dd>{goal.nextStep}</dd></>}
 			{goal.wait && <><dt>等待条件</dt><dd>{goal.wait.reason}</dd></>}
+			{goal.experience && <><dt>经验来源</dt><dd>Spherewright-Lab @{goal.experience.source.revision.slice(0, 8)} · 已载入 {goal.experience.lessonIds.length} 条</dd></>}
 		</dl>
+		{goal.activityProgress?.feedback && <p className="notice">{goal.activityProgress.feedback.message}</p>}
 		{goal.objective.kind === "production" && <div className="game-goal-measurement" aria-label="产量验收">
 			<b>持续产量验收</b>
 			<p>目标 {goal.objective.minimumPerMinute}/分钟，持续 {goal.objective.windowSeconds} 游戏秒</p>

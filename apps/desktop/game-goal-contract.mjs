@@ -1,3 +1,5 @@
+import { validateGameExperienceRecord } from "./game-experience.mjs";
+
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const text = (value, maximum = 240) => typeof value === "string" && value.trim().length > 0 && value.length <= maximum && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
@@ -57,6 +59,11 @@ export function validateGameGoal(value) {
 		|| !integer(value.decisions) || !integer(value.stalledDecisions)
 		|| !Number.isFinite(value.updatedAt) || JSON.stringify(value).length > 49152) throw new Error("INVALID_STORED_GAME_GOAL");
 	gameObjective(value.objective);
+	if (value.experience !== undefined) validateGameExperienceRecord(value.experience);
+	if (value.observedEffects !== undefined && !integer(value.observedEffects)) throw new Error("INVALID_STORED_GAME_GOAL");
+	if (value.progressFacts !== undefined && (!object(value.progressFacts) || Object.keys(value.progressFacts).length > 4 || Object.values(value.progressFacts).some(hash => !/^[a-f0-9]{64}$/.test(hash)))) throw new Error("INVALID_STORED_GAME_GOAL");
+	if (value.motionActionIds !== undefined && (!Array.isArray(value.motionActionIds) || value.motionActionIds.length > 256 || value.motionActionIds.some(id => !text(id, 128)))) throw new Error("INVALID_STORED_GAME_GOAL");
+	if (value.activityProgress !== undefined && (!object(value.activityProgress) || !integer(value.activityProgress.idleDecisions))) throw new Error("INVALID_STORED_GAME_GOAL");
 	gameGoalChecks(value.completionChecks);
 	gameGoalChecks(value.stageChecks, 4);
 	if (value.stages.some(stage => !text(stage.title) || !text(stage.reason) || !text(stage.nextStep) || !["current", "visited", "verified"].includes(stage.status))) throw new Error("INVALID_STORED_GAME_GOAL");

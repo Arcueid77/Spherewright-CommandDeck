@@ -153,6 +153,51 @@ test("assisted goals keep ordinary actions behind their existing confirmations",
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
 });
 
+test("an autonomous intent observes and binds current context without model-supplied hashes", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await invoke("deck_goal_plan", plan(1));
+		const result = await invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_handcraft", args: { recipeId: 10, count: 2 }, freshContext: true });
+		assert.equal(result.result.succeeded, true);
+		assert.equal((await invoke("deck_goal_verify", {})).completed, true);
+	}, "context");
+	f.start({ mode: "autonomous", allowedFamilies: ["handcraft"], limits: { modelRequests: 4, toolCalls: 20, writes: 1, durationMs: 10000 } });
+	await approve(f); await f.host.settled();
+	assert.equal(f.host.snapshot().goal.usage.writes, 1);
+});
+
+test("continuous read decisions receive progress feedback and a real action clears it", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		let checkpoint;
+		for (let index = 0; index < 9; index++) {
+			await invoke("spherewright_get_status", {});
+			checkpoint = await invoke("deck_goal_checkpoint", {});
+		}
+		assert.equal(checkpoint.feedback.code, "GAME_GOAL_ACTIVITY_NO_PROGRESS");
+		await invoke("deck_goal_plan", plan(1));
+		const receipt = await craft(invoke);
+		await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId });
+		assert.equal((await invoke("deck_goal_checkpoint", {})).feedback, null);
+		assert.equal((await invoke("deck_goal_verify", {})).completed, true);
+	});
+	f.start(); await approve(f); await f.host.settled();
+});
+
+test("Lab experience provenance persists with the goal after normal reconstruction", async t => {
+	const { loadGameExperience } = await import("../apps/desktop/game-experience.mjs"), catalog = await loadGameExperience();
+	const metadata = { version: 1, source: catalog.source, lessonIds: ["whole-chain", "research-material-flow"] };
+	const f = await fixture(t, async ({ invoke, event }) => {
+		event("experience", metadata);
+		await invoke("deck_goal_plan", plan(0));
+		await invoke("deck_goal_verify", {});
+	});
+	f.start(); await f.host.settled();
+	assert.deepEqual(f.host.snapshot().goal.experience, metadata);
+	f.host.close();
+	const reopened = new GameTasks(f.options);
+	assert.deepEqual(reopened.snapshot().goal.experience, metadata);
+	reopened.close();
+});
+
 test("native read conditions can be revised during observation", async t => {
 	const f = await fixture(t, async ({ invoke }) => {
 		await assert.rejects(invoke("deck_goal_plan", { ...plan(1), completionChecks: [{ ...check(1), tool: "spherewright_commit_handcraft" }] }), /GAME_GOAL_READ_CONDITION_REQUIRED/);

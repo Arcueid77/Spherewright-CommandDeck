@@ -1,0 +1,220 @@
+{
+  "source": {
+    "repository": "Arcueid77/Spherewright-Lab",
+    "revision": "faf7bd3d563e47313a3d33cad5dcff6ee0829496",
+    "path": "knowledge/game-agent-lessons.json",
+    "fileSha256": "de505bc41054f4d2327686742ec5723626a9a4d5acb30ef16bcec63ecb417dc4"
+  },
+  "catalogSha256": "48ada6aca70bcb0b75f80e03c64c56e6c2400b305ca2fda39338b71f7c804ee4",
+  "catalog": {
+    "schemaVersion": 1,
+    "lessons": [
+      {
+        "id": "whole-chain",
+        "title": {
+          "en": "Plan the complete production chain",
+          "zhCN": "按完整产线规划"
+        },
+        "topics": [
+          "planning",
+          "construction",
+          "logistics",
+          "power"
+        ],
+        "guidance": {
+          "en": "Maintain the source, extraction, processing, power, transport, consumption and save dependencies for the current objective. Record estimated quantities with their Native validation status. Define the next stage by an observable game outcome, then refine its actions from fresh observations and the remaining actual budget.",
+          "zhCN": "维护当前目标的矿源、采集、加工、供电、运输、消费及保存依赖。估算数量同时记录原生验证状态。下一阶段以可观察的游戏成果定义，再根据新鲜观察和实际剩余额度细化动作。"
+        },
+        "sources": [
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P0 整链规划"
+          }
+        ]
+      },
+      {
+        "id": "research-material-flow",
+        "title": {
+          "en": "Trace automatic research material flow",
+          "zhCN": "核对自动科研物料流转"
+        },
+        "topics": [
+          "handcraft",
+          "research",
+          "inventory",
+          "transfer"
+        ],
+        "guidance": {
+          "en": "Observe package stock, automatic research-buffer equivalents and completed research separately. Automatic research can consume newly received or crafted products immediately. Package transfers use the actual package count. Confirm manufacturing from its original native task evidence and confirm research from uploaded progress and unlock state.",
+          "zhCN": "分别观察背包实物、自动科研缓存等值和已完成科研。自动科研可能立即消耗刚取得或制造的产物。背包转移采用实际背包数量。制造核对原生原任务证据，科研核对上传进度与解锁状态。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-338"
+          }
+        ]
+      },
+      {
+        "id": "native-bindings",
+        "title": {
+          "en": "Use each Native binding domain",
+          "zhCN": "使用对应的原生绑定域"
+        },
+        "topics": [
+          "preparation",
+          "construction",
+          "state"
+        ],
+        "guidance": {
+          "en": "Use the current DTO schema and the hash domain required by the action. Player, endpoint, configuration, storage and composite plan hashes bind different evidence. Preserve the complete fresh parameters and identity through preparation and commit. Retain actual before and after readback, including legitimate component transitions.",
+          "zhCN": "采用当前 DTO 定义及动作要求的哈希域。玩家、端点、配置、储物和组合计划哈希分别绑定对应证据。预检与提交保留完整新鲜参数和身份，保留真实前后读回及组件合法状态转换。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-344"
+          },
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P0 恢复状态模型"
+          }
+        ]
+      },
+      {
+        "id": "original-outcome",
+        "title": {
+          "en": "Preserve the original action outcome",
+          "zhCN": "保留原动作结果"
+        },
+        "topics": [
+          "execution",
+          "failure",
+          "waiting"
+        ],
+        "guidance": {
+          "en": "Keep the original action ID, idempotency key, accepted receipt and actual spending. A caller observation timeout leaves an accepted game action available for original-result polling. Diagnose current prebuild and drone evidence when construction takes longer. Classify a local parsing or display failure using retained receipts before choosing recovery. Native unknown outcomes keep their write quarantine.",
+          "zhCN": "保留原 actionId、幂等键、受理回执和实际消耗。调用端观察超时后，已受理游戏动作继续查询原结果。施工较慢时核对当前预建筑及无人机证据。解析或展示故障先据保留回执分类，再选择恢复方式。原生未知结果继续保持写入隔离。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-334"
+          },
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P1 失败处理与保全"
+          }
+        ]
+      },
+      {
+        "id": "movement-progress",
+        "title": {
+          "en": "Measure physical route progress",
+          "zhCN": "测量实际路线推进"
+        },
+        "topics": [
+          "movement",
+          "geometry",
+          "failure"
+        ],
+        "guidance": {
+          "en": "Choose surface waypoints with useful separation from the arrival tolerance. Read the actual player position after the original movement terminal and measure progress toward the destination. Keep spherical-coordinate and Native ground evidence with the route assessment. Adjust the local route from observed displacement and the original failure advice.",
+          "zhCN": "表面航点的步长与到达容差应保留有效间距。原移动终态后读取真实玩家位置，测量朝目标的推进量。路线判断保留球面坐标和原生地表证据，按实际位移与原失败建议调整局部路线。"
+        },
+        "sources": [
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P0 调用端可靠性"
+          }
+        ]
+      },
+      {
+        "id": "native-logistics-geometry",
+        "title": {
+          "en": "Validate Native logistics connections",
+          "zhCN": "核对原生物流连接"
+        },
+        "topics": [
+          "construction",
+          "logistics",
+          "geometry"
+        ],
+        "guidance": {
+          "en": "Plan belt ends and sorter source/destination ports from actual Native path intervals and facing. Verify the prepared slot binding, the original construction terminal and reciprocal entity connections. Preserve successful segments while investigating a rejected candidate. Read the actual routing-mode and applicability fields from the current DTO.",
+          "zhCN": "依据真实原生路径区间和朝向规划带端及分拣器源目标端口。核对预检槽位绑定、原施工终态及实体互返连接。调查被拒候选时保留已成功段，按当前 DTO 读取路由模式和字段适用状态。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-336"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-335"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-340"
+          }
+        ]
+      },
+      {
+        "id": "observable-progress",
+        "title": {
+          "en": "Use observable stage outcomes",
+          "zhCN": "用可观察成果判断阶段"
+        },
+        "topics": [
+          "planning",
+          "verification",
+          "production"
+        ],
+        "guidance": {
+          "en": "Define stages using constructed facilities, measured power service, material movement, downstream consumption and the declared production window. Keep acceptance, actual debit, completed work and sustained production as individually evidenced facts. Reuse retained observations when correcting local accounting and preserve each observation's source and time.",
+          "zhCN": "以设施落地、实测供电、物料流动、下游消费和声明的产量窗口定义阶段。受理、实际扣料、施工完成及持续生产分别保留对应证据。修正本地计数时复用保留观察，并保留来源和时间。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-344"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-337"
+          },
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "适合下一轮直接复用的工作方式"
+          }
+        ]
+      },
+      {
+        "id": "realistic-validation",
+        "title": {
+          "en": "Replay realistic states and label evidence",
+          "zhCN": "回放真实状态并标明证据范围"
+        },
+        "topics": [
+          "verification",
+          "state",
+          "failure"
+        ],
+        "guidance": {
+          "en": "Cover empty, funded, idle, connected-unpowered, operating-with-cargo and saved/recovered states, including nullable and mode-specific DTO fields. Record offline substitutes, actual runtime observations and package validation with their own coverage. Prioritize the current functional outcome when selecting development checks and reuse qualified unchanged artifacts.",
+          "zhCN": "覆盖空状态、付料、闲置、连接未供电、运行带货及保存恢复状态，并覆盖可空和模式专属字段。离线替身、实际运行观察和包验证分别标明覆盖范围。开发检查围绕当前功能成果选择，复用已合格且未变化的产物。"
+        },
+        "sources": [
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P1 原生语义与测试"
+          },
+          {
+            "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
+            "section": "P1 验证与交付顺序"
+          }
+        ]
+      }
+    ]
+  }
+}

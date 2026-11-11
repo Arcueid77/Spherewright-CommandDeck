@@ -14,19 +14,18 @@ export async function runMcpGameSmoke(driver) {
 	const server = createServer(async (request, response) => {
 		let body = ""; for await (const part of request) body += part; const data = JSON.parse(body); requests++;
 		assert.equal(request.headers.authorization, "Bearer " + key);
-		assert.ok(data.tools.some(tool => tool.function.name === "spherewright_prepare_handcraft")); assert.ok(!data.tools.some(tool => /save_import|observe_research/.test(tool.function.name)));
+		assert.ok(data.tools.some(tool => tool.function.name === (autonomous ? "deck_execute_handcraft" : "spherewright_prepare_handcraft"))); assert.ok(!data.tools.some(tool => /save_import|observe_research/.test(tool.function.name)));
 		const replies = data.messages.filter(message => message.role === "tool"), previous = id => { const message = replies.find(message => message.tool_call_id === id); return message ? JSON.parse(message.content) : null; };
-		if (autonomous && previous("native-result") && !previous("native-prepare-next") && !middleRequestReleased) { middleRequestHeld = true; await new Promise(resolve => { releaseMiddleRequest = resolve; }); }
+		if (autonomous && previous("native-execute") && !previous("native-execute-next") && !middleRequestReleased) { middleRequestHeld = true; await new Promise(resolve => { releaseMiddleRequest = resolve; }); }
 		let name, args, id;
 		if (!previous("native-catalog")) { name = "spherewright_get_recipe_catalog"; args = {}; id = "native-catalog"; }
 		else if (!earlyStopIssued) { earlyStopIssued = true; }
 		else if (!previous("goal-plan")) { name = "deck_goal_plan"; args = { stage: "验证原生制造", reason: "核对同一目标的原动作和回执", nextStep: "完成有限制造后核验目标", completionChecks: [{ label: "合成制造次数", tool: "spherewright_get_status", args: {}, path: "/status/syntheticCommitCount", operator: "gte", value: expectedCommits }] }; id = "goal-plan"; }
-		else if (!previous("native-prepare")) { name = "spherewright_prepare_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, recipeId: 10, count: 2 }; id = "native-prepare"; }
-		else if (!previous("native-commit")) { name = "spherewright_commit_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, planToken: previous("native-prepare").result.planToken, idempotencyKey: "model-key" }; id = "native-commit"; }
-		else if (!previous("native-result")) { name = "spherewright_get_action_result"; args = { actionId: previous("native-commit").result.actionId }; id = "native-result"; }
-		else if (autonomous && !previous("native-prepare-next")) { name = "spherewright_prepare_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, recipeId: 10, count: 2 }; id = "native-prepare-next"; }
-		else if (autonomous && !previous("native-commit-next")) { name = "spherewright_commit_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, planToken: previous("native-prepare-next").result.planToken, idempotencyKey: "model-key-next" }; id = "native-commit-next"; }
-		else if (autonomous && !previous("native-result-next")) { name = "spherewright_get_action_result"; args = { actionId: previous("native-commit-next").result.actionId }; id = "native-result-next"; }
+		else if (autonomous && !previous("native-execute")) { name = "deck_execute_handcraft"; args = { recipeId: 10, count: 2 }; id = "native-execute"; }
+		else if (autonomous && !previous("native-execute-next")) { name = "deck_execute_handcraft"; args = { recipeId: 10, count: 2 }; id = "native-execute-next"; }
+		else if (!autonomous && !previous("native-prepare")) { name = "spherewright_prepare_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, recipeId: 10, count: 2 }; id = "native-prepare"; }
+		else if (!autonomous && !previous("native-commit")) { name = "spherewright_commit_handcraft"; args = { sessionId: "synthetic-game-session", planetId: 1, planToken: previous("native-prepare").result.planToken, idempotencyKey: "model-key" }; id = "native-commit"; }
+		else if (!autonomous && !previous("native-result")) { name = "spherewright_get_action_result"; args = { actionId: previous("native-commit").result.actionId }; id = "native-result"; }
 		else if (autonomous && previous("goal-verification-0")?.completed === false && !previous("goal-production-wait")) { name = "deck_goal_wait"; args = { reason: "等待目标产量窗口", timeoutSeconds: 5 }; id = "goal-production-wait"; }
 		else if (!replies.some(message => message.tool_call_id.startsWith("goal-verification-") && JSON.parse(message.content).completed === true)) { name = "deck_goal_verify"; args = {}; id = "goal-verification-" + replies.filter(message => message.tool_call_id.startsWith("goal-verification-")).length; }
 		const delta = name ? { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] } : { content: "已核对合成原生动作终态；未操作 DSP。" };
@@ -74,6 +73,7 @@ export async function runMcpGameSmoke(driver) {
 		await until(async () => { const value = await state(); return !value.busy && !value.unresolved.length && value.tasks.some(task => task.scope.kind === "mcp-action" && task.intent?.state === "completed"); }, "TERMINAL");
 		assert.equal(await driver.getSyntheticCommitCount(), expectedCommits); const before = await state(), count = requests, pid = driver.getBridgePid();
 		assert.equal(before.goal.status, "completed"); assert.equal(earlyStopIssued, true);
+		assert.ok(before.goal.experience.lessonIds.includes("research-material-flow"));
 		if (autonomous) { assert.equal(before.goal.verification.state, "verified"); assert.ok(before.goal.verification.seconds >= 20); }
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"当前目标与行为\"]'))"), "GOAL_PANEL");
 		await driver.testCommand("capture-game");

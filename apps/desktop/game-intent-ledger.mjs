@@ -8,6 +8,7 @@ import { modelContextSnapshot } from "./model-context.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 import { validateGameGoal } from "./game-goal-contract.mjs";
 import { stoppedGameAction, rejectedGameCommit } from "./game-action-outcome.mjs";
+import { validateGameExperienceRecord } from "./game-experience.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const opaque = (value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
@@ -308,12 +309,12 @@ export class GameIntentLedger {
 		this.#transaction(() => this.db.prepare("INSERT INTO game_task_details(task_id,body) VALUES(?,?)").run(id, JSON.stringify(body)));
 	}
 	note(id, kind, value = {}) {
-		if (!["stage", "assistant", "tool", "error", "result", "usage", "context"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
-		const body = kind === "usage" ? { at: this.now(), usage: modelUsageSnapshot(value) } : kind === "context" ? { at: this.now(), context: modelContextSnapshot(value) } : { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
+		if (!["stage", "assistant", "tool", "error", "result", "usage", "context", "experience"].includes(kind)) throw new Error("INVALID_GAME_EVENT");
+		const body = kind === "usage" ? { at: this.now(), usage: modelUsageSnapshot(value) } : kind === "context" ? { at: this.now(), context: modelContextSnapshot(value) } : kind === "experience" ? { at: this.now(), experience: validateGameExperienceRecord(value), text: "Lab 经验已载入" } : { at: this.now(), text: String(value.text ?? "").slice(0, 32768), name: String(value.name ?? "").slice(0, 80), code: /^[A-Z0-9_]{1,128}$/.test(value.code ?? "") ? value.code : null };
 		this.#transaction(() => {
 			this.#task(id);
 			this.db.prepare("INSERT INTO game_task_events(task_id,kind,body) VALUES(?,?,?)").run(id, kind, JSON.stringify(body));
-			if (kind === "usage" || kind === "context") {
+			if (kind === "usage" || kind === "context" || kind === "experience") {
 				const row = this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id);
 				if (row) this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify({ ...JSON.parse(row.body), [kind]: body[kind] }), id);
 			}

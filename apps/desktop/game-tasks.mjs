@@ -59,6 +59,7 @@ export class GameTasks {
 	#note(kind, value) {
 		if (this.currentTaskId) {
 			if (kind === "usage") this.goalController?.usage(value);
+			if (kind === "experience") this.goalController?.experience(value);
 			this.ledger.note(this.currentTaskId, kind, value);
 		}
 		this.emit();
@@ -195,7 +196,7 @@ export class GameTasks {
 		});
 	}
 	async callForModel(taskId, name, args) {
-		const finishing = this.goalController?.done && ["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify"].includes(name);
+		const finishing = this.goalController?.done && ["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify", "deck_goal_checkpoint"].includes(name);
 		if (!this.mcpSession || taskId !== this.currentTaskId || !this.operation || !finishing && !["planning", "waiting", "verifying"].includes(this.phase)) throw new Error("GAME_MODEL_TOOL_UNAVAILABLE");
 		try {
 			if (name.startsWith("deck_goal_")) {
