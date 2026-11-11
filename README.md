@@ -68,6 +68,7 @@ Commit and push Pi changes in Spherewright-Pi first, then update CommandDeck's s
 ## Documentation map
 
 - [ROADMAP.md](ROADMAP.md): current milestone/remainder tables, exact candidate evidence and acceptance boundaries.
+- [Game Agent goal execution and status display](docs/game-agent-design.md) ([简体中文](docs/game-agent-design.zh-CN.md)): Pi customization, sustained goals, condition waiting, production verification and the shared Current goal/action UI state. The new controller and display behavior are planned work.
 - [Native window hosting](docs/native-window-hosting.md): ownership model, native supervision, fault handling and real-game limitations.
 - [External Agent read-only gateway](docs/agent-gateway.md): `deck_observe`, lifecycle, privacy and client compatibility.
 - Sections below: development, packaging, installer, recovery, diagnostics, tray, power, journal and other validation commands with their exact limits.
