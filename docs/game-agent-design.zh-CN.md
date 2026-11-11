@@ -182,3 +182,5 @@ flowchart LR
 修改主要落在现有游戏任务、Pi 装配、执行会话、账本和游戏面板中。具体存储字段与迁移随第 1 步实现确定。[任务调度](../apps/desktop/game-tasks.mjs) · [Pi 装配](../apps/desktop/game-agent.mjs) · [执行会话](../apps/desktop/spherewright-game-session.mjs) · [动作账本](../apps/desktop/game-intent-ledger.mjs) · [游戏面板](../apps/renderer/src/game-tasks.tsx)
 
 定向回归覆盖模型提前结束、条件满足/超时、连续无进展、数据过期、预算耗尽、原动作未知，以及 UI 重载、整应用重开和模型切换后的任务归属。沿用原执行安全合同，并在实机验证时明确程序版本、世界范围与测量条件。
+
+普通自主动作使用带有原生预检参数定义的 `deck_execute_*` 工具。宿主通过现有游戏会话和账本依次完成原生预检、一次匹配提交及有限原回执等待。`deck_goal_execute_action` 提供相同协调能力。各次原生调用与提交均计入当前额度，未知结果保留原意图。协助模式动作与新建世界分别采用对应的确认流程。

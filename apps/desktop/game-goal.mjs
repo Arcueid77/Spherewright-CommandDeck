@@ -1,6 +1,6 @@
 import { gameObjective, validateGameGoal, createGameGoal, gameGoalExpected, gameGoalChecks as checks } from "./game-goal-contract.mjs";
 export { gameObjective, validateGameGoal, createGameGoal } from "./game-goal-contract.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
 import { extendProductionGoal, productionGoalSample } from "./game-production-goal.mjs";
@@ -15,6 +15,7 @@ const checkSchema = {
 	properties: { label: string, tool: { type: "string", pattern: "^spherewright_", maxLength: 100 }, args: { type: "object" }, path: { type: "string", maxLength: 256, pattern: "^/" }, operator: { type: "string", enum: ["eq", "gte", "lte"] }, value: { type: ["string", "number", "boolean"], maxLength: 240 } },
 };
 export const gameGoalTools = [
+	{ name: "deck_goal_execute_action", description: "Execute one ordinary autonomous native action. Uses the named native prepare tool and its exact arguments, commits its fresh plan once under the approved family and budget, then waits up to 120 seconds for the original action. Check result.succeeded and the original native outcome. New-world creation uses its separate native confirmation flow.", inputSchema: { type: "object", additionalProperties: false, required: ["prepareTool", "args"], properties: { prepareTool: { type: "string", pattern: "^spherewright_prepare_", maxLength: 100 }, args: { type: "object" } } } },
 	{ name: "deck_goal_plan", description: "Record the current stage, reason and next step. Define completionChecks using fields actually observed in native read results. Revise proposed conditions with an explanation when schema or state evidence changes; revisions are recorded. The user's fixed production item/rate/window still apply. Optional stageChecks verify this stage. activeTools selects relevant registered native tools.", inputSchema: { type: "object", additionalProperties: false, required: ["stage", "reason", "nextStep"], properties: { stage: string, reason: string, nextStep: string, completionChecks: { type: "array", minItems: 1, maxItems: 8, items: checkSchema }, stageChecks: { type: "array", maxItems: 4, items: checkSchema }, activeTools: { type: "array", minItems: 1, maxItems: 128, items: { type: "string", maxLength: 100 } } } } },
 	{ name: "deck_goal_wait", description: "Wait without model polling for a bounded native read condition or the original in-flight action. For a production goal with no in-flight action, omit condition to monitor its sustained production window. Waits spend the existing wall/tool allowance and return evidence. Do not resubmit accepted actions.", inputSchema: { type: "object", additionalProperties: false, required: ["reason", "timeoutSeconds"], properties: { reason: string, timeoutSeconds: { type: "integer", minimum: 1, maximum: 120 }, condition: checkSchema } } },
 	{ name: "deck_goal_verify", description: "Fresh-read the recorded completion conditions and, for a production goal, the fixed item/rate/window. Only the host can mark this goal complete. Supply and facility checks should use native entity/connection evidence. Returns missing or unmet conditions for the next decision.", inputSchema: { type: "object", additionalProperties: false, properties: {} } },
@@ -131,6 +132,23 @@ export class GameGoalController {
 			candidate.stages.push({ title: args.stage, reason: args.reason, nextStep: args.nextStep, status: "current", startedAt: this.now() });
 		}
 		candidate.stageChecks = stageChecks; this.goal = candidate; this.persist(); return this.view();
+	}
+	async executeAction(args) {
+		this.assertActive();
+		if (!object(args) || Object.keys(args).some(key => !["prepareTool", "args"].includes(key)) || !object(args.args)) throw new Error("INVALID_GAME_ACTION_ARGUMENTS");
+		const entry = this.session.entries.get(args.prepareTool);
+		if (this.session.mode !== "autonomous" || !this.session.authorized || entry?.kind !== "prepare" || entry.family === "new_game") throw new Error("AUTONOMOUS_GAME_ACTION_REQUIRED");
+		const commit = [...this.session.entries.values()].find(value => value.kind === "commit" && value.family === entry.family);
+		if (!commit) throw new Error("GAME_MCP_CALL_NOT_SUPPORTED");
+		const prepared = await this.native(entry.name, args.args);
+		if (prepared?.success !== true) return prepared;
+		const commitArgs = { planToken: prepared.result.planToken, idempotencyKey: randomUUID() };
+		for (const field of ["sessionId", "planetId"]) if (Object.hasOwn(commit.inputSchema.properties, field)) commitArgs[field] = this.session.context[field];
+		const receipt = await this.native(commit.name, commitArgs);
+		if (receipt?.success !== true) return receipt;
+		const outcome = await this.wait({ reason: "核对原生 " + entry.family + " 原动作", timeoutSeconds: 120 });
+		const terminal = outcome.originalActions.at(-1);
+		return { success: true, result: { ...receipt.result, ...terminal, terminal: terminal?.terminal === true, succeeded: terminal?.succeeded === true, stillPending: !outcome.satisfied, itemBudget: prepared.result.itemBudget } };
 	}
 	async native(name, args) {
 		this.assertActive();
@@ -263,6 +281,7 @@ export class GameGoalController {
 		if (name === "deck_goal_next_decision") return this.nextDecision();
 		if (name === "deck_goal_status") return this.view();
 		if (name === "deck_goal_plan") return this.plan(args);
+		if (name === "deck_goal_execute_action") return this.executeAction(args);
 		if (name === "deck_goal_wait") return this.wait(args);
 		if (name === "deck_goal_verify") return this.done ? { completed: this.goal.status === "completed", goal: this.view() } : this.verify();
 		throw new Error("GAME_GOAL_TOOL_UNAVAILABLE");

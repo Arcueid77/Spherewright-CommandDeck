@@ -56,6 +56,24 @@ test("sustained Pi reads compact native indexes and exact selected catalog detai
 	assert.equal(invoked.filter(name => name === "deck_goal_catalog_access").length, 1);
 });
 
+test("autonomous Pi receives typed execution tools that reuse the native preparation schema", async t => {
+	const prepareTool = "spherewright_prepare_handcraft", args = { recipeId: 10, count: 2 }, invoked = [];
+	const schema = { type: "object", additionalProperties: false, properties: { recipeId: { type: "integer" }, count: { type: "integer" } }, required: ["recipeId", "count"] };
+	const f = await fixture(t, (data, index) => {
+		const names = data.tools.map(tool => tool.function.name);
+		assert.ok(names.includes("deck_execute_handcraft"));
+		assert.ok(!names.includes(prepareTool));
+		assert.ok(!names.includes("spherewright_commit_handcraft"));
+		assert.deepEqual(data.tools.find(tool => tool.function.name === "deck_execute_handcraft").function.parameters, schema);
+		return index === 1 ? call("deck_execute_handcraft", args) : [{ content: "原动作已完成并核对。" }];
+	});
+	await f.run({ task: { id: randomUUID(), scope: { kind: "mcp-session" } }, mode: "autonomous", observation: { loaded: true }, nativeTools: [{ name: prepareTool, description: "Native preparation", inputSchema: schema }, { name: "spherewright_commit_handcraft", description: "Native commit", inputSchema: { type: "object", properties: {} } }], goalTools: gameGoalTools, limits: { modelRequests: 4, toolCalls: 8, writes: 1, durationMs: 10000 }, invoke: async (name, value) => {
+		invoked.push({ name, args: value });
+		return name === "deck_goal_next_decision" ? { continue: false } : { success: true, result: { terminal: true, succeeded: true } };
+	} });
+	assert.deepEqual(invoked[0], { name: "deck_goal_execute_action", args: { prepareTool, args } });
+});
+
 test("real Pi normalized stream usage is captured once per response with explicit prices and unknown missing reports", async t => {
 	const f = await fixture(t, (_data, index) => index === 1 ? { deltas: call("observe_research", {}), usage: reportedUsage } : { deltas: [{ content: "只读建议。" }] }, { pricing: { input: 2, output: 10, cacheRead: 0.5, cacheWrite: 3 } });
 	const result = await f.run({ mode: "observe" });

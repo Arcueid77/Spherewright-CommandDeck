@@ -70,7 +70,7 @@ test("goal objective rejects invalid rates, unknown fields and forged completion
 test("a goal executes through the same stdio gateway and waits for its original action without a model poll", async t => {
 	let waiting;
 	const f = await fixture(t, async ({ invoke, goalTools }) => {
-		assert.equal(goalTools.length, 4);
+		assert.equal(goalTools.length, 5);
 		await invoke("deck_goal_plan", plan(1));
 		const receipt = await craft(invoke);
 		assert.equal(f.host.snapshot().goal.behavior.actionId, receipt.result.actionId);
@@ -102,6 +102,55 @@ test("a wait returns missing-field evidence immediately so the agent can correct
 		assert.equal(result.goal.status, "running");
 	});
 	f.start(); await f.host.settled();
+});
+
+test("one autonomous action tool prepares, commits and returns its sole original terminal", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await invoke("deck_goal_plan", plan(1));
+		await assert.rejects(invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_new_game", args: { galaxySeed: 42, starCount: 32 } }), /AUTONOMOUS_GAME_ACTION_REQUIRED/);
+		const result = await invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_handcraft", args: { sessionId: scope.sessionId, planetId: 1, recipeId: 10, count: 2 } });
+		assert.equal(result.success, true);
+		assert.equal(result.result.terminal, true);
+		assert.equal(result.result.succeeded, true);
+		assert.equal(result.result.stillPending, false);
+		assert.equal(f.host.snapshot().unresolved.length, 0);
+		assert.equal((await invoke("deck_goal_verify", {})).completed, true);
+	}, "goal");
+	f.start({ mode: "autonomous", allowedFamilies: ["handcraft"], limits: { modelRequests: 4, toolCalls: 20, writes: 1, durationMs: 10000 } });
+	await approve(f); await f.host.settled();
+	assert.equal(f.host.ledger.children(f.host.currentTaskId).length, 1);
+	assert.equal(f.host.snapshot().goal.usage.writes, 1);
+});
+
+test("autonomous action execution preserves a native unknown original without a replay", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await assert.rejects(invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_handcraft", args: { sessionId: scope.sessionId, planetId: 1, recipeId: 10, count: 2 } }), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	}, "unknown");
+	f.start({ mode: "autonomous", allowedFamilies: ["handcraft"], limits: { modelRequests: 4, toolCalls: 20, writes: 1, durationMs: 10000 } });
+	await approve(f); await f.host.settled();
+	assert.equal(f.host.snapshot().unresolved.length, 1);
+	assert.equal(f.host.snapshot().unresolved[0].state, "unknown");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("an autonomous action cannot commit when preparation consumes its remaining tool allowance", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await assert.rejects(invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_handcraft", args: { sessionId: scope.sessionId, planetId: 1, recipeId: 10, count: 2 } }), /GAME_GOAL_TOOL_LIMIT/);
+	});
+	f.start({ mode: "autonomous", allowedFamilies: ["handcraft"], limits: { modelRequests: 4, toolCalls: 2, writes: 1, durationMs: 10000 } });
+	await approve(f); await f.host.settled();
+	assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("assisted goals keep ordinary actions behind their existing confirmations", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		await assert.rejects(invoke("deck_goal_execute_action", { prepareTool: "spherewright_prepare_handcraft", args: { sessionId: scope.sessionId, planetId: 1, recipeId: 10, count: 2 } }), /AUTONOMOUS_GAME_ACTION_REQUIRED/);
+	});
+	f.start(); await f.host.settled();
+	assert.equal(f.host.snapshot().goal.usage.writes, 0);
+	assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
 });
 
 test("native read conditions can be revised during observation", async t => {
