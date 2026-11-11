@@ -78,7 +78,10 @@ test("a goal executes through the same stdio gateway and waits for its original 
 		waiting = invoke("deck_goal_wait", { reason: "等待原制造动作", timeoutSeconds: 5 });
 		await until(() => f.host.snapshot().goal.status === "waiting");
 		assert.equal(f.host.snapshot().goal.wait.reason, "等待原制造动作");
-		assert.equal((await waiting).satisfied, true);
+		const outcome = await waiting;
+		assert.equal(outcome.satisfied, true);
+		assert.equal(outcome.originalActions[0].actionId, receipt.result.actionId);
+		assert.equal(outcome.originalActions[0].state, "completed");
 		assert.equal((await invoke("deck_goal_verify", {})).completed, true);
 	}, "goal");
 	f.start(); await approve(f); await f.host.settled();

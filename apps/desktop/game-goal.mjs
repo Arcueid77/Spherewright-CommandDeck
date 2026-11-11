@@ -161,7 +161,7 @@ export class GameGoalController {
 		if (!condition && !this.pending().length && !productionWait) throw new Error("GAME_GOAL_WAIT_CONDITION_REQUIRED");
 		const deadline = performance.now() + args.timeoutSeconds * 1000;
 		this.goal.status = "waiting"; this.goal.wait = { reason: args.reason, deadlineAt: this.now() + args.timeoutSeconds * 1000 }; this.persist(); this.stage("waiting");
-		let satisfied = false, unavailable = false;
+		let satisfied = false, unavailable = false, originalActions = [];
 		let sampledAt = -Infinity;
 		try {
 			do {
@@ -175,21 +175,24 @@ export class GameGoalController {
 					unavailable = !observation.available;
 				}
 				else if (productionWait) satisfied = this.goal.verification?.state === "verified";
-				else { await this.reconcile(); satisfied = !this.pending().length; }
+				else { originalActions = await this.reconcile(); satisfied = !this.pending().length; }
 				if (satisfied || unavailable || performance.now() >= deadline) break;
 				await this.pause(Math.min(1000, Math.max(1, deadline - performance.now())), this.signal);
 			} while (true);
 		} finally {
 			if (!this.done) { this.goal.status = "running"; this.goal.wait = null; this.persist(); this.stage("planning"); }
 		}
-		return { satisfied, timedOut: !satisfied && !unavailable, ...(unavailable ? { reason: "GAME_GOAL_WAIT_FIELD_UNAVAILABLE" } : {}), goal: this.view() };
+		return { satisfied, timedOut: !satisfied && !unavailable, originalActions, ...(unavailable ? { reason: "GAME_GOAL_WAIT_FIELD_UNAVAILABLE" } : {}), goal: this.view() };
 	}
 	pending() { return this.ledger.unresolved().filter(intent => this.ledger.task(intent.taskId).scope.parentTaskId === this.task.id); }
 	async reconcile() {
+		const results = [];
 		for (const intent of this.pending()) {
 			if (!intent.actionId || intent.state === "unknown") throw new Error("UNRESOLVED_GAME_INTENT_BLOCKS_WRITES");
-			await this.read("spherewright_get_action_result", { actionId: intent.actionId });
+			const reply = await this.read("spherewright_get_action_result", { actionId: intent.actionId });
+			results.push(reply.result);
 		}
+		return results;
 	}
 	async production() {
 		if (!this.session.context.loaded) return;
