@@ -32,6 +32,7 @@ async function eventWithin(promise, ms = 15000) {
 export async function runDesktopSmoke(driver) {
 	const { native, api, testCommand, events } = driver;
 	const evaluate = (source) => testCommand("evaluate", { source });
+	await testCommand("show-ui");
 	const option = (name) => {
 		const index = process.argv.indexOf(name);
 		return index < 0 ? undefined : process.argv[index + 1];

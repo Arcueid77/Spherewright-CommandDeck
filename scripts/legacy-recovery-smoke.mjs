@@ -70,7 +70,11 @@ try {
 		if (fullProfile) {
 			const full = application.fullProfileMigration; assert.equal(full?.expectedProfileSha256, fullSeed.caseValue.sha256); assert.equal(full.nativeVaultDecrypted, true); assert.equal(full.ciphertextPreserved, true); assert.equal(full.completePiFileSetPreserved, true);
 			assert.deepEqual(await inventoryProfilePi({ root: directory, runId }), fullSeed.caseValue.expected.pi);
-			assert.deepEqual(readProfileWorkbenchRows(join(directory, "supervisor-profile/supervisor/m1-smoke-" + runId, "workbench.sqlite")), fullSeed.workbenchRows, "FULL_PROFILE_ORIGINAL_WORKBENCH_RECORD_CHANGED");
+			const expectedRows = structuredClone(fullSeed.workbenchRows);
+			const workspaceSelection = expectedRows.ui_state.find(row => row.key === "workspace");
+			assert.ok(workspaceSelection, "FULL_PROFILE_WORKSPACE_SELECTION_MISSING");
+			workspaceSelection.value = "game";
+			assert.deepEqual(readProfileWorkbenchRows(join(directory, "supervisor-profile/supervisor/m1-smoke-" + runId, "workbench.sqlite")), expectedRows, "FULL_PROFILE_ORIGINAL_WORKBENCH_RECORD_CHANGED");
 			assert.equal(profileHash(await readFile(fullSeed.workspaceFile)), fullSeed.workspaceSha256, "FULL_PROFILE_UNSENT_EDITOR_WAS_WRITTEN_TO_DISK");
 			assert.equal(application.legacyPendingRecovery.profile.developmentTasks, 2); assert.equal(application.legacyPendingRecovery.profile.invocations, 1); assert.equal(application.legacyPendingRecovery.profile.changes, 1); assert.equal(application.legacyPendingRecovery.profile.references, 1);
 		}

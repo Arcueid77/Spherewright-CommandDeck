@@ -187,6 +187,8 @@ if (typeof process.send !== "function") {
 		.then(async () => {
 			await protocol.handle(rendererScheme, createRendererProtocol(rendererDirectory));
 			window = new BrowserWindow({
+				show: !smoke,
+				skipTaskbar: smoke,
 				width: 1440,
 				height: 940,
 				minWidth: 1000,
