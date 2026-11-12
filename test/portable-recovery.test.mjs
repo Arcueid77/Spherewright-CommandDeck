@@ -43,10 +43,11 @@ test("recovery expectations reject foreign runs, changed identities and any sile
 });
 
 test("a blocked pending task disables new execution while retaining the read-only original-action query entry", () => {
-	const buttons = [{ text: "开始分析", disabled: true }, { text: "核对并确认入队", disabled: true }, { text: "核销原动作", disabled: false }];
-	assertPendingRecoveryControls({ buttons });
-	for (let index = 0; index < 2; index++) { const changed = structuredClone(buttons); changed[index].disabled = false; assert.throws(() => assertPendingRecoveryControls({ buttons: changed }), /NEW_EXECUTION_CONTROL_ENABLED/); }
-	assert.throws(() => assertPendingRecoveryControls({ buttons: buttons.slice(0, 2) }), /ORIGINAL_ACTION_QUERY_MISSING/);
+	const value = { forms: [{ disabled: true }, { disabled: true }], executionDisabled: true, buttons: [{ text: "核销原动作", disabled: false }] };
+	assertPendingRecoveryControls(value);
+	for (let index = 0; index < 2; index++) { const changed = structuredClone(value); changed.forms[index].disabled = false; assert.throws(() => assertPendingRecoveryControls(changed), /NEW_EXECUTION_CONTROL_ENABLED/); }
+	assert.throws(() => assertPendingRecoveryControls({ ...value, buttons: [] }), /ORIGINAL_ACTION_QUERY_MISSING/);
+	assert.throws(() => assertPendingRecoveryControls({ ...value, executionDisabled: false }), /NEW_EXECUTION_CONTROL_ENABLED/);
 });
 
 function recoveryDriver(f, enabledNewExecution = false) {
@@ -64,7 +65,7 @@ function recoveryDriver(f, enabledNewExecution = false) {
 			if (name === "portable-renderer-state") return { errors: [] };
 			assert.equal(name, "evaluate"); if (args.source.includes("button.click()")) { activationAttempts++; return ++phaseActivationAttempts > 1; }
 			assert.ok(args.source.includes(".game-tasks-panel"));
-			return { stage: "等待核销 · 开发写入与构建已冻结", syntheticNotice: true, receipts: [f.expected.intent.actionId], buttons: [{ text: "开始分析", disabled: !enabledNewExecution }, { text: "核对并确认入队", disabled: true }, { text: "核销原动作", disabled: false }] };
+			return { stage: "等待核销 · 开发写入与构建已冻结", syntheticNotice: true, receipts: [f.expected.intent.actionId], forms: [{ disabled: !enabledNewExecution }, { disabled: true }], executionDisabled: !enabledNewExecution, buttons: [{ text: "核销原动作", disabled: false }] };
 		} };
 }
 
@@ -83,6 +84,6 @@ test("a new-execution regression retains the failing UI phase without writing a 
 	await assert.rejects(runPortableRecoverySmoke(driver, f.expected, {}, 37, async () => {}), /NEW_EXECUTION_CONTROL_ENABLED/);
 	assert.equal(driver.getReloads(), 0);
 	const diagnostic = JSON.parse(await readFile(join(f.directory, `legacy-recovery-ui-${process.pid}-before-reload.private.json`), "utf8"));
-	assert.equal(diagnostic.completed, false); assert.equal(diagnostic.ui.buttons[0].disabled, false);
+	assert.equal(diagnostic.completed, false); assert.equal(diagnostic.ui.forms[0].disabled, false);
 	await assert.rejects(readFile(join(f.directory, "application-proof.json")), { code: "ENOENT" });
 });

@@ -47,7 +47,7 @@ export async function runModelUsageRecovery(driver, value, manifest) {
 	async function showUsage() {
 		const until = performance.now() + 10000; let opened = false;
 		while (true) {
-			if (!opened) opened = await testCommand("evaluate", { source: "(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()" });
+			if (!opened) opened = await testCommand("evaluate", { source: "(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()" });
 			if (opened && await testCommand("evaluate", { source: "(()=>{const text=document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent;return Boolean(text?.includes('360 tokens')&&text?.includes('0.001155'))})()" })) return;
 			assert.ok(performance.now() < until, "MODEL_USAGE_RESTART_UI_NOT_READY"); await new Promise(resolve => setTimeout(resolve, 50));
 		}

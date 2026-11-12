@@ -3,6 +3,7 @@ import { readFile, writeFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { assertFullProfileWorkbench, inventoryProfilePi, profileHash } from "./portable-profile.mjs";
+import { disabledGameExecutionSource } from "./ui-navigation-smoke.mjs";
 
 export const portableRecoveryFile = "legacy-recovery-case.json";
 export const recoveryHash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -35,9 +36,9 @@ export async function assertPortableRecovery(api, expected, fullProfile = null) 
 }
 
 export function assertPendingRecoveryControls(value) {
-	for (const label of ["开始分析", "核对并确认入队"]) {
-		const button = value.buttons.find(button => button.text === label); assert.ok(button, "LEGACY_NEW_EXECUTION_CONTROL_MISSING"); assert.equal(button.disabled, true, "LEGACY_NEW_EXECUTION_CONTROL_ENABLED");
-	}
+	assert.equal(value.forms?.length, 2, "LEGACY_NEW_EXECUTION_CONTROL_MISSING");
+	for (const form of value.forms) assert.equal(form.disabled, true, "LEGACY_NEW_EXECUTION_CONTROL_ENABLED");
+	assert.equal(value.executionDisabled, true, "LEGACY_NEW_EXECUTION_CONTROL_ENABLED");
 	// Polling the retained original action is a read-only recovery operation.
 	// Freezing new execution must keep this entry available to the operator.
 	assert.ok(value.buttons.some(button => button.text === "核销原动作"), "LEGACY_ORIGINAL_ACTION_QUERY_MISSING");
@@ -56,8 +57,8 @@ export async function runPortableRecoverySmoke(driver, expected, manifest, runti
 		try {
 			const until = performance.now() + 10000;
 			while (true) {
-				if (!activated) activated = await testCommand("evaluate", { source: "(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()" });
-				value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {readyState:document.readyState,panelPresent:Boolean(panel),stage:panel?.querySelector('.game-task-stage')?.textContent??'',syntheticNotice:panel?.textContent.includes('NO DSP')??false,receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),buttons:[...(panel?.querySelectorAll('button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
+				if (!activated) activated = await testCommand("evaluate", { source: "(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()" });
+				value = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.game-tasks-panel');return {readyState:document.readyState,panelPresent:Boolean(panel),stage:panel?.textContent??'',syntheticNotice:panel?.textContent.includes('NO DSP')??false,receipts:[...(panel?.querySelectorAll('.game-task-receipt')??[])].map(node=>node.textContent),forms:[...(panel?.querySelectorAll('fieldset')??[])].map(node=>({disabled:node.matches(':disabled')})),executionDisabled:" + disabledGameExecutionSource + ",buttons:[...(panel?.querySelectorAll('.game-task-primary button')??[])].map(node=>({text:node.textContent,disabled:node.disabled}))}})()" });
 				if (activated && value.stage.includes("等待核销") && value.stage.includes("冻结") && value.receipts.some(text => text.includes(expected.intent.actionId))) {
 					assertPendingRecoveryControls(value);
 					assert.equal(value.syntheticNotice, true, "LEGACY_FIXTURE_NOTICE_NOT_DISPLAYED");

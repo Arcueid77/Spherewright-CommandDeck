@@ -1,3 +1,4 @@
+import { openHeaderMenu, selectWorkspace } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { lstat, readFile, realpath, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
@@ -54,6 +55,8 @@ export function assertRecoveredContextRecord(before, after) {
 export async function runDevelopmentContextInterruption(driver, manifest) {
 	assert.equal(manifest.portableDevelopmentContextInterruption, 1); assert.equal(manifest.developmentContextManagement, 1);
 	const { context, api, testCommand } = driver, phase = driver.developmentUsageCase.phase;
+	const evaluate = source => testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
 	const request = (action, args = {}) => api("workbench", { action, args }), registered = await driver.registerDevelopmentUsageWorkspace(), root = registered.roots[0], runtime = driver.getRuntimePid();
 	async function state(ids) {
 		const work = await request("state"); assert.equal(work.executionBlocked, false);
@@ -85,7 +88,7 @@ export async function runDevelopmentContextInterruption(driver, manifest) {
 		const deadline = performance.now() + 10000; let opened = false;
 		while (true) {
 			const ready = await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.development-panel'),usage=panel?.querySelector('[aria-label=模型用量与费用]')?.textContent;return panel?.textContent.includes('RUNTIME_INTERRUPTED_NO_AUTOMATIC_REPLAY')&&document.querySelector('[aria-label=开发上下文模式]')?.value==='new'&&usage?.includes('1 次未取得终报')&&usage?.includes('费用估算未知')})()" });
-			if (ready && !opened) opened = await testCommand("evaluate", { source: "(()=>{const button=[...document.querySelectorAll('header button')].find(value=>value.textContent==='用量汇总');if(!button||button.disabled)return false;button.click();return true})()" });
+			if (ready && !opened) { await openHeaderMenu(evaluate, "more", "用量汇总"); opened = true; }
 			if (opened && await testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('1 次缺失或未取得终报')&&panel?.querySelector('[data-usage-summary-cost]')?.textContent.includes('无法估算 1 项')})()" })) break;
 			assert.ok(performance.now() < deadline, "INTERRUPTED_CONTEXT_UI_NOT_READY"); await new Promise(resolve => setTimeout(resolve, 50));
 		}

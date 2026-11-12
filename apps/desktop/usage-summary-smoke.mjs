@@ -11,9 +11,8 @@ export async function verifyUsageSummary(driver, { domain, usage, context: recei
 	assert.equal(summary.totals.contexts, 1); assert.equal(summary.totals.maxContextPercent, context.percent); assert.ok(context.contextWindow > 0 && context.estimatedTokens > 0);
 	const evaluate = source => driver.testCommand("evaluate", { source }), deadline = performance.now() + 10000;
 	await openHeaderMenu(evaluate, "more", "用量汇总");
-	let opened = true;
 	while (true) {
-		if (opened && await evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]'),total=panel?.querySelector('[data-usage-summary-total]')?.textContent,cost=panel?.querySelector('[data-usage-summary-cost]')?.textContent;return Boolean(total?.includes('已读取 1 项任务')&&panel?.textContent.includes(" + JSON.stringify(usage.tokens.totalTokens + " tokens") + ")&&cost?.includes(" + JSON.stringify(usage.estimate.usd.toLocaleString("zh-CN", { maximumFractionDigits: 9 })) + ")&&panel?.textContent.includes('实际账单未知'))})()")) break;
+		if (await evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]'),total=panel?.querySelector('[data-usage-summary-total]')?.textContent,cost=panel?.querySelector('[data-usage-summary-cost]')?.textContent;return Boolean(total?.includes('已读取 1 项任务')&&panel?.textContent.includes(" + JSON.stringify(usage.tokens.totalTokens + " tokens") + ")&&cost?.includes(" + JSON.stringify(usage.estimate.usd.toLocaleString("zh-CN", { maximumFractionDigits: 9 })) + ")&&panel?.textContent.includes('实际账单未知'))})()")) break;
 		assert.ok(performance.now() < deadline, "USAGE_SUMMARY_UI_NOT_READY"); await new Promise(resolve => setTimeout(resolve, 50));
 	}
 	assert.deepEqual(await evaluate("(async()=>{const value=await window.deck.modelUsage();return {tokens:value.totals.tokens.totalTokens,requests:value.totals.knownRequests,context:value.totals.maxContextPercent}})()"), { tokens: usage.tokens.totalTokens, requests: usage.requests, context: context.percent });

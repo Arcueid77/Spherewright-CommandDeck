@@ -67,7 +67,7 @@ export async function seedFullProfileHistory({ context, applicationRoot, bootstr
 	const work = new Workbench({ directory: workDirectory, helperSource: join(applicationRoot, "artifacts/commands") });
 	let expectedWorkbench;
 	try {
-		assert.deepEqual(work.store.roots(), []); assert.deepEqual(work.store.tasks(), []); assert.ok(work.store.ui("layout")?.panels?.["game-agent"]);
+		assert.deepEqual(work.store.roots(), []); assert.deepEqual(work.store.tasks(), []); assert.ok(work.store.ui("layout")?.panels?.["game-summary"]);
 		const root = work.store.upsertRoot({ pathKey: workspace.toLowerCase(), path: workspace, label: "Synthetic migrated workspace", canWrite: false, canExecute: false, metadata: { branch: "main", sha, submodule: false, fixtureOnly: true, dirtyPaths: ["fixture.txt"], protectedPaths: [], changes: [{ path: "fixture.txt", code: " M" }] } });
 		const model = messages.find(message => message.role === "assistant");
 		const task = work.store.createTask({ rootId: root.id, kind: "agent", prompt: "Synthetic archived development history; no agent executed this edit.", provider: model.provider, model: model.model }); work.store.setTaskState(task.id, "running");

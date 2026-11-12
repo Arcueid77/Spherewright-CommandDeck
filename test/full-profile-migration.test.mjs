@@ -29,7 +29,7 @@ async function fixture(t) {
 	const work = new Workbench({ directory: join(base, "m1-smoke-" + runId), helperSource: join(root, "unused") });
 	// The unit fixture supplies layout data; real renderer layout is verified by
 	// the separate three-start packaged application controller.
-	work.store.saveUi("layout", { grid: { root: {} }, panels: { "game-agent": { id: "game-agent", contentComponent: "game-agent" } } }); await work.close();
+	work.store.saveUi("layout", { grid: { root: {} }, panels: { "game-summary": { id: "game-summary", contentComponent: "game-summary" } } }); await work.close();
 	const gameDirectory = join(base, "game-smoke-" + runId); await mkdir(gameDirectory);
 	new GameIntentLedger(join(gameDirectory, "game-tasks.sqlite"), { approvalAuthority: {}, prepareResearch: async () => { throw new Error("NO_TRANSPORT"); }, readResearchProof: async () => { throw new Error("NO_TRANSPORT"); } }).close();
 	const probe = join(base, "m0-probes/unit"); await mkdir(probe, { recursive: true });

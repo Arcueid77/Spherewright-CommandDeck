@@ -94,7 +94,7 @@ export async function runProviderContextSmoke(driver, manifest) {
 		for (const group of summary.groups) { const selected = original.expected.records.filter(task => task.provider === group.provider); assert.equal(group.tasks, selected.length); assert.equal(group.knownRequests, selected.reduce((sum, task) => sum + task.usage.requests, 0)); }
 		await openHeaderMenu(evaluate, "more", "用量汇总");
 	let opened = true; await until(async () => {
-			return opened && evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('已读取 5 项任务')&&panel?.querySelectorAll('tbody tr').length===2})()");
+			return evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('已读取 5 项任务')&&panel?.querySelectorAll('tbody tr').length===2})()");
 		}, "PROVIDER_CONTEXT_SUMMARY_UI_NOT_READY");
 		if (summaryFailure) assert.equal(await evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('2 次缺失或未取得终报')&&panel.querySelector('[data-usage-summary-cost]')?.textContent.includes('无法估算 2 项')})()"), true);
 		return summary.totals;

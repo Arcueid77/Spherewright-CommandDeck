@@ -1,3 +1,4 @@
+import { selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, lstat, realpath, readdir } from "node:fs/promises";
@@ -47,7 +48,7 @@ export async function readPortableProfileCase(context) {
 	assert.deepEqual(work.taskDetails.map(task => task.id).sort(), work.tasks.map(task => task.id).sort());
 	for (const task of work.taskDetails) { assert.equal(task.state, "succeeded"); assert.equal(task.rootId, root.id); assert.ok(task.invocations.every(call => call.state === "completed")); }
 	exactKeys(work.ui, ["layout", "selection", "draft", "editor"]);
-	assert.ok(work.ui.layout && typeof work.ui.layout === "object" && work.ui.layout.panels?.["game-agent"]);
+	assert.ok(work.ui.layout && typeof work.ui.layout === "object" && work.ui.layout.panels?.["game-summary"]);
 	assert.equal(work.ui.selection.rootId, root.id); assert.ok(work.tasks.some(task => task.id === work.ui.selection.taskId));
 	assert.equal(work.ui.editor.rootId, root.id); assert.equal(work.ui.editor.path, "fixture.txt"); assert.ok(fingerprint(work.ui.editor.sha256));
 	assert.ok(typeof work.ui.editor.text === "string" && work.ui.editor.text !== work.ui.editor.diskText);
@@ -116,14 +117,20 @@ export async function assertFullProfileWorkbench(api, expected) {
 
 export async function runProfileBootstrap(driver) {
 	const { api, testCommand } = driver;
-	let layout = null, activated = false; const until = performance.now() + 10000;
-	while (!activated || !layout?.panels?.["game-agent"]) {
-		if (!activated) activated = await testCommand("evaluate", { source: "(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()" });
-		layout = await api("workbench", { action: "ui-get", args: { key: "layout" } });
+
+	const evaluate = source => testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
+	await addWorkbenchPanel(evaluate, "game-summary");
+	let layout = null;
+	const until = performance.now() + 10000;
+	while (!layout?.panels?.["game-summary"]) {
+		layout = await api("workbench", { action: "ui-get", args: { key: "layout-development" } });
 		assert.ok(performance.now() < until, "FULL_PROFILE_REAL_LAYOUT_NOT_PERSISTED");
-		if (!activated || !layout?.panels?.["game-agent"]) await new Promise(resolve => setTimeout(resolve, 50));
+		if (!layout?.panels?.["game-summary"]) await new Promise(resolve => setTimeout(resolve, 50));
 	}
-	assert.equal(activated, true);
+	// Seed the historical key with the actual custom renderer layout.
+	await api("workbench", { action: "ui-save", args: { key: "layout", value: layout } });
+	assert.deepEqual(await api("workbench", { action: "ui-get", args: { key: "layout" } }), layout);
 	const vault = await driver.profileVaultFixture("bootstrap");
 	return { vault, layoutSha256: profileHash(layout), realRendererLayoutPersisted: true, nativeCiphertextCreated: true };
 }
