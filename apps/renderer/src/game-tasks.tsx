@@ -1,8 +1,8 @@
-import React, { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "./bridge";
 import { profileToken, type Profile } from "./providers";
 import { ModelUsage, type Usage, type ModelContext } from "./model-usage";
-import { GameGoalPanel, type GameGoal } from "./game-goal";
+import { GameGoalPanel, canContinueGoal, type GameGoal } from "./game-goal";
 
 type Intent = { intentId: string; taskId: string; state: string; actionId: string | null; terminal: { beforeQueue: number[]; afterQueue: number[]; freshQueue: number[]; completedAtGameTick: number } | null };
 type Task = { id: string; state: string; expiresAt: number | null; scope: { kind?: string; actionKind?: string; techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; prompt?: string; provider?: string; model?: string; usage?: Usage; context?: ModelContext }; intent: Intent | null };
@@ -59,29 +59,50 @@ export function GameTasksProvider({ children }: { children: ReactNode }) {
 	return <Context.Provider value={{ state, profiles, healthy, busy, notice, act: (action, args = {}) => run(() => window.deck.game(action, args)), confirm: (taskId) => run(() => window.deck.confirmResearch(taskId)) }}>{children}</Context.Provider>;
 }
 
-function McpGameForm() {
-	const c = useContext(Context), state = c.state;
-	const [model, setModel] = useState(""), [mode, setMode] = useState("autonomous"), [prompt, setPrompt] = useState(""), [writes, setWrites] = useState(128), [minutes, setMinutes] = useState(60), [requests, setRequests] = useState(128), [calls, setCalls] = useState(1024), [families, setFamilies] = useState<string[] | null>(null);
-	const [continuous, setContinuous] = useState(true);
-	const [acceptance, setAcceptance] = useState("evidence");
+
+export function GameTasksPanel() {
+	const c = useContext(Context), bridge = useBridge().state, state = c.state;
+	const formId = useId();
+	const [editing, setEditing] = useState(false), [taskKind, setTaskKind] = useState("mcp");
+	const [model, setModel] = useState(""), [mode, setMode] = useState("autonomous"), [prompt, setPrompt] = useState("");
+	const [writes, setWrites] = useState(128), [minutes, setMinutes] = useState(60), [requests, setRequests] = useState(128), [calls, setCalls] = useState(1024);
+	const [families, setFamilies] = useState<string[] | null>(null), [continuous, setContinuous] = useState(true), [acceptance, setAcceptance] = useState("evidence");
 	const [itemId, setItemId] = useState(6001), [rate, setRate] = useState(60), [windowSeconds, setWindowSeconds] = useState(60);
 	const [continueTaskId, setContinueTaskId] = useState<string | null>(null);
-	const allowedFamilies = families ?? state.mcp?.families ?? [];
+	const [researchModel, setResearchModel] = useState(""), [researchMode, setResearchMode] = useState("assist"), [tech, setTech] = useState("");
+	const [researchPrompt, setResearchPrompt] = useState("分析这项科技是否适合现在加入科研队列，并说明原因。");
+	const task = state.tasks.find(value => value.id === state.currentTaskId) ?? state.tasks[0];
+	const generic = task?.scope.kind === "mcp-session" || task?.scope.kind === "mcp-action";
 	const profile = c.profiles.find(value => profileToken(value) === model);
-	const locked = !c.healthy || state.systemPaused || !state.runtimeAvailable || !state.storageAvailable || state.readOnlyObservation || state.busy || state.developmentFrozen || state.unresolved.length > 0;
-	function continueGoal() {
+	const researchProfile = c.profiles.find(value => profileToken(value) === researchModel);
+	const allowedFamilies = families ?? state.mcp?.families ?? [];
+	const locked = !c.healthy || state.systemPaused || !state.runtimeAvailable || !state.storageAvailable || state.readOnlyObservation || c.busy || state.busy || state.developmentFrozen || state.unresolved.length > 0;
+	const session = bridge.observation?.session;
+	const researchReady = c.healthy && !state.systemPaused && state.runtimeAvailable && state.storageAvailable && !state.readOnlyObservation && bridge.metadata?.researchAvailable && bridge.observation?.connected && session?.state === "observed" && session.data?.gameLoaded && session.data.owned && !session.data.accessRestricted;
+	const catalogFresh = state.catalog && state.catalog.expiresAt > Date.now();
+	const expired = task?.expiresAt !== null && task?.expiresAt !== undefined && task.expiresAt <= Date.now();
+	const hasCurrent = Boolean(state.goal || task);
+	const showForm = (!hasCurrent || editing) && !state.unresolved.length && !state.busy && !state.goal?.active;
+	const phaseText = state.phase === "runtime_unavailable" ? "Agent 运行时已停止" : generic && state.phase === "advised" ? "本轮 Agent 已结束" : phases[state.phase] ?? "任务状态待核对";
+	const controlDisabled = !c.healthy || state.systemPaused || c.busy || !state.storageAvailable;
+	useEffect(() => { setEditing(false); }, [state.currentTaskId]);
+
+	function editGoal() {
 		const goal = state.goal;
-		if (!goal || !state.currentTaskId) return;
-		setContinueTaskId(state.currentTaskId); setPrompt(goal.title); setContinuous(true); setAcceptance(goal.objective.kind);
-		setItemId(goal.objective.itemId ?? 6001); setRate(goal.objective.minimumPerMinute ?? 60); setWindowSeconds(goal.objective.windowSeconds ?? 60);
-		setRequests(goal.limits.modelRequests - goal.usage.modelRequests);
-		setCalls(goal.limits.toolCalls - goal.usage.toolCalls);
-		setWrites(goal.limits.writes - goal.usage.writes);
-		setMinutes(Math.max(0.01, Math.floor((goal.deadlineAt - Date.now()) / 60000 * 100) / 100));
+		setTaskKind("mcp");
+		if (goal && state.currentTaskId && canContinueGoal(goal)) {
+			setContinueTaskId(state.currentTaskId); setPrompt(goal.title); setContinuous(true); setAcceptance(goal.objective.kind);
+			setItemId(goal.objective.itemId ?? 6001); setRate(goal.objective.minimumPerMinute ?? 60); setWindowSeconds(goal.objective.windowSeconds ?? 60);
+			setRequests(goal.limits.modelRequests - goal.usage.modelRequests); setCalls(goal.limits.toolCalls - goal.usage.toolCalls); setWrites(goal.limits.writes - goal.usage.writes);
+			setMinutes(Math.max(0.01, Math.floor((goal.deadlineAt - Date.now()) / 60000 * 100) / 100));
+			const previous = c.profiles.find(value => value.providerId === task?.details.provider && value.modelId === task?.details.model);
+			if (previous) setModel(profileToken(previous));
+		} else setContinueTaskId(null);
+		setEditing(true);
 	}
 	function start(event: React.FormEvent) {
 		event.preventDefault();
-		if (!profile) return;
+		if (!profile || locked) return;
 		const requestedMs = Math.floor(minutes * 60000);
 		const durationMs = continueTaskId && state.goal ? Math.min(requestedMs, state.goal.deadlineAt - Date.now()) : requestedMs;
 		const objective = acceptance === "production" ? { kind: "production", itemId, minimumPerMinute: rate, windowSeconds } : { kind: "evidence" };
@@ -92,74 +113,99 @@ function McpGameForm() {
 			...(continuous && mode !== "observe" ? { objective } : {}),
 			...(continueTaskId ? { continueTaskId } : {}),
 		});
-		setContinueTaskId(null);
+		setContinueTaskId(null); setEditing(false);
 	}
-	return <>
-		{state.goal && <GameGoalPanel goal={state.goal} connected={c.healthy && state.storageAvailable} canConfirm={Boolean(state.mcp?.awaitingConfirmation && !state.mcp.awaitingAuthorization)} canContinue={!state.busy && !state.unresolved.length && state.runtimeAvailable} onConfirm={() => { if (state.currentTaskId) void c.confirm(state.currentTaskId); }} onPause={() => void c.act("stop")} onContinue={continueGoal} />}
-		<section aria-label="Spherewright MCP 游戏任务"><h3>{continueTaskId ? "继续当前目标" : "通过 Spherewright 执行任务"}</h3>
-		<form className="mcp-game-form" onSubmit={start}><fieldset disabled={locked}>
-		<label>运行方式<select aria-label="MCP 游戏任务模式" value={mode} onChange={event => setMode(event.target.value)}><option value="autonomous">自主执行 · 授权本轮后连续推进</option><option value="observe">观察与建议</option><option value="assist">协助执行 · 每次提交确认</option></select></label>
-		<label>模型<select aria-label="MCP 游戏 Agent 模型" value={model} onChange={event => setModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map(value => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
-		<label>游戏目标<textarea aria-label="MCP 游戏任务目标" value={prompt} onChange={event => setPrompt(event.target.value)} required maxLength={2000} rows={3} /></label>
-		{mode !== "observe" && <>
-			<label className="game-goal-toggle"><input aria-label="按目标持续执行" type="checkbox" checked={continuous} onChange={event => { setContinuous(event.target.checked); setContinueTaskId(null); }} />按目标持续推进</label>
-			{continuous && <>
-				<label>验收方式<select aria-label="目标验收方式" value={acceptance} onChange={event => setAcceptance(event.target.value)}><option value="evidence">现场条件验收</option><option value="production">持续产量验收</option></select></label>
-				{acceptance === "production" && <div className="game-goal-production-fields">
-					<label>目标产物<select aria-label="目标产物" value={itemId} onChange={event => setItemId(Number(event.target.value))}>{["电磁矩阵（蓝糖）", "能量矩阵（红糖）", "结构矩阵（黄糖）", "信息矩阵（紫糖）", "引力矩阵（绿糖）", "宇宙矩阵（白糖）"].map((name, index) => <option key={name} value={6001 + index}>{name}</option>)}</select></label>
-					<label>每分钟目标产量<input aria-label="目标每分钟产量" type="number" min={1} max={1e9} value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
-					<label>持续游戏秒数<input aria-label="产量持续游戏秒数" type="number" min={10} max={3600} value={windowSeconds} onChange={event => setWindowSeconds(Number(event.target.value))} /></label>
-				</div>}
-			</>}
-		</>}
-		<label>本轮分钟数<input aria-label="MCP 任务分钟上限" type="number" min={0.01} step={0.01} max={120} value={minutes} onChange={event => setMinutes(Number(event.target.value))} /></label>
-		{mode !== "observe" && <label>最多提交次数<input aria-label="MCP 任务提交上限" type="number" min={1} max={256} value={writes} onChange={event => setWrites(Number(event.target.value))} /></label>}
-		<details><summary>模型、工具与操作范围</summary><label>模型请求上限<input aria-label="MCP 模型请求上限" type="number" min={1} max={256} value={requests} onChange={event => setRequests(Number(event.target.value))} /></label><label>工具调用上限<input aria-label="MCP 工具调用上限" type="number" min={1} max={2048} value={calls} onChange={event => setCalls(Number(event.target.value))} /></label>{mode === "autonomous" && (state.mcp?.families ?? []).map(family => <label key={family}><input type="checkbox" checked={allowedFamilies.includes(family)} onChange={event => setFamilies(event.target.checked ? [...allowedFamilies, family] : allowedFamilies.filter(value => value !== family))} />{family}{family === "new_game" ? " · 仍需另次确认" : family === "save" ? " · 允许正常保存当前受管世界" : ""}</label>)}</details>
-		<button className="accent" disabled={!profile || !prompt.trim() || !state.mcp?.available || mode === "autonomous" && !allowedFamilies.length}>{mode === "autonomous" ? "核对授权并开始" : "开始游戏任务"}</button>
-		{continueTaskId && <button type="button" onClick={() => setContinueTaskId(null)}>改为新目标</button>}
-		</fieldset></form><p className="muted">已发现可用工具 {state.mcp?.tools ?? 0} 项 · 新建世界另次确认</p></section>
-	</>;
-}
+	function startResearch(event: React.FormEvent) {
+		event.preventDefault();
+		if (!researchProfile || !catalogFresh || locked) return;
+		void c.act("start", { mode: researchMode, techId: Number(tech), catalogId: state.catalog!.id, prompt: researchPrompt, providerId: researchProfile.providerId, modelId: researchProfile.modelId });
+		setEditing(false);
+	}
 
-export function GameTasksPanel() {
-	const c = useContext(Context), bridge = useBridge().state, state = c.state;
-	const [model, setModel] = useState(""), [mode, setMode] = useState("assist"), [tech, setTech] = useState(""), [prompt, setPrompt] = useState("分析这项科技是否适合现在加入科研队列，并说明原因。");
-	const profile = c.profiles.find((value) => profileToken(value) === model), task = state.tasks.find((value) => value.id === state.currentTaskId) ?? state.tasks[0];
-	const locked = state.busy || !state.storageAvailable || state.developmentFrozen || state.unresolved.length > 0;
-	const observedSession = bridge.observation?.session;
-	const ready = c.healthy && !state.systemPaused && state.runtimeAvailable && state.storageAvailable && !state.readOnlyObservation && bridge.metadata?.researchAvailable && bridge.observation?.connected && observedSession?.state === "observed" && observedSession.data?.gameLoaded && observedSession.data.owned && !observedSession.data.accessRestricted;
-	const expired = task?.expiresAt !== null && task?.expiresAt !== undefined && task.expiresAt <= Date.now();
-	const catalogFresh = state.catalog && state.catalog.expiresAt > Date.now();
-	const generic = task?.scope.kind === "mcp-session" || task?.scope.kind === "mcp-action";
-	return <div className="panel game-tasks-panel"><div className="eyebrow">BOUNDED GAME TASK</div><h2>游戏 Agent</h2><p>直接使用 Spherewright 的 MCP 能力，由原生预检决定可执行范围。</p>
-		{state.syntheticOnly && <p className="notice">合成验收 · NO DSP · 只操作替身</p>}
-		<McpGameForm />
-		<details className="game-task-settings" open={!task}><summary>{task ? "新任务设置" : "本次任务设置"}</summary><form onSubmit={(event) => { event.preventDefault(); if (profile && catalogFresh) void c.act("start", { mode, techId: Number(tech), catalogId: state.catalog!.id, prompt, providerId: profile.providerId, modelId: profile.modelId }); }}>
-			<fieldset disabled={!c.healthy || state.systemPaused || !state.runtimeAvailable || !state.storageAvailable || c.busy || locked || state.readOnlyObservation}><label>运行方式<select aria-label="游戏任务模式" value={mode} onChange={(event) => setMode(event.target.value)}><option value="observe">观察与建议</option><option value="assist">协助执行 · 每项确认</option><option disabled value="autonomous">有界自主 · 待输入协调验收</option></select></label>
-			<label>模型<select aria-label="游戏 Agent 模型" value={model} onChange={(event) => setModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map((value) => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
-			<label>目标科技<select aria-label="目标科技" required value={tech} onChange={(event) => setTech(event.target.value)} disabled={!catalogFresh}><option value="">{catalogFresh ? "请选择现场观察到的科技" : "先读取当前世界的科研列表"}</option>{state.catalog?.items.map((value) => <option key={value.techId} value={value.techId}>{value.name || `科技 #${value.techId}`}{value.prerequisitesObservedComplete ? "" : " · 前置待核对"}</option>)}</select></label><button type="button" disabled={!ready} onClick={() => void c.act("catalog")}>{state.catalog ? "刷新科研列表" : "读取科研列表"}</button>{state.catalog?.truncated && <p className="muted">当前仅列出前512项；未列出不代表不存在。</p>}
-			<label>本次目标<textarea aria-label="游戏任务目标" maxLength={2000} rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
-			<button className="accent" disabled={!ready || !catalogFresh || !profile || !state.catalog?.items.some((value) => value.techId === Number(tech))}>开始分析</button></fieldset>
-		</form>
-		{!ready && <p className="muted">请在“只读舰桥”连接兼容服务，并在游戏中准备可操作的 Spherewright 自有世界。</p>}</details>
-		<div className="game-task-stage" role="status">{state.phase === "runtime_unavailable" ? "Agent 运行时已停止" : generic && state.phase === "advised" ? "本轮 Agent 已结束" : phases[state.phase] ?? state.phase}{state.developmentFrozen ? " · 开发写入与构建已冻结" : ""}</div>
-		{c.healthy && !state.runtimeAvailable && <p className="notice">Agent 运行时已停止，新执行暂停。原动作与回执保留；核对后请重新打开工作台。</p>}
-		{!c.healthy && <p className="notice">控制连接尚未确认。原任务不视为已停止，恢复连接后先核对状态。</p>}
-		{state.error && <p className="notice">{errors[state.error] ?? "本次任务未能完成，原因保留在下方记录。"}<small>{state.error}</small></p>}
-		{c.notice && <p className="notice">{c.notice}</p>}
-		{state.phase === "idle" && task && ["preparing", "awaiting_approval", "approved"].includes(task.state) && <p className="muted">上次预检已失效，请重新分析；旧票据和确认不会恢复。</p>}
-		{generic && task && !state.goal && <section className="game-task-receipt"><h3>{task.details.techName || task.scope.actionKind || "Spherewright MCP 任务"}</h3><p>{task.details.prompt}</p><p className="muted">原生终态证明单次动作结束；目标产量仍需现场观测。</p><div className="actions"><button className="accent" disabled={!c.healthy || state.systemPaused || c.busy || !state.mcp?.awaitingConfirmation || (state.mcp.expiresAt ?? 0) <= Date.now()} onClick={() => void c.confirm(task.id)}>核对并确认本次操作</button><button disabled={!c.healthy || c.busy || !locked} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button></div></section>}
-		{task && !generic && <><h3>{task.details.techName || "指定科技"} #{task.scope.techId}</h3><p className="data-scope">星球 #{task.scope.planetId} · 初次观察 tick {task.scope.capturedAtGameTick}<br />{task.details.model} · {task.details.mode === "observe" ? "只读建议" : "最多一次正常入队"}</p>
-			<div className="actions"><button className="accent" disabled={!c.healthy || state.systemPaused || c.busy || state.busy || state.phase !== "awaiting_approval" || expired} onClick={() => void c.confirm(task.id)}>核对并确认入队</button>{state.phase === "awaiting_approval" && <button disabled={!c.healthy || state.systemPaused || c.busy || state.busy} onClick={() => void c.act("reprepare")}>{expired ? "预检已过期 · 重新预检" : "重新预检"}</button>}<button disabled={!c.healthy || c.busy || !locked} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button></div>
-			{task.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前：{task.intent.terminal.beforeQueue.map((id) => `#${id}`).join(" → ") || "空"}<br />之后：{task.intent.terminal.afterQueue.map((id) => `#${id}`).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">这证明正常入队与读回，科技研究完成需继续观察。</p></div>}
-		</>}
-		{state.unresolved.map((intent) => <div className="game-task-receipt" key={intent.intentId}><b>未决动作：{intent.actionId || "尚无编号"}</b><p>{intent.actionId ? "后续写入保持冻结。核销会核对原版本及世界，只查询原动作。" : "提交可能已生效；没有原动作编号时不能再次提交。"}</p><button disabled={!c.healthy || state.systemPaused || !state.storageAvailable || c.busy || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
-		{task && <ModelUsage value={task.details.usage} context={task.details.context} />}
-		{state.events.length > 0 && <section className="game-task-transcript" aria-label="Agent 与执行记录"><h3>Agent 与执行记录</h3>{state.events.filter(event => event.kind !== "usage").map((event) => {
-			const Entry = event.kind === "assistant" ? "span" : "div";
-			return <Entry key={event.sequence} className={`game-event ${event.kind}`}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? `${event.name} · ${event.text === "started" ? "开始" : "完成"}` : event.code ? errors[event.code] ?? event.code : event.text}</Entry>;
-		})}</section>}
-		<p className="muted">游戏输入互斥尚未验收。“停止后续”会冻结新提交，已受理的动作继续核销；窗口焦点变化不表示动作已取消。</p>
-		{state.tasks.length > 1 && <details><summary>最近 {state.tasks.length} 项任务</summary>{state.tasks.map((value) => <details key={value.id}><summary>{value.scope.kind?.startsWith("mcp-") ? value.scope.actionKind || "MCP 任务" : `#${value.scope.techId}`} · {value.scope.kind === "mcp-session" && value.state === "advised" ? "本轮已结束" : phases[value.state] ?? value.state}</summary><ModelUsage value={value.details.usage} context={value.details.context} /></details>)}</details>}
+	let primary: ReactNode;
+	const unresolved = state.unresolved[0];
+	if (unresolved) primary = <button className="accent" disabled={controlDisabled || state.busy || !unresolved.actionId} onClick={() => void c.act("reconcile", { intentId: unresolved.intentId })}>核销原动作</button>;
+	else if (state.mcp?.awaitingConfirmation && !state.mcp.awaitingAuthorization && task) primary = <button className="accent" disabled={controlDisabled || (state.mcp.expiresAt ?? 0) <= Date.now()} onClick={() => void c.confirm(task.id)}>核对并确认本次操作</button>;
+	else if (task && !generic && state.phase === "awaiting_approval") primary = expired
+		? <button className="accent" disabled={controlDisabled || state.busy} onClick={() => void c.act("reprepare")}>预检已过期 · 重新预检</button>
+		: <button className="accent" disabled={controlDisabled || state.busy} onClick={() => void c.confirm(task.id)}>核对并确认入队</button>;
+	else if (state.busy || state.goal?.active) primary = <button className="accent" disabled={controlDisabled} onClick={() => void c.act("stop")}>{state.goal?.active ? "暂停后续 / 请求接手" : "停止后续 / 请求接手"}</button>;
+	else if (showForm) primary = taskKind === "mcp"
+		? <button className="accent" type="submit" form={formId + "-mcp"} disabled={locked || !profile || !prompt.trim() || !state.mcp?.available || mode === "autonomous" && !allowedFamilies.length}>{continueTaskId ? "核对并继续目标" : mode === "autonomous" ? "核对授权并开始" : "开始游戏任务"}</button>
+		: <button className="accent" type="submit" form={formId + "-research"} disabled={locked || !researchReady || !catalogFresh || !researchProfile || !state.catalog?.items.some(value => value.techId === Number(tech))}>开始分析</button>;
+	else primary = <button className="accent" disabled={controlDisabled || state.readOnlyObservation || !state.runtimeAvailable} onClick={editGoal}>{state.goal && canContinueGoal(state.goal) ? "继续或调整目标" : "新建游戏任务"}</button>;
+
+	return <div className="game-tasks-panel">
+		<div className="game-task-scroll">
+			{state.syntheticOnly && <p className="notice">合成验收 · NO DSP · 只操作替身</p>}
+			{!showForm && state.goal ? <GameGoalPanel goal={state.goal} connected={c.healthy && state.storageAvailable && bridge.observation?.connected === true} /> : <section className="current-task-overview">
+				<div className="game-goal-heading"><h2>{showForm ? continueTaskId ? "继续当前目标" : "新建游戏任务" : "当前任务"}</h2><span className="task-status" role="status">{phaseText}</span></div>
+				{!showForm && <><p className="game-goal-title">{task?.details.prompt || task?.details.techName || "等待现场反馈"}</p><dl className="game-goal-next"><dt>当前阶段</dt><dd>{phaseText}</dd><dt>下一步</dt><dd>{unresolved ? "先核销原动作" : state.phase === "awaiting_approval" ? "核对预检并确认" : state.busy ? "等待当前回执" : "核对本次结果后开始下一项任务"}</dd></dl></>}
+			</section>}
+			{unresolved && <div className="game-task-receipt"><b>原动作需要核销</b><p>{unresolved.actionId ? "后续写入保持冻结，核销会核对原版本及世界。" : "提交可能已生效，原动作编号尚未取得。请保留记录并独立核对。"}</p></div>}
+			{!c.healthy && <p className="notice">控制连接尚未确认，恢复连接后先核对原任务状态。</p>}
+			{c.healthy && !state.runtimeAvailable && <p className="notice">Agent 运行时已停止。请核对原动作与回执后重新打开工作台。</p>}
+			{state.error && <p className="notice">{errors[state.error] ?? "本次任务未能完成，请展开执行记录核对原因。"}</p>}
+			{c.notice && <p className="notice">{c.notice}</p>}
+			{state.developmentFrozen && <p className="muted">开发写入与构建已冻结</p>}
+			{state.phase === "idle" && task && ["preparing", "awaiting_approval", "approved"].includes(task.state) && <p className="notice">上次预检已失效，请重新分析。</p>}
+
+			<div className="game-task-editor" hidden={!showForm}>
+				<form id={formId + "-mcp"} className="mcp-game-form" onSubmit={start} hidden={taskKind !== "mcp"}>
+					<fieldset disabled={locked}>
+						<label>游戏目标<textarea aria-label="MCP 游戏任务目标" value={prompt} onChange={event => setPrompt(event.target.value)} required maxLength={2000} rows={3} /></label>
+						<label>模型<select aria-label="MCP 游戏 Agent 模型" value={model} onChange={event => setModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map(value => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
+						<label>运行方式<select aria-label="MCP 游戏任务模式" value={mode} onChange={event => setMode(event.target.value)}><option value="autonomous">自主执行 · 本轮授权</option><option value="observe">观察与建议</option><option value="assist">协助执行 · 每次确认</option></select></label>
+						<details className="game-task-settings"><summary>高级设置</summary>
+							{mode !== "observe" && <><label className="game-goal-toggle"><input aria-label="按目标持续执行" type="checkbox" checked={continuous} onChange={event => { setContinuous(event.target.checked); setContinueTaskId(null); }} />按目标持续推进</label>
+								{continuous && <><label>验收方式<select aria-label="目标验收方式" value={acceptance} onChange={event => setAcceptance(event.target.value)}><option value="evidence">现场条件验收</option><option value="production">持续产量验收</option></select></label>
+									{acceptance === "production" && <div className="game-goal-production-fields">
+										<label>目标产物<select aria-label="目标产物" value={itemId} onChange={event => setItemId(Number(event.target.value))}>{["电磁矩阵（蓝糖）", "能量矩阵（红糖）", "结构矩阵（黄糖）", "信息矩阵（紫糖）", "引力矩阵（绿糖）", "宇宙矩阵（白糖）"].map((name, index) => <option key={name} value={6001 + index}>{name}</option>)}</select></label>
+										<label>每分钟目标产量<input aria-label="目标每分钟产量" type="number" min={1} max={1e9} value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
+										<label>持续游戏秒数<input aria-label="产量持续游戏秒数" type="number" min={10} max={3600} value={windowSeconds} onChange={event => setWindowSeconds(Number(event.target.value))} /></label>
+									</div>}
+								</>}
+							</>}
+							<label>本轮分钟数<input aria-label="MCP 任务分钟上限" type="number" min={0.01} step={0.01} max={120} value={minutes} onChange={event => setMinutes(Number(event.target.value))} /></label>
+							{mode !== "observe" && <label>最多提交次数<input aria-label="MCP 任务提交上限" type="number" min={1} max={256} value={writes} onChange={event => setWrites(Number(event.target.value))} /></label>}
+							<label>模型请求上限<input aria-label="MCP 模型请求上限" type="number" min={1} max={256} value={requests} onChange={event => setRequests(Number(event.target.value))} /></label>
+							<label>工具调用上限<input aria-label="MCP 工具调用上限" type="number" min={1} max={2048} value={calls} onChange={event => setCalls(Number(event.target.value))} /></label>
+							{mode === "autonomous" && (state.mcp?.families ?? []).map(family => <label className="game-goal-toggle" key={family}><input type="checkbox" checked={allowedFamilies.includes(family)} onChange={event => setFamilies(event.target.checked ? [...allowedFamilies, family] : allowedFamilies.filter(value => value !== family))} />{family}{family === "new_game" ? " · 另次确认" : family === "save" ? " · 正常保存当前受管世界" : ""}</label>)}
+							<p className="muted">已发现可用工具 {state.mcp?.tools ?? 0} 项</p>
+						</details>
+					</fieldset>
+				</form>
+				<div className="game-task-settings research-game-form" hidden={taskKind !== "research"}>
+					<form id={formId + "-research"} onSubmit={startResearch}><fieldset disabled={locked}>
+						<label>本次目标<textarea aria-label="游戏任务目标" maxLength={2000} rows={3} value={researchPrompt} onChange={event => setResearchPrompt(event.target.value)} /></label>
+						<label>模型<select aria-label="游戏 Agent 模型" value={researchModel} onChange={event => setResearchModel(event.target.value)} required><option value="">请选择已配置模型</option>{c.profiles.map(value => <option key={profileToken(value)} value={profileToken(value)}>{value.label || value.providerId} · {value.modelId}</option>)}</select></label>
+						<label>运行方式<select aria-label="游戏任务模式" value={researchMode} onChange={event => setResearchMode(event.target.value)}><option value="observe">观察与建议</option><option value="assist">协助执行 · 每项确认</option><option disabled value="autonomous">有界自主 · 待输入协调验收</option></select></label>
+						<label>目标科技<select aria-label="目标科技" required value={tech} onChange={event => setTech(event.target.value)} disabled={!catalogFresh}><option value="">{catalogFresh ? "请选择现场观察到的科技" : "先读取当前世界的科研列表"}</option>{state.catalog?.items.map(value => <option key={value.techId} value={value.techId}>{value.name || "科技 #" + value.techId}{value.prerequisitesObservedComplete ? "" : " · 前置待核对"}</option>)}</select></label>
+						<button type="button" disabled={!researchReady} onClick={() => void c.act("catalog")}>{state.catalog ? "刷新科研列表" : "读取科研列表"}</button>
+						{state.catalog?.truncated && <p className="muted">当前仅列出前512项。</p>}
+					</fieldset></form>
+					{!researchReady && <p className="muted">请在观测工作区连接兼容服务，并准备可操作的 Spherewright 自有世界。</p>}
+				</div>
+				<details className="task-kind-options"><summary>其他任务方式</summary><button type="button" className="task-kind-toggle" onClick={() => setTaskKind(taskKind === "mcp" ? "research" : "mcp")}>{taskKind === "mcp" ? "指定科研入队" : "通用游戏任务"}</button></details>
+			</div>
+
+			{hasCurrent && <details className="game-task-records"><summary>任务回执与执行记录</summary>
+				{state.error && <code>{state.error}</code>}
+				{task && <><p className="full-goal-title">{task.details.prompt}</p><p className="data-scope">{task.details.model} · {generic ? task.scope.actionKind || "Spherewright MCP 任务" : "指定科技 #" + task.scope.techId + " · 星球 #" + task.scope.planetId + " · 初次观察 tick " + task.scope.capturedAtGameTick}</p>
+					<ModelUsage value={task.details.usage} context={task.details.context} />
+				</>}
+				{task?.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前 · {task.intent.terminal.beforeQueue.map(id => "#" + id).join(" → ") || "空"}<br />之后 · {task.intent.terminal.afterQueue.map(id => "#" + id).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">科技研究完成需继续观察。</p></div>}
+				{state.unresolved.map(intent => <div className="game-task-receipt" key={intent.intentId}><p>未决动作 {intent.actionId || "尚无编号"}</p><button disabled={controlDisabled || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
+				<section className="game-task-transcript" aria-label="Agent 与执行记录">{state.events.filter(event => event.kind !== "usage").map(event => <div key={event.sequence} className={"game-event " + event.kind}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? event.name + " · " + (event.text === "started" ? "开始" : "完成") : event.code ? errors[event.code] ?? event.code : event.text}</div>)}</section>
+				<p className="muted">游戏输入互斥尚待实机验收。停止后续会冻结新提交，已受理动作继续核销。</p>
+				{state.tasks.length > 1 && <ul>{state.tasks.map(value => <li key={value.id}>{value.scope.kind?.startsWith("mcp-") ? value.scope.actionKind || "MCP 任务" : "#" + value.scope.techId} · {phases[value.state] ?? value.state}<ModelUsage value={value.details.usage} context={value.details.context} /></li>)}</ul>}
+			</details>}
+		</div>
+		<div className="game-task-primary">
+			{primary}
+			{showForm && hasCurrent && <button type="button" onClick={() => setEditing(false)}>返回当前任务</button>}
+			{!showForm && state.phase === "awaiting_approval" && !generic && !expired && <button disabled={controlDisabled || state.busy} onClick={() => void c.act("reprepare")}>重新预检</button>}
+			{!showForm && (state.mcp?.awaitingConfirmation || state.phase === "awaiting_approval") && <button disabled={controlDisabled} onClick={() => void c.act("stop")}>停止后续 / 请求接手</button>}
+		</div>
 	</div>;
 }

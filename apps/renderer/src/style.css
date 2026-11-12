@@ -415,6 +415,28 @@ ul {
 .workspace-dock { flex: 1; min-width: 0; min-height: 0; }
 .current-game-task { width: clamp(376px, 30vw, 480px); min-width: 0; border: 1px solid #304252; border-radius: 8px; overflow: hidden; }
 .app-statusbar { min-height: 32px; flex-shrink: 0; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid #263442; color: #b4c3ce; font-size: 12px; }
+.game-tasks-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: #101923; }
+.game-task-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+.game-task-primary { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 8px; padding: 16px; border-top: 1px solid #354b59; background: #15232e; }
+.game-task-primary .accent { width: 100%; }
+.game-tasks-panel [hidden] { display: none; }
+.game-tasks-panel h2 { margin: 0; font-size: 18px; }
+.game-tasks-panel .game-goal { border: 0; border-radius: 0; padding: 0; margin: 0; background: transparent; }
+.game-goal-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 16px 0; color: #e1e9ed; }
+.full-goal-title { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-status { border: 1px solid #4b6b60; border-radius: 4px; padding: 4px 8px; white-space: nowrap; font-size: 14px; color: #b8d6c7; }
+.game-goal-next { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px 16px; font-size: 14px; line-height: 1.6; }
+.game-goal-next dt { color: #acbdc8; }
+.game-goal-next dd { margin: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.game-tasks-panel .game-goal-next { font-size: 14px; }
+.game-goal-measurement { margin: 16px 0; }
+.game-goal-measurement progress { width: 100%; height: 8px; accent-color: #ad8249; }
+.game-task-records, .task-kind-options { margin: 16px 0; }
+.game-task-records > summary, .task-kind-options > summary, .game-goal-evidence > summary { cursor: pointer; color: #c2d0d8; padding: 8px 0; }
+.task-kind-toggle { margin-top: 8px; }
+.game-tasks-panel label { margin: 16px 0; }
+.game-tasks-panel label input, .game-tasks-panel label select, .game-tasks-panel label textarea { width: 100%; }
+.game-tasks-panel .game-goal-toggle input { width: auto; }
 @media (max-width: 900px) {
 	.app-header { gap: 8px; padding: 0 8px; }
 	.workspace-navigation button { padding: 8px; }

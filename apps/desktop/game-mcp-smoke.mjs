@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { selectWorkspace } from "./ui-navigation-smoke.mjs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -44,12 +45,18 @@ export async function runMcpGameSmoke(driver) {
 		await until(() => evaluate("(()=>{const button=document.querySelector('[data-workspace-button=game]');if(!button||button.disabled)return false;button.click();return true})()"), "PANEL");
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"MCP 游戏 Agent 模型\"]')?.options.length>1)"), "PROFILE");
 		await evaluate(`(()=>{const model=document.querySelector('[aria-label="MCP 游戏 Agent 模型"]');model.value=${JSON.stringify(JSON.stringify([profileId, "fixture"]))};model.dispatchEvent(new Event('change',{bubbles:true}));const mode=document.querySelector('[aria-label="MCP 游戏任务模式"]');mode.value=${JSON.stringify(autonomous ? "autonomous" : "assist")};mode.dispatchEvent(new Event('change',{bubbles:true}));const prompt=document.querySelector('[aria-label="MCP 游戏任务目标"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(prompt,'通过原生 MCP 手工制作并核对终态，仅替身');prompt.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+		const draft = await evaluate("document.querySelector('[aria-label=\"MCP 游戏任务目标\"]').value");
+		for (const workspace of ["development", "observation", "game"]) await selectWorkspace(evaluate, workspace);
+		assert.equal(await evaluate("document.querySelector('[aria-label=\"MCP 游戏任务目标\"]').value"), draft);
+		assert.equal(requests, 0);
+		assert.equal(await evaluate("[...document.querySelectorAll('.current-game-task .accent')].filter(button=>button.getBoundingClientRect().height>0).length"), 1);
 		if (autonomous) {
+			await evaluate("document.querySelector('.mcp-game-form details summary').click()");
 			await evaluate("(()=>{const input=document.querySelector('[aria-label=\"目标验收方式\"]');input.value='production';input.dispatchEvent(new Event('change',{bubbles:true}));return true})()");
 			await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"产量持续游戏秒数\"]'))"), "PRODUCTION_FORM");
 			await evaluate("(()=>{const input=document.querySelector('[aria-label=\"产量持续游戏秒数\"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'20');input.dispatchEvent(new Event('input',{bubbles:true}));return true})()");
 		}
-		await until(() => evaluate("!document.querySelector('.mcp-game-form button').disabled"), "START_ENABLED");
+		await until(() => evaluate("!document.querySelector('.game-task-primary .accent').disabled"), "START_ENABLED");
 		const submit = () => evaluate("document.querySelector('.mcp-game-form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))");
 		if (autonomous) { await driver.testCommand("answer-game-confirmation", { response: 0 }); await submit(); await until(async () => { const value = await state(); return !value.busy && value.tasks.some(task => task.scope.mode === "autonomous" && task.state === "cancelled"); }, "RUN_CANCELLED"); assert.equal(requests, 0); }
 		else {
@@ -57,7 +64,9 @@ export async function runMcpGameSmoke(driver) {
 			await until(() => evaluate("(()=>{const b=[...document.querySelectorAll('.game-tasks-panel button')].find(b=>b.textContent==='核对并确认本次操作');if(!b||b.disabled)return false;b.click();return true})()"), "CANCEL_CLICK");
 		}
 		await until(async () => !(await state()).busy, "CANCEL_END"); assert.equal(await driver.getSyntheticCommitCount(), 0);
-		await until(() => evaluate("!document.querySelector('.mcp-game-form fieldset').disabled"), "NEXT_TASK");
+		await until(() => evaluate("Boolean(document.querySelector('.game-task-primary .accent'))"), "NEXT_TASK");
+		await evaluate("document.querySelector('.game-task-primary .accent').click()");
+		await until(() => evaluate("!document.querySelector('.game-task-editor').hidden && !document.querySelector('.mcp-game-form fieldset').disabled"), "NEXT_TASK_FORM");
 		if (autonomous) await driver.testCommand("hold-game-confirmation");
 		await submit(); await until(async () => (await state()).mcp.awaitingConfirmation, "CONFIRM_PREVIEW");
 		await assert.rejects(driver.api("bridge", { action: "disconnect" }), /GAME_TASK_OWNS_BRIDGE/);
@@ -65,6 +74,8 @@ export async function runMcpGameSmoke(driver) {
 		else { await driver.testCommand("answer-game-confirmation", { response: 1 }); await until(() => evaluate("(()=>{const b=[...document.querySelectorAll('.game-tasks-panel button')].find(b=>b.textContent==='核对并确认本次操作');if(!b||b.disabled)return false;b.click();return true})()"), "CONFIRM_CLICK"); }
 		if (autonomous) {
 			await until(() => middleRequestHeld, "MIDDLE_REQUEST"); const pid = driver.getBridgePid(), count = requests;
+			for (const workspace of ["development", "observation", "game"]) await selectWorkspace(evaluate, workspace);
+			assert.equal(requests, count); assert.equal(driver.getBridgePid(), pid);
 			assert.equal((await state()).mcp.authorized, true); const activeGoal = (await state()).goal; await driver.testCommand("reload"); await until(() => evaluate("document.readyState==='complete' && Boolean(window.deck)"), "ACTIVE_RELOAD");
 			assert.equal((await state()).mcp.authorized, true); assert.equal(requests, count); assert.equal(driver.getBridgePid(), pid); assert.equal(await driver.testCommand("game-confirmation-count"), 2);
 			assert.equal((await state()).goal.id, activeGoal.id); assert.equal((await state()).goal.stage.title, activeGoal.stage.title);
@@ -76,6 +87,9 @@ export async function runMcpGameSmoke(driver) {
 		assert.ok(before.goal.experience.lessonIds.includes("research-material-flow"));
 		if (autonomous) { assert.equal(before.goal.verification.state, "verified"); assert.ok(before.goal.verification.seconds >= 20); }
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"当前目标与行为\"]'))"), "GOAL_PANEL");
+		assert.equal(await evaluate("document.querySelector('.game-task-editor').hidden"), true);
+		assert.equal(await evaluate("getComputedStyle(document.querySelector('.game-goal-title')).webkitLineClamp"), "3");
+		assert.equal(await evaluate("[...document.querySelectorAll('.current-game-task .accent')].filter(button=>button.getBoundingClientRect().height>0).length"), 1);
 		await driver.testCommand("capture-game");
 		if (autonomous) { assert.equal(await driver.testCommand("game-confirmation-count"), 2); assert.equal(before.tasks.filter(task => task.scope.autonomousAuthorizationHash && task.intent?.state === "completed").length, 2); }
 		await driver.testCommand("reload"); await until(() => evaluate("document.readyState==='complete' && Boolean(window.deck)"), "RELOAD");
