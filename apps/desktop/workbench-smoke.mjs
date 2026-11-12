@@ -33,6 +33,7 @@ export async function runWorkbenchSmoke(driver) {
 	const edit = await evaluate(`window.deck.workbench('save',${JSON.stringify({ rootId: root.id, path: "code.mjs", expectedSha256: initial.sha256, content: "export const value = 2;\n" })})`);
 	async function settled(id) { const deadline = Date.now() + 20000; while (true) { const task = await request("task", { taskId: id }); if (!["queued", "running", "cancelling"].includes(task.state) && (await request("state")).activeTask !== id) return task; if (Date.now() > deadline) throw new Error("M1_TASK_TIMEOUT"); await delay(50); } }
 	assert.equal((await settled(edit.id)).state, "succeeded");
+	await untilUi(() => evaluate("Boolean(document.querySelector('[data-workspace=development] .output-panel'))"), "SHORT_TASK_OPENS_OUTPUT");
 	const current = await request("read", { rootId: root.id, path: "code.mjs" });
 	const check = await evaluate(`window.deck.workbench('check',${JSON.stringify({ rootId: root.id, checkId: "npm:test" })})`);
 	const deadline = Date.now() + 15000;

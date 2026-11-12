@@ -73,7 +73,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
 			if (event.type === "runtime-stopped" || event.type === "supervisor-disconnected") { clearTimeout(timer); unavailable(); return; }
 			if (stopped.current) return;
 			if (event.type !== "workbench") return;
-			if (event.kind === "started" && event.taskId) setTaskId(event.taskId);
+			if (event.kind === "started" && event.taskId) { setTaskId(event.taskId); navigate("output"); }
 			if (!timer) timer = setTimeout(() => { timer = undefined; if (!disposed) void refresh().catch(report); }, 250);
 		});
 		return () => { disposed = true; unsubscribe(); clearTimeout(timer); };

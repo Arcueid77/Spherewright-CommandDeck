@@ -91,4 +91,7 @@ export async function verifyWorkspaceNavigation(driver) {
 	const layouts = await Promise.all(["game", "observation", "development"].map(workspace => request("ui-get", { key: "layout-" + workspace })));
 	assert.equal(new Set(layouts.map(layout => JSON.stringify(layout))).size, 3);
 	assert.deepEqual(await request("ui-get", { key: "layout" }), legacy);
+	await openHeaderMenu(evaluate, "layout", "恢复当前工作区默认布局");
+	assert.equal(await evaluate("Boolean(document.querySelector('[data-workspace=development] .output-panel'))"), false);
+	assert.deepEqual(await request("ui-get", { key: "layout" }), legacy);
 }
