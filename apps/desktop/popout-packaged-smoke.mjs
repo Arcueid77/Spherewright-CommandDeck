@@ -24,6 +24,7 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 		await until(() => evaluate("document.querySelector('[aria-label=代码编辑器]')?.value===" + JSON.stringify(expected.text)), "PACKAGED_POPOUT_DRAFT");
 		for (const [id, title] of panels) {
 			await addWorkbenchPanel(evaluate, id);
+			await until(() => evaluate(`Boolean([...document.querySelectorAll('[data-workspace=development] .dv-tab')].find(tab=>tab.textContent.trim()===${JSON.stringify(title)}))`), "PACKAGED_ADDED_PANEL_IN_MAIN");
 			await evaluate(`[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()===${JSON.stringify(title)}).dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))`);
 			await until(() => evaluate(`Boolean(document.querySelector('[data-popout-panel=${id}]'))`), "PACKAGED_POPOUT_TAB");
 			await evaluate(`document.querySelector('[data-popout-panel=${id}]').click()`);

@@ -400,6 +400,7 @@ const workspaceNames: Record<Workspace, string> = { game: "游戏", observation:
 const panelTitles: Record<string, string> = {
 	game: "游戏 / 原生视口", editor: "代码 / 差异", files: "工作区", development: "开发 Agent",
 	output: "检查输出", tasks: "任务记录", events: "运行事件", bridge: "连接详情", research: "科研",
+	observation: "当前世界",
 	production: "生产", power: "供电", logistics: "物流", mecha: "机甲", "game-summary": "当前游戏任务",
 	journal: "运行日记", videos: "录像", "model-usage": "用量汇总", "agent-gateway": "外部 Agent",
 	agent: "M0 连接验证", evidence: "能力与证据",
@@ -410,11 +411,13 @@ function addPanel(api: DockApi, id: string) {
 	if (existing && !multiple) { existing.api.setActive(); return; }
 	let instance = id, index = 1;
 	while (api.getPanel(instance)) instance = id + "-" + ++index;
-	const reference = api.getPanel("output") ?? api.getPanel("editor") ?? api.getPanel("game") ?? api.panels[0];
+	const mainPanels = api.panels.filter(panel => panel.api.location.type === "grid");
+	const output = mainPanels.find(panel => panel.id === "output");
+	const reference = output ?? mainPanels.find(panel => panel.id === "editor") ?? mainPanels.find(panel => panel.id === "game") ?? mainPanels[0];
 	const bottom = ["output", "tasks", "events", "journal", "videos", "model-usage"].includes(id);
 	api.addPanel({
 		id: instance, component: id, title: panelTitles[id] + (index > 1 ? " " + index : ""),
-		...(reference ? { position: { referencePanel: reference.id, direction: bottom && !api.getPanel("output") ? "below" as const : "within" as const } } : {}),
+		...(reference ? { position: { referencePanel: reference.id, direction: bottom && !output ? "below" as const : "within" as const } } : {}),
 		...(bottom ? { initialHeight: 240 } : {}),
 	});
 }
@@ -537,8 +540,8 @@ function App() {
 	const panels = workspace === "development"
 		? ["files", "editor", "development", "output", "tasks", "game-summary", "production", "power", "logistics", "events"]
 		: workspace === "observation"
-			? ["research", "production", "power", "logistics", "mecha", "bridge", "events"]
-			: ["bridge", "production", "power", "logistics", "output", "tasks", "events"];
+			? ["observation", "research", "production", "power", "logistics", "mecha", "bridge", "events"]
+			: ["game", "bridge", "production", "power", "logistics", "output", "tasks", "events"];
 	return <div className="app">
 		<header className="app-header" inert={blocked} aria-busy={!ready}>
 			<div className="brand">CommandDeck</div>
