@@ -1,3 +1,4 @@
+import { openHeaderMenu, selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,11 +33,11 @@ export async function runPopoutSmoke(driver) {
 	const changed = original.text + "// typed in independent window\n";
 	await childEvaluate(child.name, `(()=>{const area=document.querySelector('[aria-label=代码编辑器]');Object.getOwnPropertyDescriptor(Object.getPrototypeOf(area),'value').set.call(area,${JSON.stringify(changed)});area.dispatchEvent(new Event('input',{bubbles:true}));})()`);
 	await until(async () => (await request("ui-get", { key: "editor" })).text === changed, "POPOUT_EDIT_SAVED_TO_ORIGINAL_STATE");
-	await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='模型设置').click()");
+	await openHeaderMenu(evaluate, "more", "模型设置");
 	await until(async () => await childEvaluate(child.name, "document.querySelector('.dv-popout-window').inert && !document.querySelector('.popout-modal-notice').hidden"), "POPOUT_MODAL_BLOCKS_INPUT");
 	await evaluate("document.querySelector('[role=dialog] button').click()");
 	await until(async () => await childEvaluate(child.name, "!document.querySelector('.dv-popout-window').inert"), "POPOUT_MODAL_RELEASES_INPUT");
-	await until(async () => (await request("ui-get", { key: "layout" }))?.popoutGroups?.length === 1, "POPOUT_LAYOUT_SAVED");
+	await until(async () => (await request("ui-get", { key: "layout-development" }))?.popoutGroups?.length === 1, "POPOUT_LAYOUT_SAVED");
 	const oldWindowId = child.id;
 	await driver.testCommand("reload");
 	await until(async () => { const windows = await state(); return windows.length === 1 && windows[0].id !== oldWindowId; }, "POPOUT_RESTORED_AFTER_RELOAD");
@@ -49,6 +50,7 @@ export async function runPopoutSmoke(driver) {
 	await until(async () => await childEvaluate(child.name, "document.querySelector('[aria-label=代码编辑器]')?.value") === changed, "POPOUT_DRAFT_AFTER_RENDERER_CRASH");
 	await childEvaluate(child.name, "document.querySelector('[data-popout-panel=editor]').click()");
 	await until(async () => (await state()).length === 0 && await evaluate("document.querySelector('[aria-label=代码编辑器]')?.value") === changed, "POPOUT_RETURN_TO_MAIN");
+	await addWorkbenchPanel(evaluate, "tasks");
 	await chooseTab("任务记录");
 	await evaluate("document.querySelector('[data-popout-panel=tasks]').click()");
 	await until(async () => (await state()).length === 1, "POPOUT_TASK_WINDOW");
@@ -56,8 +58,9 @@ export async function runPopoutSmoke(driver) {
 	await until(async () => await childEvaluate(child.name, "Boolean(document.querySelector('.tasks-panel'))"), "POPOUT_TASKS_RENDER");
 	await driver.testCommand("popout-close", { windowName: child.name });
 	await until(async () => (await state()).length === 0 && await evaluate("Boolean(document.querySelector('.tasks-panel'))"), "POPOUT_NATIVE_CLOSE_RETURNS_PANEL");
-	await chooseTab("游戏 / 原生视口");
+	await selectWorkspace(evaluate, "game");
 	assert.equal(await evaluate("Boolean(document.querySelector('[data-popout-panel=game]'))"), false);
+	await selectWorkspace(evaluate, "development");
 	await chooseTab("代码 / 差异");
 	assert.equal(driver.getRuntimePid(), pid);
 	assert.deepEqual((await request("state")).tasks, tasksBefore);

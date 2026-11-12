@@ -60,7 +60,7 @@ export async function runGameSmoke(driver) {
 		}
 		await until(async () => (await driver.api("bridge", { action: "snapshot" })).observation?.session.data?.gameLoaded === true, "CONNECTION");
 		const pid = driver.getBridgePid();
-		await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "GAME_LAYOUT_READY");
+		await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "GAME_LAYOUT_READY");
 		await until(async () => await evaluate("Boolean(document.querySelector('[aria-label=游戏任务目标]'))"), "PANEL");
 		await until(async () => await evaluate("[...document.querySelector('[aria-label=\"游戏 Agent 模型\"]').options].some(option=>option.textContent.includes('Synthetic game smoke'))"), "PROFILE");
 		await driver.api("game", { action: "catalog" }); await until(async () => (await state()).phase === "catalog_ready", "CATALOG");

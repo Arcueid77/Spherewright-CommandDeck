@@ -240,8 +240,8 @@ export class Workbench {
 			this.operation.controller.abort();
 			return { requested: true };
 		}
-		if (action === "ui-get") { if (!["layout", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); return this.store.ui(args.key); }
-		if (action === "ui-save") { if (!["layout", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); this.store.saveUi(args.key, args.value); return { saved: true }; }
+		if (action === "ui-get") { if (!["layout", "layout-game", "layout-observation", "layout-development", "workspace", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); return this.store.ui(args.key); }
+		if (action === "ui-save") { if (!["layout", "layout-game", "layout-observation", "layout-development", "workspace", "selection", "draft", "editor"].includes(args.key)) throw new Error("INVALID_UI_STATE_KEY"); this.store.saveUi(args.key, args.value); return { saved: true }; }
 		if (action === "agent") {
 			if (args.parentId !== undefined || args.contextMode !== undefined && !["new", "continue", "compact"].includes(args.contextMode)) throw new Error("INVALID_DEVELOPMENT_CONTEXT_REQUEST");
 			const usesContext = ["continue", "compact"].includes(args.contextMode);

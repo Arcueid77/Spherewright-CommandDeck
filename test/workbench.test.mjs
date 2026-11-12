@@ -42,6 +42,8 @@ test("workspace roots, grants, private session reference and UI draft survive re
 	f.store.setSession(task.id, join(f.base, "sessions", "private.jsonl"));
 	f.store.setTaskState(task.id, "succeeded", { result: { checked: true } });
 	f.store.saveUi("draft", { rootId: root.id, text: "draft preserved" });
+	f.store.saveUi("layout", { legacy: "retained" });
+	for (const workspace of ["game", "observation", "development"]) f.store.saveUi("layout-" + workspace, { workspace });
 	f.store.close();
 	const reopened = new WorkbenchStore(f.database);
 	try {
@@ -50,6 +52,8 @@ test("workspace roots, grants, private session reference and UI draft survive re
 		assert.equal(reopened.task(task.id).sessionFile, undefined);
 		assert.match(reopened.task(task.id, { privateFields: true }).sessionFile, /private\.jsonl$/);
 		assert.equal(reopened.ui("draft").text, "draft preserved");
+		assert.deepEqual(reopened.ui("layout"), { legacy: "retained" });
+		for (const workspace of ["game", "observation", "development"]) assert.deepEqual(reopened.ui("layout-" + workspace), { workspace });
 		assert.equal(reopened.activeTask(), null);
 	} finally { reopened.close(); }
 });

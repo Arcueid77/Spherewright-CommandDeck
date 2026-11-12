@@ -87,7 +87,7 @@ async function ui(driver) {
 	const state = () => driver.api("game", { action: "snapshot" });
 	async function until(predicate, label) { const deadline = performance.now() + 12000; while (!await predicate()) { if (performance.now() > deadline) { await writeFile(join(driver.context.root, "storage-" + (driver.storageCase?.resume ? "resume" : "fault") + "-failure.private.json"), JSON.stringify({ label, state: await state(), ui: await evaluate("document.body.innerText") }), { flag: "wx" }); throw new Error("STORAGE_SMOKE_TIMEOUT_" + label); } await new Promise(resolve => setTimeout(resolve, 50)); } }
 	async function activate() {
-		await until(() => evaluate("(()=>{const button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(document.querySelector('header')?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "LAYOUT_READY");
+		await until(() => evaluate("(()=>{const button=document.querySelector('[data-workspace-button=game]');if(document.querySelector('header')?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "LAYOUT_READY");
 		await until(() => evaluate("Boolean(document.querySelector('.game-tasks-panel'))"), "PANEL");
 	}
 	return { evaluate, state, until, activate };

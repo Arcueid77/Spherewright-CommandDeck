@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,8 +7,7 @@ async function until(predicate, label) { const deadline = performance.now() + 10
 const request = (driver, action, args = {}) => driver.api("journal", { action, args });
 const ui = (driver, source) => driver.testCommand("evaluate", { source });
 async function openPanel(driver) {
-	await until(async () => await ui(driver, "[...document.querySelectorAll('header button')].some(button=>button.textContent==='运行日记'&&!button.disabled)"), "HEADER_READY");
-	await ui(driver, "[...document.querySelectorAll('header button')].find(button=>button.textContent==='运行日记').click();true");
+	await openHeaderMenu(source => ui(driver, source), "more", "运行日记");
 	await until(async () => await ui(driver, "Boolean(document.querySelector('.journal-panel'))"), "PANEL");
 }
 export async function beginJournalSmoke(driver, previous) {

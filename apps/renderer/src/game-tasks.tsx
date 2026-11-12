@@ -9,6 +9,21 @@ type Task = { id: string; state: string; expiresAt: number | null; scope: { kind
 type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; goal?: GameGoal | null; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; mcp?: { available: boolean; tools: number; families: string[]; awaitingConfirmation: boolean; awaitingAuthorization: boolean; authorized: boolean; expiresAt: number | null; submissions: number }; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
 type Context = { state: GameState; profiles: Profile[]; healthy: boolean; busy: boolean; notice: string; act: (action: string, args?: Record<string, unknown>) => Promise<void>; confirm: (taskId: string) => Promise<void> };
 const Context = createContext<Context>(null!);
+export const useGameTasks = () => useContext(Context);
+
+export function GameTaskSummary() {
+	const { state } = useGameTasks();
+	const task = state.tasks.find(value => value.id === state.currentTaskId) ?? state.tasks[0];
+	return <div className="panel game-task-summary" aria-label="当前游戏任务只读摘要">
+		<h2>当前游戏任务</h2>
+		<p className="game-goal-title">{state.goal?.title ?? task?.details.prompt ?? "尚无当前任务"}</p>
+		<p role="status">{phases[state.phase] ?? "等待核对任务状态"}</p>
+		{state.goal?.stage && <p>{state.goal.stage.title}</p>}
+		{state.goal?.nextStep && <p>下一步 · {state.goal.nextStep}</p>}
+		{state.unresolved.length > 0 && <p className="notice">有 {state.unresolved.length} 项原动作待核销。</p>}
+		<p className="muted">只读摘要。任务操作位于游戏工作区。</p>
+	</div>;
+}
 const phases: Record<string, string> = { idle: "等待任务", reading_catalog: "读取科研列表", catalog_ready: "科研列表已读取", observing: "读取现场", planning: "Agent 正在分析", preparing: "原生预检中", awaiting_approval: "等待你确认", confirming: "核对确认与现场", accepted: "游戏已受理", reconciling: "核对原动作", completed: "队列变化已核对", advised: "只读建议已完成", blocked: "等待核销", failed: "本次未完成", cancelled: "后续执行已停止" };
 Object.assign(phases, { waiting: "等待现场条件", verifying: "核验目标条件", goal_completed: "目标条件已核对", goal_blocked: "目标暂未完成" });
 const errors: Record<string, string> = { GAME_MODEL_OUTPUT_LIMIT: "模型输出达到本轮上限，当前目标暂未完成，请核对原动作与验收记录。", GAME_MODEL_DID_NOT_FINISH: "模型轮次未正常结束，请核对当前目标和原动作记录。", RESEARCH_READBACK_NOT_SUPPORTED: "当前服务尚未提供可验证的科研回执，请更新同批 Spherewright 组件。", RESEARCH_BUDGET_INVALID: "科研材料需求格式不受支持，本次没有提交。", RESEARCH_BUDGET_MISMATCH: "科研材料需求已变化，请重新核对并预检。", OWNED_RESEARCH_WORLD_REQUIRED: "请先连接已载入的 Spherewright 自有世界。", HEALTHY_RESEARCH_WRITES_REQUIRED: "当前世界没有开放正常写入，请先处理游戏侧阻断。", RESEARCH_BRIDGE_UNAVAILABLE: "当前连接没有提供兼容的有限研究接口。", RESEARCH_TARGET_NOT_ELIGIBLE: "指定科技不存在、已经解锁或已在队列中，请核对目标。", RESEARCH_SELECTION_CHANGED: "科研队列已变化，本次预检停止，请重新核对目标。", COMMIT_RECEIPT_UNAVAILABLE: "提交回执丢失。保留原任务，禁止再次提交。", UNKNOWN_COMMIT_HAS_NO_ACTION_ID: "没有取得原动作编号，需独立核销，不能重试。", INDEPENDENT_GAME_AUDIT_REQUIRED: "游戏报告了需要独立核销的结果，后续写入已冻结。", UNRESOLVED_GAME_INTENT_BLOCKS_WRITES: "先核销已有游戏任务，才能继续。", GAME_RUNTIME_RESPONSE_TIMEOUT: "Agent 未在时限内结束，运行状态需先核对。", GAME_EXECUTION_OWNS_RUNTIME: "游戏任务正在占用运行环境。" };

@@ -1,3 +1,4 @@
+import { selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -16,7 +17,7 @@ export async function runObservationSmoke(driver) {
 	await driver.api('bridge-select',path);await driver.api('bridge',{action:'refresh'});
 	await until(async()=>(await state()).observation?.production.data?.coverage.complete===true,'OBSERVATION_INITIAL_READ');
 	assert.equal((await state()).metadata.researchAvailable,false);const pid=driver.getBridgePid();
-	await driver.testCommand('show-ui');await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='只读舰桥').click()");
+	await driver.testCommand('show-ui');await selectWorkspace(evaluate, "observation");await addWorkbenchPanel(evaluate, "bridge");
 	await until(async()=>(await evaluate('document.body.innerText')).includes('本次限时只读观测'),'OBSERVATION_BANNER');
 	const end=Date.now()+8000;
 	while((await state()).requestPerformance?.observationLimit?.stopReason===null){assert.ok(Date.now()<end,'OBSERVATION_LIMIT_NOT_REACHED');await driver.api('bridge',{action:'refresh'});await delay(100);}

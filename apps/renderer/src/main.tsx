@@ -7,10 +7,10 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
-import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation } from "./workbench";
+import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation, useDevelopmentActiveTask, type Workspace } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
 import { BridgeProvider, ConnectionPanel, ResearchPanel, MechaPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
-import { GameTasksProvider, GameTasksPanel } from "./game-tasks";
+import { GameTasksProvider, GameTasksPanel, GameTaskSummary, useGameTasks } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 import { JournalPanel } from "./journal";
 import { AgentGatewayPanel } from "./agent-gateway";
@@ -247,6 +247,8 @@ function GamePanel(props: IDockviewPanelProps) {
 					height: Math.max(1, rect.height),
 					visible:
 						!document.body.dataset.deckOverlay &&
+						!node.closest<HTMLElement>("[data-workspace]")?.hidden &&
+						props.api.isVisible &&
 						rect.width > 1 &&
 						rect.height > 1 &&
 						document.visibilityState === "visible",
@@ -266,6 +268,7 @@ function GamePanel(props: IDockviewPanelProps) {
 		observer.observe(node);
 		window.addEventListener("resize", update);
 		window.addEventListener("deck-overlay", update);
+		window.addEventListener("deck-workspace", update);
 		document.addEventListener("visibilitychange", update);
 		update();
 		return () => {
@@ -275,6 +278,7 @@ function GamePanel(props: IDockviewPanelProps) {
 			observer.disconnect();
 			window.removeEventListener("resize", update);
 			window.removeEventListener("deck-overlay", update);
+			window.removeEventListener("deck-workspace", update);
 			document.removeEventListener("visibilitychange", update);
 			void window.deck.viewport({
 				x: 0,
@@ -424,127 +428,198 @@ const components = {
 	videos: VideosPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, mecha: MechaPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
-	"game-agent": GameTasksPanel,
+	"game-agent": GameTasksPanel, "game-summary": GameTaskSummary,
 };
-function addGamePanel(api: DockviewReadyEvent["api"], activate = false) {
-	if (!api.getPanel("game-agent")) api.addPanel({ id: "game-agent", component: "game-agent", title: "游戏 Agent", ...(api.getPanel("development") ? { position: { referencePanel: "development", direction: "within" as const }, inactive: true } : { position: { referencePanel: "game", direction: "right" as const }, initialWidth: 390 }) });
-	if (activate) { api.getPanel("game")?.api.setActive(); api.getPanel("game-agent")?.api.setActive(); }
-}
-function addBridgePanels(api: DockviewReadyEvent["api"], activate = false) {
-	for (const [id, title] of [["bridge", "只读舰桥"], ["research", "科研"], ["mecha", "机甲"], ["production", "生产"], ["power", "供电"], ["logistics", "物流"]]) if (!api.getPanel(id)) api.addPanel({ id, component: id, title, ...(api.getPanel("editor") ? { position: { referencePanel: "editor", direction: "within" as const }, inactive: true } : {}) });
-	if (activate) api.getPanel("bridge")?.api.setActive();
-}
-async function ready(event: DockviewReadyEvent) {
-	const api = event.api;
-	const popouts = configurePopouts(api);
-	const snapshot = await window.deck.snapshot();
-	if (snapshot.layoutMode === "development") {
-		let restored = false;
-		try { const saved = await persistedLayout.load(); if (saved) { api.fromJSON(checkPopoutLayout(saved as unknown as Parameters<typeof api.fromJSON>[0])); await api.popoutRestorationPromise; restored = true; } } catch { api.clear(); }
-		if (!restored) {
-			api.addPanel({ id: "editor", component: "editor", title: "代码 / 差异" });
-			api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口", position: { referencePanel: "editor", direction: "within" }, inactive: true });
-			api.addPanel({ id: "files", component: "files", title: "工作区", position: { referencePanel: "editor", direction: "left" }, initialWidth: 280 });
-			api.addPanel({ id: "development", component: "development", title: "开发 Agent", position: { referencePanel: "editor", direction: "right" }, initialWidth: 370 });
-			api.addPanel({ id: "agent", component: "agent", title: "M0 连接验证", position: { referencePanel: "development", direction: "within" }, inactive: true });
-			api.addPanel({ id: "evidence", component: "evidence", title: "能力与证据", position: { referencePanel: "development", direction: "within" }, inactive: true });
-			api.addPanel({ id: "output", component: "output", title: "检查输出", position: { referencePanel: "editor", direction: "below" }, initialHeight: 230 });
-			api.addPanel({ id: "tasks", component: "tasks", title: "任务记录", position: { referencePanel: "output", direction: "within" }, inactive: true });
-			api.addPanel({ id: "events", component: "events", title: "运行事件", position: { referencePanel: "output", direction: "within" }, inactive: true });
-			addBridgePanels(api);
-		}
-		addGamePanel(api);
-		api.onDidLayoutChange(() => { if (popouts.canSave()) void persistedLayout.save(api.toJSON()).catch(() => {}); });
-		return;
-	}
-	api.addPanel({ id: "game", component: "game", title: "游戏 / 原生视口" });
+
+type DockApi = DockviewReadyEvent["api"];
+const workspaceNames: Record<Workspace, string> = { game: "游戏", observation: "观测", development: "开发" };
+const panelTitles: Record<string, string> = {
+	game: "游戏 / 原生视口", editor: "代码 / 差异", files: "工作区", development: "开发 Agent",
+	output: "检查输出", tasks: "任务记录", events: "运行事件", bridge: "连接详情", research: "科研",
+	production: "生产", power: "供电", logistics: "物流", mecha: "机甲", "game-summary": "当前游戏任务",
+	journal: "运行日记", videos: "录像", "model-usage": "用量汇总", "agent-gateway": "外部 Agent",
+	agent: "M0 连接验证", evidence: "能力与证据",
+};
+function addPanel(api: DockApi, id: string) {
+	const existing = api.getPanel(id);
+	if (existing) { existing.api.setActive(); return; }
+	const reference = api.getPanel("output") ?? api.getPanel("editor") ?? api.getPanel("game") ?? api.panels[0];
+	const bottom = ["output", "tasks", "events", "journal", "videos", "model-usage"].includes(id);
 	api.addPanel({
-		id: "agent",
-		component: "agent",
-		title: "Agent / Pi",
-		position: { referencePanel: "game", direction: "left" },
-		initialWidth: 350,
-	});
-	api.addPanel({
-		id: "evidence",
-		component: "evidence",
-		title: "能力与证据",
-		position: { referencePanel: "game", direction: "right" },
-		initialWidth: 280,
-	});
-	api.addPanel({
-		id: "events",
-		component: "events",
-		title: "运行事件",
-		position: { referencePanel: "game", direction: "below" },
-		initialHeight: 160,
+		id, component: id, title: panelTitles[id],
+		...(reference ? { position: { referencePanel: reference.id, direction: bottom && !api.getPanel("output") ? "below" as const : "within" as const } } : {}),
+		...(bottom ? { initialHeight: 240 } : {}),
 	});
 }
+function buildGameLayout(api: DockApi) {
+	api.addPanel({ id: "game", component: "game", title: panelTitles.game });
+}
+function buildObservationLayout(api: DockApi) {
+	api.addPanel({ id: "bridge", component: "bridge", title: panelTitles.bridge });
+}
+function buildDevelopmentLayout(api: DockApi) {
+	api.addPanel({ id: "editor", component: "editor", title: panelTitles.editor });
+	api.addPanel({ id: "files", component: "files", title: panelTitles.files, position: { referencePanel: "editor", direction: "left" }, initialWidth: 264 });
+	api.addPanel({ id: "development", component: "development", title: panelTitles.development, position: { referencePanel: "editor", direction: "right" }, initialWidth: 392 });
+}
+const builders = { game: buildGameLayout, observation: buildObservationLayout, development: buildDevelopmentLayout };
+
 function App() {
+	const bridge = useBridge().state;
+	const game = useGameTasks().state;
+	const activeDevelopmentTask = useDevelopmentActiveTask();
+	const observationOnly = Boolean(bridge.observationPolicy);
 	const [power, setPower] = useState<PowerState | null>(null);
+	const [workspace, setWorkspace] = useState<Workspace | null>(null);
+	const [visited, setVisited] = useState<Workspace[]>([]);
+	const [settings, setSettings] = useState(false);
+	const [diagnostics, setDiagnostics] = useState(false);
+	const [confirmation, setConfirmation] = useState(false);
+	const [menu, setMenu] = useState<"panels" | "layout" | "more" | null>(null);
+	const [layoutReady, setLayoutReady] = useState<Partial<Record<Workspace, boolean>>>({});
+	const [layoutNotice, setLayoutNotice] = useState("");
+	const dock = useRef<Partial<Record<Workspace, DockApi>>>({});
+	const menuArea = useRef<HTMLDivElement>(null);
+	const navigation = useWorkbenchNavigation();
+	const blocked = settings || confirmation || diagnostics;
+	const ready = workspace !== null && layoutReady[workspace] === true;
+
 	useEffect(() => {
 		let active = true, notified = false;
 		void window.deck.snapshot().then(value => { if (active && !notified) setPower(value.power); }).catch(() => {});
 		const unsubscribe = window.deck.onEvent(event => { if (event.type === "system-power" && event.power) { notified = true; setPower(event.power); } });
+		void Promise.all([
+			window.deck.workbench<Workspace | null>("ui-get", { key: "workspace" }),
+			...(["game", "observation", "development"] as const).map(value => persistedLayout.load(value)),
+		]).then(([saved, ...layouts]) => {
+			if (!active) return;
+			const selected = saved && Object.hasOwn(workspaceNames, saved) ? saved : observationOnly ? "observation" : "game";
+			setWorkspace(selected);
+			setVisited((["game", "observation", "development"] as const).filter((value, index) => value === selected || (layouts[index]?.popoutGroups as unknown[] | undefined)?.length));
+		}).catch(() => { if (active) { setWorkspace("game"); setVisited(["game"]); setLayoutNotice("布局读取未完成，暂用默认显示。"); } });
 		return () => { active = false; unsubscribe(); };
 	}, []);
-	const observationOnly = Boolean(useBridge().state.observationPolicy);
-	const [settings, setSettings] = useState(false);
-	const [diagnostics, setDiagnostics] = useState(false);
-	const [confirmation, setConfirmation] = useState(false);
-	const [layoutReady, setLayoutReady] = useState(false);
-	const dock = useRef<DockviewReadyEvent["api"] | null>(null);
-	const navigation = useWorkbenchNavigation();
+
+	function switchWorkspace(value: Workspace) {
+		setMenu(null);
+		setVisited(old => old.includes(value) ? old : [...old, value]);
+		setWorkspace(value);
+		void window.deck.workbench("ui-save", { key: "workspace", value }).catch(() => setLayoutNotice("工作区选择未能保存。"));
+	}
+	useEffect(() => { window.dispatchEvent(new Event("deck-workspace")); }, [workspace, layoutReady]);
 	useEffect(() => {
-		const api = dock.current;
-		if (!api || !navigation) return;
-		if (!api.getPanel(navigation.panel)) {
-			const reference = navigation.panel === "editor" ? api.getPanel("research") ?? api.getPanel("game") : api.getPanel("tasks") ?? api.getPanel("events");
-			api.addPanel({ id: navigation.panel, component: navigation.panel, title: navigation.panel === "editor" ? "代码 / 差异" : "检查输出", ...(reference ? { position: { referencePanel: reference.id, direction: "within" as const } } : {}) });
-		}
-		api.getPanel(navigation.panel)?.api.setActive();
-	}, [navigation]);
-	useEffect(() => window.deck.onEvent((event) => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); }), []);
-	useEffect(() => window.deck.onEvent((event) => { if (event.type === "open-game-agent" && dock.current) addGamePanel(dock.current, true); }), []);
-	useEffect(() => { if (settings || confirmation || diagnostics) document.body.dataset.deckOverlay = settings ? "settings" : diagnostics ? "diagnostics" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation, diagnostics]);
-	return (
-		<div className="app">
-			<header inert={settings || confirmation || diagnostics} aria-busy={!layoutReady}>
-				<div className="brand">
-					SPHEREWRIGHT <b>COMMANDDECK</b>
-				</div>
-				<div className="tag">{observationOnly ? "限时只读观测" : "开发 · 观察 · 有限研究"}</div>
-				<button onClick={() => void persistedLayout.save(null).then(() => window.location.reload())}>恢复默认布局</button>
-				<button disabled={!layoutReady} onClick={() => { for (const popout of dock.current?.getPopouts() ?? []) popout.window.close(); }}>收回全部浮窗</button>
-				<button disabled={observationOnly} onClick={() => setSettings(true)}>模型设置</button>
-				<button disabled={!layoutReady} onClick={() => setDiagnostics(true)}>诊断报告</button>
-				<button disabled={!layoutReady} onClick={() => dock.current && addBridgePanels(dock.current, true)}>只读舰桥</button>
-				<button disabled={!layoutReady} onClick={() => dock.current && addGamePanel(dock.current, true)}>游戏 Agent</button>
-				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("journal")) api.addPanel({ id: "journal", component: "journal", title: "运行日记 / 回放", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("journal")?.api.setActive(); }}>运行日记</button>
-				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("videos")) api.addPanel({ id: "videos", component: "videos", title: "本地录像", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("videos")?.api.setActive(); }}>录像</button>
-				<button disabled={!layoutReady} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("model-usage")) api.addPanel({ id: "model-usage", component: "model-usage", title: "用量汇总", position: { referencePanel: api.getPanel("events") ? "events" : api.getPanel("output") ? "output" : "game", direction: "within" } }); api.getPanel("model-usage")?.api.setActive(); }}>用量汇总</button>
-				<RecordingIndicator />
-				<button disabled={!layoutReady || observationOnly} onClick={() => { const api = dock.current; if (!api) return; if (!api.getPanel("agent-gateway")) api.addPanel({ id: "agent-gateway", component: "agent-gateway", title: "外部 Agent", position: { referencePanel: api.getPanel("events") ? "events" : "game", direction: "within" } }); api.getPanel("agent-gateway")?.api.setActive(); }}>外部 Agent</button>
-				<div className="header-note">{observationOnly ? "本次执行入口关闭 · 中央点击暂缓" : "游戏执行逐项确认 · 中央点击暂缓"}</div>
-			</header>
-			{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>
-				<span>{power.phase === "suspended" ? "系统暂停中，新的执行已关闭。" : power.phase === "checking" ? "正在检查唤醒后的连接，执行保持暂停。" : "唤醒检查未完成，执行保持暂停。"} 原任务和回执保留，不会自动重做。</span>
-				{power.canRetry && <button onClick={() => void window.deck.resumeSystem().catch(() => {})}>重新检查连接</button>}
-			</div>}
-			<div className="workspace" inert={settings || confirmation || diagnostics}>
-				<DockviewReact
-					className="dockview-theme-abyss"
-					dndStrategy="pointer"
-					components={components}
-					popoutUrl={popoutPage}
-					rightHeaderActionsComponent={PopoutActions}
-					onReady={(event) => { dock.current = event.api; setLayoutReady(false); void ready(event).then(() => setLayoutReady(true)); }}
-				/>
+		const close = (event: PointerEvent) => { if (!menuArea.current?.contains(event.target as Node)) setMenu(null); };
+		const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
+		document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape);
+		return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
+	}, []);
+	useEffect(() => window.deck.onEvent(event => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); if (event.type === "open-game-agent") switchWorkspace("game"); }), []);
+	useEffect(() => {
+		if (settings || confirmation || diagnostics || menu) document.body.dataset.deckOverlay = settings ? "settings" : diagnostics ? "diagnostics" : confirmation ? "confirmation" : "menu";
+		else delete document.body.dataset.deckOverlay;
+		window.dispatchEvent(new Event("deck-overlay"));
+	}, [settings, confirmation, diagnostics, menu]);
+	useEffect(() => {
+		if (!navigation || !layoutReady.development) return;
+		const api = dock.current.development;
+		if (api) addPanel(api, navigation.panel);
+	}, [navigation, layoutReady.development]);
+	useEffect(() => {
+		if (activeDevelopmentTask && layoutReady.development && dock.current.development) addPanel(dock.current.development, "output");
+	}, [activeDevelopmentTask, layoutReady.development]);
+
+	async function initialize(value: Workspace, event: DockviewReadyEvent) {
+		const api = event.api;
+		dock.current[value] = api;
+		const popouts = configurePopouts(api);
+		let restored = false;
+		try {
+			const saved = await persistedLayout.load(value);
+			if (saved) {
+				api.fromJSON(checkPopoutLayout(saved as unknown as Parameters<typeof api.fromJSON>[0]));
+				await api.popoutRestorationPromise;
+				restored = true;
+			}
+		} catch { api.clear(); setLayoutNotice("保存的布局暂时无法恢复，原记录已保留。可从布局菜单恢复默认显示。"); }
+		if (!restored) builders[value](api);
+		api.onDidLayoutChange(() => {
+			if (popouts.canSave()) void persistedLayout.save(value, api.toJSON()).catch(() => setLayoutNotice("布局未能保存，请检查本机存储。"));
+		});
+		if (value === "development" && activeDevelopmentTask) addPanel(api, "output");
+		setLayoutReady(old => ({ ...old, [value]: true }));
+	}
+	function openPanel(id: string) {
+		setMenu(null);
+		if (workspace && dock.current[workspace]) addPanel(dock.current[workspace]!, id);
+	}
+	async function resetLayout() {
+		setMenu(null);
+		if (!workspace) return;
+		const api = dock.current[workspace];
+		if (!api) return;
+		for (const popout of api.getPopouts()) popout.window.close();
+		api.clear();
+		builders[workspace](api);
+		await persistedLayout.save(workspace, api.toJSON()).catch(() => setLayoutNotice("默认布局未能保存。"));
+	}
+	const connected = bridge.observation?.connected === true;
+	const connectionText = power && power.phase !== "ready" ? "连接待检查" : bridge.error ? "连接需要处理" : connected ? "MCP 已连接" : "游戏未连接";
+	const panels = workspace === "development"
+		? ["files", "editor", "development", "output", "tasks", "game-summary", "production", "power", "logistics", "events"]
+		: workspace === "observation"
+			? ["research", "production", "power", "logistics", "mecha", "bridge", "events"]
+			: ["bridge", "production", "power", "logistics", "output", "tasks", "events"];
+	return <div className="app">
+		<header className="app-header" inert={blocked} aria-busy={!ready}>
+			<div className="brand">CommandDeck</div>
+			<nav className="workspace-navigation" aria-label="工作区">
+				{(Object.keys(workspaceNames) as Workspace[]).map(value => <button key={value} data-workspace-button={value} aria-current={workspace === value ? "page" : undefined} onClick={() => switchWorkspace(value)}>{workspaceNames[value]}</button>)}
+			</nav>
+			<button className={"global-connection" + (connected ? " connected" : "")} onClick={() => switchWorkspace("observation")}><span className={connected ? "dot live" : "dot"} />{connectionText}</button>
+			<div className="header-menus" ref={menuArea}>
+				{(["panels", "layout", "more"] as const).map(value => <button key={value} data-menu={value} disabled={!ready} aria-haspopup="menu" aria-expanded={menu === value} onClick={() => setMenu(menu === value ? null : value)}>{value === "panels" ? "＋ 面板" : value === "layout" ? "布局" : "更多"}</button>)}
+				{menu && <div className="header-menu" role="menu" aria-label={menu === "panels" ? "添加面板" : menu === "layout" ? "布局" : "更多"}>
+					{menu === "panels" && panels.map(id => <button key={id} role="menuitem" data-add-panel={id} onClick={() => openPanel(id)}>{panelTitles[id]}</button>)}
+					{menu === "layout" && <>
+						<button role="menuitem" onClick={() => void resetLayout()}>恢复当前工作区默认布局</button>
+						<button role="menuitem" onClick={() => { setMenu(null); for (const api of Object.values(dock.current)) for (const popout of api?.getPopouts() ?? []) popout.window.close(); }}>收回全部浮窗</button>
+					</>}
+					{menu === "more" && <>
+						<div className="menu-group-label">设置</div>
+						<button role="menuitem" disabled={observationOnly} onClick={() => { setMenu(null); setSettings(true); }}>模型设置</button>
+						<div className="menu-group-label">工具</div>
+						<button role="menuitem" onClick={() => { setMenu(null); setDiagnostics(true); }}>诊断报告</button>
+						<button role="menuitem" onClick={() => openPanel("model-usage")}>用量汇总</button>
+						<button role="menuitem" disabled={observationOnly} onClick={() => openPanel("agent")}>M0 连接验证</button>
+						<button role="menuitem" onClick={() => openPanel("evidence")}>能力与证据</button>
+						<div className="menu-group-label">历史与媒体</div>
+						<button role="menuitem" onClick={() => openPanel("journal")}>运行日记</button>
+						<button role="menuitem" onClick={() => openPanel("videos")}>录像</button>
+						<div className="menu-group-label">集成</div>
+						<button role="menuitem" disabled={observationOnly} onClick={() => openPanel("agent-gateway")}>外部 Agent</button>
+					</>}
+				</div>}
 			</div>
-			{settings && <ProviderSettings close={() => setSettings(false)} />}
-			{diagnostics && <DiagnosticDialog close={() => setDiagnostics(false)} />}
+		</header>
+		{power && power.phase !== "ready" && <div className="power-notice" role="status" data-system-power={power.phase}>
+			<span>{power.phase === "suspended" ? "系统暂停中，新的执行已关闭。" : power.phase === "checking" ? "正在检查唤醒后的连接，执行保持暂停。" : "唤醒检查未完成，执行保持暂停。"} 原任务和回执保留，不会自动重做。</span>
+			{power.canRetry && <button onClick={() => void window.deck.resumeSystem().catch(() => {})}>重新检查连接</button>}
+		</div>}
+		<div className="workspace" inert={blocked}>
+			{visited.map(value => <section className={"workspace-surface workspace-" + value} key={value} data-workspace={value} aria-label={workspaceNames[value] + "工作区"} hidden={value !== workspace}>
+				<div className="workspace-dock">
+					<DockviewReact className="dockview-theme-abyss" dndStrategy="pointer" components={components} popoutUrl={popoutPage} rightHeaderActionsComponent={PopoutActions} onReady={event => void initialize(value, event)} />
+				</div>
+				{value === "game" && <aside className="current-game-task" aria-label="当前游戏任务"><GameTasksPanel /></aside>}
+			</section>)}
 		</div>
-	);
+		<footer className="app-statusbar" role="status">
+			<span>{layoutNotice || (workspace === "game" ? game.busy ? "游戏任务进行中" : game.unresolved.length ? "原动作待核销" : "游戏任务就绪" : workspace === "development" ? activeDevelopmentTask ? "开发任务进行中" : "开发工作区就绪" : observationOnly ? "限时只读观测" : "只读观测")}</span>
+			<RecordingIndicator />
+		</footer>
+		{settings && <ProviderSettings close={() => setSettings(false)} />}
+		{diagnostics && <DiagnosticDialog close={() => setDiagnostics(false)} />}
+	</div>;
 }
 // Pointer events here belong to the workbench; the native viewport hole bypasses the renderer.
 document.addEventListener(

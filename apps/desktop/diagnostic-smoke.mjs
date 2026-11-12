@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, lstat } from "node:fs/promises";
@@ -35,7 +36,7 @@ export async function runDiagnosticSmoke(driver) {
 	stage("layout"); await testCommand("show-ui");
 	await until("document.querySelector('header')?.getAttribute('aria-busy')==='false'", "DIAGNOSTIC_LAYOUT_NOT_READY");
 	assert.equal(await evaluate("typeof require==='undefined'&&typeof window.deck.diagnosticPreview==='function'"), true);
-	stage("initial-preview"); await click("诊断报告");
+	stage("initial-preview"); await openHeaderMenu(evaluate, "more", "诊断报告");
 	await until("document.body.dataset.deckOverlay==='diagnostics'&&document.querySelector('header').inert&&document.querySelector('.workspace').inert", "DIAGNOSTIC_OVERLAY_NOT_READY");
 	const previewText = await generate(), report = JSON.parse(previewText);
 	assert.equal(report.kind, "spherewright-commanddeck-diagnostic"); assert.equal(report.version, 1);
@@ -65,14 +66,14 @@ export async function runDiagnosticSmoke(driver) {
 	await until("document.querySelector('header')?.getAttribute('aria-busy')==='false'", "DIAGNOSTIC_RELOAD_NOT_READY");
 	const stale = await evaluate("(async()=>{try{await window.deck.saveDiagnosticPreview(" + JSON.stringify(oldPreview.id) + ");return false}catch(error){return String(error).includes('DIAGNOSTIC_PREVIEW_REQUIRED')}})()");
 	assert.equal(stale, true); assert.deepEqual(await readFile(destination), saved);
-	stage("after-reload"); await click("诊断报告"); const afterReload = JSON.parse(await generate()); assert.equal(afterReload.runtime.available, true);
+	stage("after-reload"); await openHeaderMenu(evaluate, "more", "诊断报告"); const afterReload = JSON.parse(await generate()); assert.equal(afterReload.runtime.available, true);
 	await click("关闭");
 	stage("execution-denials"); const rejected = await evaluate("(async()=>{let count=0;for(const call of [()=>window.deck.probe({mode:'live'}),()=>window.deck.probe({mode:'offline'}),()=>window.deck.game('start',{}),()=>window.deck.workbench('check',{}),()=>window.deck.bridge('refresh'),()=>window.deck.manageProfiles('save',{})])try{await call()}catch{count++}return count})()");
 	assert.equal(rejected, 6); assert.equal(getRuntimePid(), runtimePid); assert.equal(getProbeSequence(), probeSequence); assert.equal(getBridgeClient(), undefined);
 	const finalWork = await api("workbench", { action: "state" }), finalGame = await api("game", { action: "snapshot" });
 	assert.deepEqual(finalWork.roots, initialWork.roots); assert.deepEqual(finalWork.tasks, initialWork.tasks); assert.deepEqual(finalGame.tasks, initialGame.tasks); assert.deepEqual(finalGame.unresolved, initialGame.unresolved);
 	stage("runtime-exit"); const stopped = await driver.stopRuntimeForSmoke(); assert.equal(stopped.exitObserved, true);
-	stage("unavailable-preview"); await click("诊断报告"); const unavailable = JSON.parse(await generate()); assert.equal(unavailable.runtime.available, false); assert.equal(unavailable.runtime.exitObserved, true); assert.equal(unavailable.workbench.state, "unavailable"); assert.equal(unavailable.workbench.code, "RUNTIME_UNAVAILABLE"); await click("关闭");
+	stage("unavailable-preview"); await openHeaderMenu(evaluate, "more", "诊断报告"); const unavailable = JSON.parse(await generate()); assert.equal(unavailable.runtime.available, false); assert.equal(unavailable.runtime.exitObserved, true); assert.equal(unavailable.workbench.state, "unavailable"); assert.equal(unavailable.workbench.code, "RUNTIME_UNAVAILABLE"); await click("关闭");
 	assert.equal(getProbeSequence(), probeSequence); assert.equal(getBridgeClient(), undefined); assert.deepEqual(await readFile(destination), saved);
 	const proof = { runId: context.runId, reportVersion: 1, previewBytes: saved.length, previewSha256: sha256, previewMatchesSavedBytes: true, cancelledPickerWritesNothing: true, existingDestinationPreserved: true, changedOptionsDiscardPreview: true, reloadInvalidatesPreview: true, newPreviewAfterReload: true, diagnosticAfterRuntimeExit: true, runtimeExitObserved: true, rendererNodeDisabled: true, runtimeRetainedUntilControlledExit: true, noProbeAllocated: true, noMcpAllocated: true, noTaskCreatedOrReplayed: true, modelAndGameActionsRejected: true, nativeSavePickerResponseMocked: true, physicalInputVerified: false, realGameCalls: 0, realModelRequests: 0, fullRecoveryMatrixVerified: false };
 	stage("proof"); proof.testStagesReached = stagesReached;

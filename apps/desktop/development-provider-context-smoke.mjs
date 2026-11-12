@@ -1,3 +1,4 @@
+import { openHeaderMenu, selectWorkspace } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,6 +41,7 @@ export async function runProviderContextSmoke(driver, manifest) {
 	const summaryFailure = driver.developmentUsageCase.summaryFailure ?? null, prefix = providerContextPrefix(summaryFailure), requests = summaryFailure ? 8 : 12, toolCalls = summaryFailure ? 3 : 5;
 	if (summaryFailure) assert.equal(manifest.portableDevelopmentContextFailures, 1);
 	const { context, api, testCommand } = driver, phase = driver.developmentUsageCase.phase, runtime = driver.getRuntimePid(), request = (action, args = {}) => api("workbench", { action, args }), evaluate = source => testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
 	const registered = await driver.registerDevelopmentUsageWorkspace(), root = registered.roots[0]; let original, exercise = null;
 	async function until(predicate, code) { const deadline = performance.now() + 20000; while (!await predicate()) { assert.ok(performance.now() < deadline, code); await new Promise(resolve => setTimeout(resolve, 50)); } }
 	async function state(ids) {
@@ -90,8 +92,8 @@ export async function runProviderContextSmoke(driver, manifest) {
 		const summary = await api("model-usage"); assert.equal(summary.partialSources, false); assert.equal(summary.truncated, false); assert.equal(summary.totals.tasks, 5); assert.equal(summary.totals.knownRequests, requests); assert.equal(summary.groups.length, 2); assert.equal(summary.totals.missingResponses, summaryFailure ? 2 : 0); assert.equal(summary.totals.unpricedTasks, summaryFailure ? 2 : 0);
 		assert.equal(summary.totals.tokens.totalTokens, snapshots.reduce((sum, usage) => sum + (usage.tokens?.totalTokens ?? 0), 0)); assert.ok(Math.abs(summary.totals.estimatedUsd - snapshots.reduce((sum, usage) => sum + (usage.estimate.usd ?? 0), 0)) < 1e-12);
 		for (const group of summary.groups) { const selected = original.expected.records.filter(task => task.provider === group.provider); assert.equal(group.tasks, selected.length); assert.equal(group.knownRequests, selected.reduce((sum, task) => sum + task.usage.requests, 0)); }
-		let opened = false; await until(async () => {
-			if (!opened) opened = await evaluate("(()=>{const button=[...document.querySelectorAll('header button')].find(value=>value.textContent==='用量汇总');if(!button||button.disabled)return false;button.click();return true})()");
+		await openHeaderMenu(evaluate, "more", "用量汇总");
+	let opened = true; await until(async () => {
 			return opened && evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('已读取 5 项任务')&&panel?.querySelectorAll('tbody tr').length===2})()");
 		}, "PROVIDER_CONTEXT_SUMMARY_UI_NOT_READY");
 		if (summaryFailure) assert.equal(await evaluate("(()=>{const panel=document.querySelector('[aria-label=模型用量汇总]');return panel?.querySelector('[data-usage-summary-total]')?.textContent.includes('2 次缺失或未取得终报')&&panel.querySelector('[data-usage-summary-cost]')?.textContent.includes('无法估算 2 项')})()"), true);

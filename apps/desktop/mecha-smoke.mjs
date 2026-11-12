@@ -1,3 +1,4 @@
+import { selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 
 export async function runMechaPanelSmoke(driver, { evaluate, until }) {
@@ -5,8 +6,8 @@ export async function runMechaPanelSmoke(driver, { evaluate, until }) {
 	const initial = await state(); assert.equal(initial.observation.mechaEnabled, false); assert.equal(initial.observation.mecha.data, null);
 	assert.ok(initial.metadata.readTools.includes("spherewright_get_player_state"));
 	const open = async () => {
-		await until(() => evaluate("(()=>{const button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='只读舰桥'&&!button.disabled);if(!button)return false;button.click();return true})()"), "MECHA_HEADER");
-		await until(() => evaluate("(()=>{const tab=[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()==='机甲');if(!tab)return false;tab.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}));return true})()"), "MECHA_TAB");
+		await selectWorkspace(evaluate, "observation");
+		await addWorkbenchPanel(evaluate, "mecha");
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"机甲状态\"]'))"), "MECHA_PANEL");
 	};
 	const click = async label => {

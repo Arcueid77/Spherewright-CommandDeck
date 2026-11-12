@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -46,7 +47,8 @@ export async function runDesktopSmoke(driver) {
 		`(async()=>{await window.deck.startFixture();await window.deck.attach('owned-fixture');return {title:document.title,panels:document.querySelectorAll('.dv-groupview').length,nodeExposed:typeof require!=='undefined',native:await window.deck.status(),probe:await window.deck.probe(${JSON.stringify(probe)})};})()`,
 	);
 	result.runId = driver.runId;
-	assert.equal(result.panels, 4);
+	assert.equal(result.panels, 1);
+	assert.equal(await evaluate("Boolean(document.querySelector('.current-game-task'))"), true);
 	assert.equal(result.nodeExposed, false);
 	for (const key of [
 		"attached",
@@ -101,7 +103,7 @@ export async function runDesktopSmoke(driver) {
 						!nativeUi.parentPresent &&
 						(await evaluate(
 							"document.querySelectorAll('.dv-groupview').length",
-						)) === 4
+						)) === 1
 					);
 				} catch {
 					return false;
@@ -187,6 +189,7 @@ export async function runDesktopSmoke(driver) {
 	assert.equal(driver.getState().lastProbeResult.executed, 1);
 	assert.deepEqual(await native.request("fixture-identity"), originalIdentity);
 	assert.equal((await api("status")).attached, false);
+	await openHeaderMenu(evaluate, "more", "M0 连接验证");
 	const restored = await evaluate("window.deck.snapshot()");
 	assert.equal(restored.lastProbeResult.executed, 1);
 	await until(

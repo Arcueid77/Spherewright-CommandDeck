@@ -15,6 +15,7 @@ type ContextValue = State & { runtimeUnavailable: boolean } & { rootId: string; 
 const Context = createContext<ContextValue>(null!);
 const useWorkbench = () => useContext(Context);
 export const useWorkbenchNavigation = () => useWorkbench().navigation;
+export const useDevelopmentActiveTask = () => useWorkbench().activeTask;
 const labels: Record<string, string> = { queued: "等待", running: "进行中", cancelling: "正在停止", succeeded: "完成", failed: "失败", cancelled: "已取消", interrupted: "已中断" };
 const changeLabels: Record<string, string> = { applied: "已写入", reverted: "已撤回", failed: "失败", unknown: "待核对" };
 function taskText(task: Task) {
@@ -235,4 +236,13 @@ export function OutputPanel() {
 	return <div className="output-panel"><div className="statusline">{task ? `${task.id.slice(0, 8)} · ${labels[task.state] ?? task.state}` : "选择一项任务查看日志"}{typeof result?.exitCode === "number" ? ` · 退出码 ${result.exitCode}` : ""}</div><pre>{output || (task ? taskText(task) : "尚未选择任务。")}</pre>{task?.kind === "agent" && <ModelUsage value={task.usage} context={task.context} />}{task?.changes?.map((change) => <div className="statusline" key={change.id}>{change.path} · {changeLabels[change.state] ?? change.state}<button disabled={!["applied", "reverted"].includes(change.state)} onClick={() => void c.showChange(task.id, change.id).catch(c.report)}>打开原始差异</button><button disabled={c.observationOnly || Boolean(c.activeTask) || change.state !== "applied" || !c.roots.find((root) => root.id === task.rootId)?.canWrite} onClick={() => void wb<Task>("revert", { sourceTaskId: task.id, changeId: change.id }).then((next) => { c.selectTask(next.id); return c.refresh(); }).catch(c.report)}>撤回此文件修改</button></div>)}{task && <TaskReferences key={task.id} task={task} />}{result && <details className="receipt"><summary>详细回执</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}{c.notice && <p className="notice">{c.notice}</p>}</div>;
 }
 
-export const persistedLayout = { load: () => wb<Record<string, unknown> | null>("ui-get", { key: "layout" }), save: (value: unknown) => wb("ui-save", { key: "layout", value }) };
+export type Workspace = "game" | "observation" | "development";
+export const persistedLayout = {
+	async load(workspace: Workspace) {
+		const saved = await wb<Record<string, unknown> | null>("ui-get", { key: `layout-${workspace}` });
+		// Keep the original development layout as a recoverable, read-only source.
+		if (saved === null && workspace === "development") return wb<Record<string, unknown> | null>("ui-get", { key: "layout" });
+		return saved;
+	},
+	save: (workspace: Workspace, value: unknown) => wb("ui-save", { key: `layout-${workspace}`, value }),
+};

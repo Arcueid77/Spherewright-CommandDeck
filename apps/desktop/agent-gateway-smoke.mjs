@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import { runMechaPanelSmoke } from "./mecha-smoke.mjs";
 export function gatewaySmokeUi(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source }), state = () => driver.api("gateway", { action: "snapshot" });
 	const until = async (predicate, label) => { const end = performance.now() + 10000; while (!await predicate()) { assert.ok(performance.now() < end, "GATEWAY_SMOKE_TIMEOUT_" + label); await new Promise(resolve => setTimeout(resolve, 40)); } };
-	const open = async () => { await until(() => evaluate("[...document.querySelectorAll('header button')].some(button=>button.textContent==='外部 Agent'&&!button.disabled)"), "HEADER"); await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='外部 Agent').click();true"); await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"外部 Agent 只读网关\"]'))"), "PANEL"); };
+	const open = async () => { await openHeaderMenu(evaluate, "more", "外部 Agent"); await until(() => evaluate('Boolean(document.querySelector(\'[aria-label="外部 Agent 只读网关"]\'))'), "PANEL"); };
 	const click = async label => { const selector = `[...document.querySelectorAll('[aria-label="外部 Agent 只读网关"] button')].find(button=>button.textContent===${JSON.stringify(label)}&&!button.disabled)`; await until(() => evaluate(`Boolean(${selector})`), "BUTTON"); await evaluate(`${selector}.click();true`); };
 	const copy = async () => { await click("复制 MCP 配置"); await until(() => evaluate("document.querySelector('[aria-label=\"外部 Agent 只读网关\"] [role=status]')?.textContent.includes('已复制')===true"), "COPIED"); const config = driver.getGatewayConfigurationForSmoke()?.mcpServers?.["spherewright-commanddeck"]; assert.equal(config.command, process.execPath); assert.deepEqual(config.args, [join(driver.root, "apps/desktop/agent-gateway-stdio.mjs")]); assert.equal(config.env.ELECTRON_RUN_AS_NODE, "1"); assert.ok(!String(await evaluate("document.body.innerText")).includes(config.env.COMMANDDECK_GATEWAY_KEY)); return config; };
 	return { evaluate, state, until, open, click, copy };

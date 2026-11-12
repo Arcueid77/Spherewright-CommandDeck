@@ -1,3 +1,4 @@
+import { openHeaderMenu, selectWorkspace, addWorkbenchPanel, verifyWorkspaceNavigation } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { verifyUsageSummary } from "./usage-summary-smoke.mjs";
 import { runDevelopmentContextSmoke } from "./development-context-smoke.mjs";
@@ -12,6 +13,7 @@ import { createServer } from "node:http";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 export async function runWorkbenchSmoke(driver) {
+	await verifyWorkspaceNavigation(driver);
 	const originalTray = driver.getTray(); assert.ok(originalTray);
 	const journalId = (await driver.api("journal", { action: "start" })).activeId;
 	const base = join(driver.root, ".local", "m1-smoke", driver.runId), source = join(base, "source");
@@ -24,6 +26,7 @@ export async function runWorkbenchSmoke(driver) {
 	git("add", "."); git("commit", "-qm", "fixture baseline");
 	const request = (action, args = {}) => driver.api("workbench", { action, args });
 	const evaluate = (source) => driver.testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
 	await request("add", { path: source, label: "M1 fixture", canWrite: true, canExecute: true });
 	const root = (await request("state")).roots[0];
 	const initial = await request("read", { rootId: root.id, path: "code.mjs" });
@@ -95,8 +98,9 @@ export async function runWorkbenchSmoke(driver) {
 		assert.ok(Date.now() < renderDeadline, "M1_UI_STATE_NOT_RESTORED"); await delay(100);
 	} while (true);
 	assert.equal(rendered.nodeExposed, false);
-	assert.ok(rendered.groups >= 4);
-	await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='模型设置').click()");
+	assert.ok(rendered.groups >= 3);
+	await addWorkbenchPanel(evaluate, "tasks");
+	await openHeaderMenu(evaluate, "more", "模型设置");
 	const settingsDeadline = Date.now() + 5000;
 	while (!(await evaluate("Boolean(document.querySelector('[role=dialog]')?.textContent.includes('添加模型服务'))"))) { assert.ok(Date.now() < settingsDeadline, "PROVIDER_SETTINGS_NOT_RENDERED"); await delay(50); }
 	assert.deepEqual(await evaluate("({workspaceInert:document.querySelector('.workspace').inert,overlay:document.body.dataset.deckOverlay,focusInside:document.querySelector('[role=dialog]').contains(document.activeElement),passwordAbsent:!document.querySelector('input[type=password]')})"), { workspaceInert: true, overlay: "settings", focusInside: true, passwordAbsent: true });

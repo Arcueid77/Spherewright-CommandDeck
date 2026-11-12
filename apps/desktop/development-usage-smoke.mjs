@@ -1,3 +1,4 @@
+import { selectWorkspace } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -70,6 +71,7 @@ export async function runDevelopmentUsageSmoke(driver, manifest) {
 	const { testCommand, context } = driver, phase = driver.developmentUsageCase.phase, runtimePid = driver.getRuntimePid();
 	const api = (action, args) => callDevelopmentUsageApi(driver, action, args);
 	const request = (action, args = {}) => api("workbench", { action, args }), evaluate = source => testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
 	const registered = await driver.registerDevelopmentUsageWorkspace(), root = registered.roots[0];
 	assert.equal(root.canWrite, false); assert.equal(root.canExecute, false);
 	async function until(predicate, label) { const deadline = performance.now() + 20000; while (!await predicate()) { assert.ok(performance.now() < deadline, "DEVELOPMENT_USAGE_" + label); await new Promise(resolve => setTimeout(resolve, 50)); } }

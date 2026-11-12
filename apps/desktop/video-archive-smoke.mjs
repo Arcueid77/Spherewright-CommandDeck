@@ -1,3 +1,4 @@
+import { openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { lstat, readFile, writeFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -70,8 +71,7 @@ export async function runVideoArchiveSmoke(driver, fixture, manifest, archive, j
 			assert.equal(archive.snapshot().recordings.length, 0);
 			const journalId = (await driver.api("journal", { action: "start" })).activeId; assert.ok(journalId);
 			const waitUi = async (source, label) => { const deadline = performance.now() + 10000; while (!await driver.testCommand("evaluate", { source })) { assert.ok(performance.now() < deadline, label); await new Promise(resolve => setTimeout(resolve, 25)); } };
-			await waitUi("[...document.querySelectorAll('header button')].some(button=>button.textContent==='录像'&&!button.disabled)", "RECORDING_PANEL_ENTRY_NOT_READY");
-			await driver.testCommand("evaluate", { source: "[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true" });
+			await openHeaderMenu(source => driver.testCommand("evaluate", { source }), "more", "录像");
 			await waitUi("document.querySelector('.videos-panel')?.getAttribute('data-video-ready')==='true'", "RECORDING_PANEL_NOT_READY");
 			// Synthetic ports exercise the actual coordinator/archive with generated
 			// canvas bytes. They never invoke OS capture or the production UI grant.
@@ -125,8 +125,7 @@ async function checkVideoPlaybackUi(driver, recording, archive, journal, automat
 	const evaluate = source => driver.testCommand("evaluate", { source });
 	const until = async (predicate, label) => { const deadline = performance.now() + 10000; while (!await predicate()) { assert.ok(performance.now() < deadline, "VIDEO_UI_TIMEOUT_" + label); await new Promise(resolve => setTimeout(resolve, 40)); } };
 	const open = async () => {
-		await until(() => evaluate("[...document.querySelectorAll('header button')].some(button=>button.textContent==='录像'&&!button.disabled)"), "HEADER");
-		await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='录像').click();true");
+		await openHeaderMenu(evaluate, "more", "录像");
 		await until(() => evaluate("[...document.querySelectorAll('.videos-panel button')].some(button=>button.textContent==='打开播放'&&!button.disabled)"), "OPEN");
 		assert.equal(await evaluate("document.querySelector('.videos-panel select[aria-label=本地录像]').value"), recording.id);
 		await evaluate("[...document.querySelectorAll('.videos-panel button')].find(button=>button.textContent==='打开播放').click();true");

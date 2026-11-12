@@ -1,3 +1,4 @@
+import { openHeaderMenu, selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	const expected = { rootId: history.workbench.roots[0].id, path: "synthetic-popout-draft.txt", sha256: null, text: "Synthetic retained draft " + context.runId, diskText: "" };
 	const panels = [["editor", "代码 / 差异"], ["tasks", "任务记录"], ["production", "生产"]];
 	async function until(check, code) { const deadline = performance.now() + 12000; while (!await check()) { assert.ok(performance.now() < deadline, code); await new Promise(resolve => setTimeout(resolve, 50)); } }
+	await selectWorkspace(evaluate, "development");
 	if (popoutCase.phase === "record") {
 		assert.equal((await windows()).length, 0);
 		assert.equal(await request("ui-get", { key: "editor" }), null);
@@ -21,6 +23,7 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 		await testCommand("reload");
 		await until(() => evaluate("document.querySelector('[aria-label=代码编辑器]')?.value===" + JSON.stringify(expected.text)), "PACKAGED_POPOUT_DRAFT");
 		for (const [id, title] of panels) {
+			await addWorkbenchPanel(evaluate, id);
 			await evaluate(`[...document.querySelectorAll('.dv-tab')].find(tab=>tab.textContent.trim()===${JSON.stringify(title)}).dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))`);
 			await until(() => evaluate(`Boolean(document.querySelector('[data-popout-panel=${id}]'))`), "PACKAGED_POPOUT_TAB");
 			await evaluate(`document.querySelector('[data-popout-panel=${id}]').click()`);
@@ -38,12 +41,12 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	assert.equal(contents.find(value => value.panel === "editor").draft, expected.text);
 	assert.equal(contents.find(value => value.panel === "editor").readOnly, true);
 	assert.deepEqual(await request("ui-get", { key: "editor" }), expected);
-	await until(async () => (await request("ui-get", { key: "layout" }))?.popoutGroups?.length === 3, "PACKAGED_POPOUT_LAYOUT_PERSISTED");
+	await until(async () => (await request("ui-get", { key: "layout-development" }))?.popoutGroups?.length === 3, "PACKAGED_POPOUT_LAYOUT_PERSISTED");
 	if (popoutCase.phase === "reopen") {
-		await evaluate("[...document.querySelectorAll('header button')].find(button=>button.textContent==='收回全部浮窗').click()");
+		await openHeaderMenu(evaluate, "layout", "收回全部浮窗");
 		await until(async () => {
 			if ((await windows()).length !== 0) return false;
-			const layout = await request("ui-get", { key: "layout" });
+			const layout = await request("ui-get", { key: "layout-development" });
 			// Dockview omits empty popoutGroups. Require the persisted main grid
 			// and each returned panel exactly once, rather than treating null as empty.
 			if (!layout?.grid?.root || (layout.popoutGroups ?? []).length !== 0) return false;

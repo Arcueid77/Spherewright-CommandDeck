@@ -41,7 +41,7 @@ export async function runMcpGameSmoke(driver) {
 		const vault = await driver.api("profiles-manage", { action: "list" });
 		await driver.api("profiles-manage", { action: "save", args: { id: profileId, label: "Synthetic native MCP smoke", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: "fixture", apiKey: key, contextWindow: 65536, maxTokens: 1024, expectedRevision: vault.revision } });
 		await driver.api("bridge-select", marker);
-		await until(() => evaluate("(()=>{const button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(!button||button.disabled)return false;button.click();return true})()"), "PANEL");
+		await until(() => evaluate("(()=>{const button=document.querySelector('[data-workspace-button=game]');if(!button||button.disabled)return false;button.click();return true})()"), "PANEL");
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"MCP 游戏 Agent 模型\"]')?.options.length>1)"), "PROFILE");
 		await evaluate(`(()=>{const model=document.querySelector('[aria-label="MCP 游戏 Agent 模型"]');model.value=${JSON.stringify(JSON.stringify([profileId, "fixture"]))};model.dispatchEvent(new Event('change',{bubbles:true}));const mode=document.querySelector('[aria-label="MCP 游戏任务模式"]');mode.value=${JSON.stringify(autonomous ? "autonomous" : "assist")};mode.dispatchEvent(new Event('change',{bubbles:true}));const prompt=document.querySelector('[aria-label="MCP 游戏任务目标"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(prompt,'通过原生 MCP 手工制作并核对终态，仅替身');prompt.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
 		if (autonomous) {

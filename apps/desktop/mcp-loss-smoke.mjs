@@ -29,7 +29,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 	const world = async () => { const value = JSON.parse(await readFile(join(base, "synthetic-research-world.json"), "utf8")); assert.equal(value.runId, driver.runId); return value; };
 	async function reloadGame() {
 		await driver.testCommand("reload");
-		await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "MCP_RECOVERY_LAYOUT_READY");
+		await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "MCP_RECOVERY_LAYOUT_READY");
 		await until(() => evaluate("Boolean(document.querySelector('.game-tasks-panel'))"), "MCP_RECOVERY_PANEL");
 	}
 	const disabledExecution = () => evaluate("(()=>{const panel=document.querySelector('.game-tasks-panel');return ['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()");
@@ -175,7 +175,7 @@ async function runBeforeIntentLoss(driver, { evaluate, state, until, requests, b
 	await driver.api("game", { action: "stop" }); await until(async () => { const value = await state(); return !value.busy && value.phase === "cancelled"; }, "PREINTENT_TASK_STOPPED");
 	const stopped = await state(); assert.equal(stopped.tasks[0].state, "cancelled"); assert.equal(stopped.tasks[0].intent, null); assert.equal(stopped.developmentFrozen, false);
 	await driver.testCommand("reload");
-	await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=[...document.querySelectorAll('header button')].find(button=>button.textContent==='游戏 Agent');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "PREINTENT_RELOAD_LAYOUT");
+	await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "PREINTENT_RELOAD_LAYOUT");
 	await until(() => evaluate("document.querySelector('.game-tasks-panel [aria-label=模型用量与费用]')?.textContent.includes('360 tokens')"), "PREINTENT_RELOAD_USAGE");
 	assert.deepEqual((await state()).tasks, stopped.tasks); assert.deepEqual((await state()).events, stopped.events); assert.equal(driver.getBridgeClient(), client); assert.equal(driver.getRuntimePid(), runtimePid); assert.equal(requests(), 3); assert.equal(client.stats.requests, rpcBeforeLoss);
 	const after = await world(); assert.deepEqual(after, before);
