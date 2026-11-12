@@ -1,11 +1,11 @@
 {
   "source": {
     "repository": "Arcueid77/Spherewright-Lab",
-    "revision": "faf7bd3d563e47313a3d33cad5dcff6ee0829496",
+    "revision": "f0ebbe74744b769ca46b8051601b8dfd6f3e891a",
     "path": "knowledge/game-agent-lessons.json",
-    "fileSha256": "de505bc41054f4d2327686742ec5723626a9a4d5acb30ef16bcec63ecb417dc4"
+    "fileSha256": "fb58913f34d5a8f696aa63110f6ccf075db9d5bac19b4e45582b139ea6e59d3c"
   },
-  "catalogSha256": "48ada6aca70bcb0b75f80e03c64c56e6c2400b305ca2fda39338b71f7c804ee4",
+  "catalogSha256": "bd03077f0a7cb0604538064390c16ff20b33396ab212f1280f74da25aec43283",
   "catalog": {
     "schemaVersion": 1,
     "lessons": [
@@ -19,16 +19,25 @@
           "planning",
           "construction",
           "logistics",
-          "power"
+          "power",
+          "blue-bootstrap"
         ],
         "guidance": {
-          "en": "Maintain the source, extraction, processing, power, transport, consumption and save dependencies for the current objective. Record estimated quantities with their Native validation status. Define the next stage by an observable game outcome, then refine its actions from fresh observations and the remaining actual budget.",
-          "zhCN": "维护当前目标的矿源、采集、加工、供电、运输、消费及保存依赖。估算数量同时记录原生验证状态。下一阶段以可观察的游戏成果定义，再根据新鲜观察和实际剩余额度细化动作。"
+          "en": "Maintain the source, extraction, processing, power, transport, consumption and save dependencies for the current objective. Record estimated quantities with their Native validation status. Define the next stage by an observable game outcome, then refine its actions from fresh observations and the remaining actual budget.\n\nBlue-matrix bootstrap follows the complete chain: small normal unlock supplies, iron/copper miners, iron/magnet/copper smelting, coils/circuit boards, matrix production, automatic output and storage. Derive all quantities, recipe batches, machine speeds and shared demand from the current catalog. Handcraft covers bootstrap and construction. Prove the first powered miner and real ore growth early, then extend upstream-to-downstream. Preplan machine ports, sorter spans and pure material routes before placing buildings. Select the exact scope with deck_goal_plan.activeTools using registered spherewright_* names. The host exposes matching typed deck_execute_* tools with their real argument schemas.",
+          "zhCN": "维护当前目标的矿源、采集、加工、供电、运输、消费及保存依赖。估算数量同时记录原生验证状态。下一阶段以可观察的游戏成果定义，再根据新鲜观察和实际剩余额度细化动作。\n\n蓝糖开局按整链推进：最小正常解锁物资→铁/铜采矿→铁块/磁铁/铜块冶炼→磁线圈/电路板→矩阵站生产→自动出料储存。数量、批量、设备速度和共享需求均从当前目录核算。手搓服务于启动和建材。优先证明首个供电矿机的矿石增长，再逐层扩展。设备落位前规划真实端口、分拣器跨度和纯物料路径。使用deck_goal_plan.activeTools选择已注册的spherewright_*原生名，宿主会提供对应deck_execute_*及真实参数定义。"
         },
         "sources": [
           {
             "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
             "section": "P0 整链规划"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-015, EXP-045, EXP-184, EXP-212"
+          },
+          {
+            "path": "operations/lessons/commanddeck-blue-bootstrap-2026-11-12.md",
+            "section": "Tool activation / 工具启用"
           }
         ]
       },
@@ -42,16 +51,21 @@
           "handcraft",
           "research",
           "inventory",
-          "transfer"
+          "transfer",
+          "blue-bootstrap"
         ],
         "guidance": {
-          "en": "Observe package stock, automatic research-buffer equivalents and completed research separately. Automatic research can consume newly received or crafted products immediately. Package transfers use the actual package count. Confirm manufacturing from its original native task evidence and confirm research from uploaded progress and unlock state.",
-          "zhCN": "分别观察背包实物、自动科研缓存等值和已完成科研。自动科研可能立即消耗刚取得或制造的产物。背包转移采用实际背包数量。制造核对原生原任务证据，科研核对上传进度与解锁状态。"
+          "en": "Observe package stock, automatic research-buffer equivalents and completed research separately. Automatic research can consume newly received or crafted products immediately. Package transfers use the actual package count. Confirm manufacturing from its original native task evidence and confirm research from uploaded progress and unlock state.\n\nFor each early technology, read the complete progression catalog, select unfinished entries with completed prerequisites and use fresh Native admission. Observe the available package, forge-buffered inputs, reactor and mecha research points before budgeting the next batch. The forge terminal proves completion even when automatic research immediately consumes products. Research buffers use 3600 points per matrix, with only whole items available for takeback. A queued technology still needs actual completion. Gather only the missing bootstrap materials, then use the first automatic resource line to supply further construction.",
+          "zhCN": "分别观察背包实物、自动科研缓存等值和已完成科研。自动科研可能立即消耗刚取得或制造的产物。背包转移采用实际背包数量。制造核对原生原任务证据，科研核对上传进度与解锁状态。\n\n每项早期科技都读取完整progression目录，选择前置已完成的未完成项目并经新鲜原生预检。备料同时看可用背包、制造队列缓冲、反应室及机甲科研点数。自动科研可能立即消耗成品，制造完成结合原生forge终态和科研实际增量核验。科研缓冲按每矩阵3600点计，仅整数部分可退回物品。科技入队后还须观察真正解锁。只补启动缺料，随后用首条自动资源线供施工。"
         },
         "sources": [
           {
             "path": "operations/experience-ledger.md",
             "section": "EXP-338"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-018, EXP-100, EXP-183, EXP-191, EXP-239"
           }
         ]
       },
@@ -90,11 +104,12 @@
         "topics": [
           "execution",
           "failure",
-          "waiting"
+          "waiting",
+          "blue-bootstrap"
         ],
         "guidance": {
-          "en": "Keep the original action ID, idempotency key, accepted receipt and actual spending. A caller observation timeout leaves an accepted game action available for original-result polling. Diagnose current prebuild and drone evidence when construction takes longer. Classify a local parsing or display failure using retained receipts before choosing recovery. Native unknown outcomes keep their write quarantine.",
-          "zhCN": "保留原 actionId、幂等键、受理回执和实际消耗。调用端观察超时后，已受理游戏动作继续查询原结果。施工较慢时核对当前预建筑及无人机证据。解析或展示故障先据保留回执分类，再选择恢复方式。原生未知结果继续保持写入隔离。"
+          "en": "Keep the original action ID, idempotency key, accepted receipt and actual spending. A caller observation timeout leaves an accepted game action available for original-result polling. Diagnose current prebuild and drone evidence when construction takes longer. Classify a local parsing or display failure using retained receipts before choosing recovery. Native unknown outcomes keep their write quarantine.\n\nOpening movement must account for the landing capsule, visible in vegetation as proto9999. Inspect its current position and yields. A capsule in the straight approach can stall both Move and Harvest. After a known stall, make one approximately5m tangent escape away from a single observed obstacle, or at most four distinct orthogonal4m probes for ambiguous geometry. Stop probing after a successful escape, fresh-read Walk/low speed/energy and route laterally around the obstacle before the business action. Nearness permits a fresh business prepare. Keep the exact failed originals. Each accepted action keeps its own ID and idempotency key through terminal reconciliation.",
+          "zhCN": "保留原 actionId、幂等键、受理回执和实际消耗。调用端观察超时后，已受理游戏动作继续查询原结果。施工较慢时核对当前预建筑及无人机证据。解析或展示故障先据保留回执分类，再选择恢复方式。原生未知结果继续保持写入隔离。\n\n开局须考虑着陆舱，它以vegetation、proto9999可见，先核当前位置和产物。舱体位于直线路径时，Move和Harvest接近都会卡住。已知停滞后，单一明确障碍沿切平面背离约5米；几何含糊时最多四个不同正交4米探测，成功即止。脱困后复读Walk、低速和能量，并从侧向路径绕过障碍再做业务。进入操作范围就可新鲜预检原业务。失败原件完整保留，每个已受理动作沿原actionId和幂等键核销到终态。"
         },
         "sources": [
           {
@@ -104,6 +119,10 @@
           {
             "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
             "section": "P1 失败处理与保全"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-031, EXP-036, EXP-039, EXP-057, EXP-061, EXP-076, EXP-179"
           }
         ]
       },
@@ -168,11 +187,12 @@
         "topics": [
           "planning",
           "verification",
-          "production"
+          "production",
+          "blue-bootstrap"
         ],
         "guidance": {
-          "en": "Define stages using constructed facilities, measured power service, material movement, downstream consumption and the declared production window. Keep acceptance, actual debit, completed work and sustained production as individually evidenced facts. Reuse retained observations when correcting local accounting and preserve each observation's source and time.",
-          "zhCN": "以设施落地、实测供电、物料流动、下游消费和声明的产量窗口定义阶段。受理、实际扣料、施工完成及持续生产分别保留对应证据。修正本地计数时复用保留观察，并保留来源和时间。"
+          "en": "Define stages using constructed facilities, measured power service, material movement, downstream consumption and the declared production window. Keep acceptance, actual debit, completed work and sustained production as individually evidenced facts. Reuse retained observations when correcting local accounting and preserve each observation's source and time.\n\nEnergy, power and logistics are separate checks. Before travel read core energy, actual fuel and the real wireless tower. Obtain normally available accepted fuel and refuel exact stacks. Base regeneration is an emergency fallback. Ordinary Tesla2201 supplies network coverage; wireless2202 needs separate evidence. Budget total peak load, power every critical sorter and prove actual connected network/serve ratio. Machine placement does not prove later sorter connectivity. Read both endpoint slots and material flow. Configure empty mixed-source outlets before loading, or use pure dedicated sources. Verify automatic matrix input/output and a complete sustained Native production window, then normal Save and durable coverage.",
+          "zhCN": "以设施落地、实测供电、物料流动、下游消费和声明的产量窗口定义阶段。受理、实际扣料、施工完成及持续生产分别保留对应证据。修正本地计数时复用保留观察，并保留来源和时间。\n\n能量、电网和物流分别核验。移动前读取核心、实有燃料和真实无线塔；正常获取符合目录资格的燃料后精确加注。基础回能用于应急。普通电塔2201供电网覆盖，无线塔2202另验回充。按整网峰值预算，并逐个核关键分拣器接网和实际服务率。建筑落位通过后还须核分拣器两端端口、互惠连接与真实物料流。共享混料源先空载配过滤再装料，或使用纯源专线。蓝糖验收覆盖自动输入/输出及完整连续原生产率窗，再普通保存并核持久覆盖。"
         },
         "sources": [
           {
@@ -186,6 +206,10 @@
           {
             "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
             "section": "适合下一轮直接复用的工作方式"
+          },
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-019, EXP-023, EXP-024, EXP-035, EXP-041, EXP-058, EXP-074, EXP-206"
           }
         ]
       },
@@ -212,6 +236,258 @@
           {
             "path": "operations/lessons/v0.5-voyager-2026-10-29.md",
             "section": "P1 验证与交付顺序"
+          }
+        ]
+      },
+      {
+        "id": "opening-obstructions",
+        "title": {
+          "en": "Opening capsule and short escape routes",
+          "zhCN": "起始舱与短距离绕行"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "movement"
+        ],
+        "guidance": {
+          "en": "Inspect the current vegetation/capsule and nearby colliders. A successful escape is followed by a fresh player read and a lateral waypoint around the known obstruction. A later approach through the same collider needs a different route. Use distinct, bounded tangent probes and preserve each original result. Resource node IDs come from resource observations; factory object IDs have their own namespace. A valid harvest prepare can replace an unnecessary final approach Move when normal interaction range is already satisfied.",
+          "zhCN": "读取当前植被/着陆舱及附近碰撞证据。短距脱困成功后复读玩家，再以侧向路点绕过已知障碍。后续业务接近若仍穿过同一舱体，应修订路线。使用不同、有界的切向探测并保留各原终态。资源nodeId来自资源读取，工厂objectId使用独立命名空间。已在原生交互范围内时，直接预检采集业务。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-031, EXP-040, EXP-057, EXP-061, EXP-076, EXP-179"
+          }
+        ]
+      },
+      {
+        "id": "fuel-and-energy",
+        "title": {
+          "en": "Normal fuel and travel reserves",
+          "zhCN": "正常燃料与移动余量"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "energy"
+        ],
+        "guidance": {
+          "en": "Read the package and reactor independently. Current item fuel heat, fuel type and acceptedAsMechaFuel determine eligibility. Normal exact-stack refuel is required. Plan travel from fresh energy and preserve a useful arrival reserve. Prefer nearby owned fuel or a verified wireless tower. Low-rate base core regeneration can fund emergency short movement while grounded and idle. Every movement terminal requires fresh position, mode, speed and energy; observe a stable Walk handoff before further construction.",
+          "zhCN": "背包与反应室分别读取。按当前物品热值、fuelType及acceptedAsMechaFuel确定资格，再正常精确加注。用实时能量预算路线并保留抵达余量，优先附近正常燃料或已验证无线塔。静止、落地时可利用低速基础回能支撑应急短步。每段终态后复读位置、模式、速度和能量，确认稳定Walk后继续施工。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-022, EXP-035, EXP-041, EXP-046, EXP-209"
+          }
+        ]
+      },
+      {
+        "id": "bootstrap-research",
+        "title": {
+          "en": "Unlock only the needed early production path",
+          "zhCN": "按需解锁早期生产路径"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "research"
+        ],
+        "guidance": {
+          "en": "Read unfinished technologies and completed prerequisites from the full catalog, then use fresh Native queue admission. Budget the actual required bootstrap materials. Batch crafting moves ingredients into the forge queue, while automatic research may consume finished components immediately. Use original forge completion and research uploads together. Observe completed technology before depending on an unlocked recipe or sorter filter. Research buffers expose points and unitsPerItem; retain partial points and account for whole-item takeback.",
+          "zhCN": "从完整目录读取未完成科技和已满足前置，再经新鲜原生门排队。核算实际所需启动物资。批量制造先把原料转入队列，自动科研可立即消费成品，结合原forge完成及科研上传判断。依赖新配方或过滤物品前读取科技已完成。科研缓冲按point及unitsPerItem解释，保留部分点数并核算整数物品退回。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-018, EXP-094, EXP-100, EXP-183, EXP-191, EXP-239"
+          }
+        ]
+      },
+      {
+        "id": "blue-chain-bom",
+        "title": {
+          "en": "Blue matrix full-chain sizing",
+          "zhCN": "蓝糖整链规模与启动顺序"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "production"
+        ],
+        "guidance": {
+          "en": "Build iron and copper supply, iron/magnet/copper smelting, coils/circuit boards, matrix production and automatic product storage. Use current recipe input/output batches, durations and actual machine multipliers to size every shared intermediate for the combined target. Prove one powered resource producer first. Ordinary handcraft supplies bootstrap and buildings. Feed the final acceptance chain automatically from resource production, observe rising intermediate and final buffers and fix the first material deficit before expanding terminal consumers.",
+          "zhCN": "建设铁铜供给、铁块/磁铁/铜块冶炼、磁线圈/电路板、矩阵生产及自动成品仓储。按当前配方输入输出批量、耗时和设备实际倍率，核算每种共享中间品的合计目标需求。先证明一个受电资源生产点。正常手搓用于启动和建材。最终验收链从资源生产自动供料，观察中间品与成品增长，先补首个缺料再扩终端。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-015, EXP-184, EXP-187"
+          }
+        ]
+      },
+      {
+        "id": "machine-port-layout",
+        "title": {
+          "en": "Plan ports and connected layout before placement",
+          "zhCN": "落位前规划端口及连接布局"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "geometry"
+        ],
+        "guidance": {
+          "en": "An accepted building location proves its own placement. Use the inspected native building/belt ports, planned snapped position, orientation and sorter span to plan the next links before committing more buildings. Verify every planned connection after construction. A TooFar or incompatible endpoint result calls for a revised layout grounded in fresh geometry. Keep distinct coincident endpoints and preserve all previous connections. Use the public MCP scalar position fields and inspect plannedPosition.",
+          "zhCN": "建筑预检通过证明该建筑落位。追加施工前使用实读原生建筑/货带端口、吸附后的计划位置、朝向和分拣器跨度规划连接。建后核全部计划连接。TooFar或端点不兼容时，按新鲜几何修订布局。区分坐标重合的不同端点并保留全部已有连接。公共MCP使用其标量位置字段，核对plannedPosition。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-027, EXP-042, EXP-045, EXP-193, EXP-218, EXP-226"
+          }
+        ]
+      },
+      {
+        "id": "power-network-coverage",
+        "title": {
+          "en": "Connected generation, peak load and coverage",
+          "zhCN": "接网发电、峰值负载与覆盖"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "power"
+        ],
+        "guidance": {
+          "en": "Read each consumer network ID and service ratio, and every critical sorter independently. Count work/idle/current maxima and old consumers that a new pole connects. Use the actual shell-projected Native connection geometry and current wind generation. Leave geometric and power margin. Thermal generation requires a normally fueled start path; a powerless fuel sorter cannot bootstrap its own isolated generator. Actual continuous fuel supply and power delivery need observation.",
+          "zhCN": "逐个读取消费者网络及服务率，关键分拣器单独检查。统计work/idle/current峰值和新电塔同时接入的旧负载。使用原生壳面接网几何和当前实际风能，并留几何与功率余量。热电需要正常供燃料的启动路径，孤网中的无电供煤分拣器无法自举。持续供料与供电以实际观察核验。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-016, EXP-017, EXP-019, EXP-024, EXP-025, EXP-208"
+          }
+        ]
+      },
+      {
+        "id": "powered-logistics",
+        "title": {
+          "en": "Sorters need their own power and reciprocal endpoints",
+          "zhCN": "分拣器单独供电与双端互惠"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "logistics"
+        ],
+        "guidance": {
+          "en": "Inspect source and destination endpoint slots, Native pick/insert targets, held items and the actual transfer flow. A powered machine does not power its adjacent sorter. Validate both endpoints and preserve previous connections after every new sorter or upgrade. Cached targets and one observed material transfer describe operation at that moment. Persistent construction acceptance also requires complete reciprocal factory topology. Quantify each span-dependent sorter capacity against its material demand.",
+          "zhCN": "读取源/目标端槽位、原生pick/insert目标、持货及实际流量。机器受电后仍须独立确认相邻分拣器受电。新建或升级后校验双端并保留原连接。缓存目标和单次搬货描述当前运行，持久施工验收同时需要完整互惠工厂拓扑。按原生跨度周期核算每条分拣器能力与物料需求。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-024, EXP-027, EXP-028, EXP-193, EXP-212"
+          }
+        ]
+      },
+      {
+        "id": "belt-flow-routing",
+        "title": {
+          "en": "Directed belt topology and open outputs",
+          "zhCN": "有向货带拓扑与通畅出料"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "logistics"
+        ],
+        "guidance": {
+          "en": "Use real belt path endpoints and direction. Production buildings connect through sorters and actual belt slots. Observe material arrival through the directed path and preserve existing reciprocal edges. An output path needs usable product storage or consumption. A saturated output buffer can explain a stopped producer, while first production and sustainable flow have different evidence windows. Shared belt capacity includes all competing material streams and each internal link.",
+          "zhCN": "使用真实带路端点及方向。生产建筑通过分拣器和真实货带槽位连接，沿有向路径观察送达并保留已有互惠边。出料需要可用储存或消费。成品缓冲满可解释停机，首产与持续流转各按对应窗口核验。共享货带能力同时计入竞争物料和内部各段。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-020, EXP-032, EXP-037, EXP-158, EXP-212"
+          }
+        ]
+      },
+      {
+        "id": "clean-material-sources",
+        "title": {
+          "en": "Configure mixed-source filters before loading",
+          "zhCN": "混料源装料前完成过滤"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "logistics"
+        ],
+        "guidance": {
+          "en": "Prefer dedicated pure sources for a small bootstrap line. With shared storage, create all outlets while empty, configure exact unlocked item filters in the Native zero-held-item window, confirm power and reciprocal connections, then load materials normally. A downstream recipe accepts only its own ingredients but cannot sort an unfiltered upstream mixed belt. If material already entered the wrong path, read actual queues/held items and use conservative normal transfer or pure-source rerouting.",
+          "zhCN": "小型启动线优先专用纯源。共用储仓时，先空载建好全部出口，在原生零持货窗口配置已解锁物品的精确过滤，确认供电与互惠连接后正常装料。下游配方的输入限制无法替上游无过滤混料带分流。物料已进错路时，读取真实队列及持货，再正常守恒转移或改用纯源旁路。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-044, EXP-058, EXP-074, EXP-094, EXP-167"
+          }
+        ]
+      },
+      {
+        "id": "storage-and-transfers",
+        "title": {
+          "en": "Whole material accounting through active storage",
+          "zhCN": "活跃仓储的完整物料核算"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "storage"
+        ],
+        "guidance": {
+          "en": "Budget package, storage, forge, sorter-held and research buffers together. A successful exact transfer may be followed immediately by normal production or withdrawal. Use the original Native receipt and player-side exact delta, then inspect concurrent buffers to explain the later aggregate. Treat storage capacity and real connection ports separately. Source fingerprints use the exact documented mode hash domain; sorter-filter uses configurationStateHash and storage capacity uses full stateHash.",
+          "zhCN": "同时核算背包、储存、制造队列、分拣器持货和科研缓冲。精确转移成功后可立即发生正常生产或取料，依据原生回执及玩家精确差量，再读并发缓冲解释后续聚合值。容量和真实连接口分别检查。每种模式使用其约定哈希域，分拣器过滤用configurationStateHash，仓储容量用完整stateHash。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-018, EXP-080, EXP-203, EXP-225, EXP-239"
+          }
+        ]
+      },
+      {
+        "id": "throughput-window",
+        "title": {
+          "en": "Continuous automatic matrix output",
+          "zhCN": "连续自动蓝糖产出"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "verification"
+        ],
+        "guidance": {
+          "en": "Use observed machine speed and recipe batches for capacity estimates, then verify the actual item6001 Native production window. Cover the complete requested continuous game-time interval with configuration identity and actual supply/output evidence. Keep input reserves and upstream resource/power observations. Sustained production is proven by actual automatic feed and output through the fixed acceptance window. Interpret matrix research points using their explicit units.",
+          "zhCN": "用实读设备速度和配方批量估产能，再核验item6001原生产率窗。覆盖要求的完整连续游戏时间，并保留配置身份、真实供料与出料证据，复读输入储备、上游资源和电网。持续生产依据固定验收窗口内真实自动输入与输出，科研矩阵点数按明确单位解释。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-155, EXP-156, EXP-184, EXP-191, EXP-206"
+          }
+        ]
+      },
+      {
+        "id": "milestone-persistence",
+        "title": {
+          "en": "Proven first production and normal save",
+          "zhCN": "真实首产与普通保存"
+        },
+        "topics": [
+          "blue-bootstrap",
+          "persistence"
+        ],
+        "guidance": {
+          "en": "At each production milestone, use the same producer to prove zero-to-positive output or continued accumulation. Complete the original accepted action, perform a normal save and verify saved progress coverage. Preserve observations and unresolved originals across later maintenance. Full storage is a cue to add a real downstream outlet or consumption path. The final record distinguishes bootstrap handcraft, temporary manual feed and the fully automatic raw-resource chain.",
+          "zhCN": "每个产线里程碑由同一生产者证明从零到正产出或持续累积，完成原已受理动作后普通保存并核保存覆盖。维护期间保留观察及未核销原件。满仓后补真实下游出料或消费路径。最终记录分别说明启动手搓、临时人工供料以及原矿起步的完整自动链。"
+        },
+        "sources": [
+          {
+            "path": "operations/experience-ledger.md",
+            "section": "EXP-015, EXP-037, EXP-155, EXP-179"
           }
         ]
       }
