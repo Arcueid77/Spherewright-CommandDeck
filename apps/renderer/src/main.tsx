@@ -505,6 +505,7 @@ function App() {
 		api.getPanel(navigation.panel)?.api.setActive();
 	}, [navigation]);
 	useEffect(() => window.deck.onEvent((event) => { if (event.type === "game-confirmation-state") setConfirmation(event.busy === true); }), []);
+	useEffect(() => window.deck.onEvent((event) => { if (event.type === "open-game-agent" && dock.current) addGamePanel(dock.current, true); }), []);
 	useEffect(() => { if (settings || confirmation || diagnostics) document.body.dataset.deckOverlay = settings ? "settings" : diagnostics ? "diagnostics" : "confirmation"; else delete document.body.dataset.deckOverlay; window.dispatchEvent(new Event("deck-overlay")); }, [settings, confirmation, diagnostics]);
 	return (
 		<div className="app">

@@ -22,6 +22,7 @@ import { runGatewaySmoke } from "./agent-gateway-smoke.mjs";
 import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
 import { settleShutdown, closeUiAndWait } from "./shutdown-drain.mjs";
 import { GameTasks } from "./game-tasks.mjs";
+import { createOwnerGameControl } from "./owner-game-control.mjs";
 import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
@@ -135,6 +136,18 @@ const state = {
 	layoutMode: smoke && !popoutCase && !fullProfileFixture && !diagnosticSmoke && !commandCase && !developmentUsageCase && !gatewaySmoke && !process.argv.includes("--smoke-workbench") && !process.argv.includes("--smoke-journal") && !process.argv.includes("--smoke-bridge") && !process.argv.includes("--smoke-observation") && !gameSmoke ? "m0" : "development",
 	events: [],
 };
+export function ownerGameControl() {
+	return createOwnerGameControl({
+		enabled: process.argv.includes("--owner-game-control") && !smoke && !observationPolicy,
+		ready: async () => {
+			const deadline = Date.now() + 60000;
+			while ((!workbenchReady || !ui?.registered || initializingRuntime) && !stopping && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
+			if (!workbenchReady || !ui?.registered || initializingRuntime || stopping) throw new Error("OWNER_GAME_RUNTIME_UNAVAILABLE");
+		},
+		native, game, api, approvalAuthority: gameApprovalAuthority,
+		openPanel: () => emit({ type: "open-game-agent" }),
+	});
+}
 const diagnosticFailure = error => ({ unavailableCode: diagnosticCode(error?.message) ?? "COMPONENT_SNAPSHOT_UNAVAILABLE" });
 const videoPlayback = new VideoPlaybackSessions({ getArchive: () => videoArchive, isCurrent: (owner, generation) => owner === ui && owner.registered && owner.documentGeneration === generation && !stopping && !recovering });
 function invalidateVideo(owner) { void videoPlayback.invalidate(owner).catch(() => console.error("VIDEO_READER_CLOSE_UNCONFIRMED")); }
