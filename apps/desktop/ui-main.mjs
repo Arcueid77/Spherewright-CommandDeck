@@ -14,6 +14,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: rendererScheme, privileges: { st
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const rendererDirectory = join(root, "dist/renderer");
 const smoke = process.argv.includes("--smoke-ui");
+const localSmoke = smoke && process.env.CI !== "true";
 const gameSmoke = smoke && process.argv.includes("--smoke-game-ui");
 const diagnosticSmoke = smoke && process.argv.includes("--smoke-diagnostics-ui");
 let syntheticDiagnosticAnswer = null;
@@ -187,8 +188,8 @@ if (typeof process.send !== "function") {
 		.then(async () => {
 			await protocol.handle(rendererScheme, createRendererProtocol(rendererDirectory));
 			window = new BrowserWindow({
-				show: !smoke,
-				skipTaskbar: smoke,
+				show: !localSmoke,
+				skipTaskbar: localSmoke,
 				width: 1440,
 				height: 940,
 				minWidth: 1000,
