@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
 	DockviewReact,
@@ -9,7 +9,7 @@ import "dockview-react/dist/styles/dockview.css";
 import "./style.css";
 import { WorkbenchProvider, FilesPanel, EditorPanel, DevelopmentPanel, TasksPanel, OutputPanel, persistedLayout, useWorkbenchNavigation, useDevelopmentActiveTask, type Workspace } from "./workbench";
 import { ProviderSettings, type Profile } from "./providers";
-import { BridgeProvider, ConnectionPanel, ResearchPanel, MechaPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
+import { BridgeProvider, ObservationPanel, ConnectionPanel, ResearchPanel, MechaPanel, ProductionPanel, PowerPanel, LogisticsPanel, useBridge } from "./bridge";
 import { GameTasksProvider, GameTasksPanel, GameTaskSummary, useGameTasks } from "./game-tasks";
 import { DiagnosticDialog, type DiagnosticOptions, type DiagnosticPreview, type DiagnosticSave } from "./diagnostics";
 import { JournalPanel } from "./journal";
@@ -218,8 +218,10 @@ function AgentPanel() {
 		</div>
 	);
 }
+let viewportOwner: HTMLDivElement | null = null;
 function GamePanel(props: IDockviewPanelProps) {
 	const area = useRef<HTMLDivElement>(null);
+	const windowSelectId = useId();
 	const [targets, setTargets] = useState<Target[]>([]);
 	const [selected, setSelected] = useState("");
 	const [state, setState] = useState<NativeState>();
@@ -239,19 +241,19 @@ function GamePanel(props: IDockviewPanelProps) {
 		if (!node) return;
 		const update = () => {
 			const rect = node.getBoundingClientRect();
+			const visible = !document.body.dataset.deckOverlay
+				&& !node.closest<HTMLElement>("[data-workspace]")?.hidden
+				&& props.api.isVisible && rect.width > 1 && rect.height > 1
+				&& document.visibilityState === "visible";
+			if (!visible && viewportOwner !== node) return;
+			viewportOwner = visible ? node : null;
 			void window.deck
 				.viewport({
 					x: Math.max(0, rect.x),
 					y: Math.max(0, rect.y),
 					width: Math.max(1, rect.width),
 					height: Math.max(1, rect.height),
-					visible:
-						!document.body.dataset.deckOverlay &&
-						!node.closest<HTMLElement>("[data-workspace]")?.hidden &&
-						props.api.isVisible &&
-						rect.width > 1 &&
-						rect.height > 1 &&
-						document.visibilityState === "visible",
+					visible,
 				})
 				.catch(() => {});
 		};
@@ -280,13 +282,10 @@ function GamePanel(props: IDockviewPanelProps) {
 			window.removeEventListener("deck-overlay", update);
 			window.removeEventListener("deck-workspace", update);
 			document.removeEventListener("visibilitychange", update);
-			void window.deck.viewport({
-				x: 0,
-				y: 0,
-				width: 1,
-				height: 1,
-				visible: false,
-			});
+			if (viewportOwner === node) {
+				viewportOwner = null;
+				void window.deck.viewport({ x: 0, y: 0, width: 1, height: 1, visible: false });
+			}
 		};
 	}, []);
 	async function act(action: () => Promise<unknown>, message: string) {
@@ -298,70 +297,34 @@ function GamePanel(props: IDockviewPanelProps) {
 			setNotice("操作未通过。请确认窗口状态；未做游戏输入或存档操作。");
 		}
 	}
-	return (
-		<div className="game-panel">
-			<div className="toolbar">
-				<select
-					value={selected}
-					onChange={(e) => setSelected(e.target.value)}
-					disabled={state?.attached}
-				>
-					{targets.map((target) => (
-						<option key={target.id} value={target.id}>
-							{target.kind === "dsp" ? "DSP" : "替身"} · {target.title} · PID{" "}
-							{target.pid}
-						</option>
-					))}
-				</select>
-				<button onClick={() => void refresh()}>刷新窗口</button>
-				<button
-					className="accent"
-					disabled={!selected || state?.attached}
-					onClick={() =>
-						void act(
-							() => window.deck.attach(selected),
-							"窗口连接已建立；游戏任务请在“游戏 Agent”面板单独发起。",
-						)
-					}
-				>
-					嵌入
-				</button>
-				<button
-					disabled={!state?.attached && !state?.active && !state?.fault}
-					onClick={() =>
-						void act(() => window.deck.detach(), "窗口已正常脱离。")
-					}
-				>
-					还原窗口
-				</button>
-				<button
-					onClick={() =>
-						void act(
-							() => window.deck.startFixture(),
-							"宿主替身已启动，可选择并嵌入。",
-						)
-					}
-				>
-					启动宿主替身
-				</button>
-			</div>
-			<div className="viewport" ref={area}>
-				{!state?.attached && (
-					<div className="viewport-empty">
-						<div className="orbit" />
-						<div className="eyebrow">NATIVE GAME VIEWPORT</div>
-						<h1>原生游戏视口</h1>
-						<p>选择已启用窗口适配器的游戏，或使用宿主替身</p>
-						<span>M0 开发中 · 真实游戏交互仍待验收</span>
+
+	return <div className="game-panel">
+		{state?.attached && <div className="toolbar viewport-toolbar">
+			<span className="viewport-connection"><span className={state.nativeParentMatches ? "dot live" : "dot"} />{state.kind === "dsp" ? "原生游戏窗口" : "宿主窗口"}已嵌入</span>
+			<button onClick={() => void act(() => window.deck.detach(), "窗口已正常脱离。")}>还原窗口</button>
+		</div>}
+		<div className="viewport" ref={area}>
+			{!state?.attached && <div className="viewport-empty">
+				<div className="viewport-connect">
+					<h1>连接游戏窗口</h1>
+					<p role="status">{state?.fault ? "窗口连接需要处理，请还原后重新连接。" : notice}</p>
+					<label htmlFor={windowSelectId}>窗口选择</label>
+					<select id={windowSelectId} value={selected} onChange={event => setSelected(event.target.value)}>
+						{!targets.length && <option value="">尚未发现可连接窗口</option>}
+						{targets.map(target => <option key={target.id} value={target.id}>{target.kind === "dsp" ? "DSP" : "替身"} · {target.title} · PID {target.pid}</option>)}
+					</select>
+					<div className="actions">
+						<button className="accent" disabled={!selected} onClick={() => void act(() => window.deck.attach(selected), "窗口连接已建立。")}>连接并嵌入</button>
+						<button onClick={() => void refresh()}>刷新窗口</button>
+						{(state?.active || state?.fault) && <button onClick={() => void act(() => window.deck.detach(), "窗口已正常脱离。")}>还原窗口</button>}
 					</div>
-				)}
-			</div>
-			<div className="statusline">
-				<span className={state?.nativeParentMatches ? "dot live" : "dot"} />
-				{notice}
-			</div>
+					<button className="text-button" onClick={() => void act(() => window.deck.startFixture(), "宿主替身已启动，可选择并嵌入。")}>使用宿主替身</button>
+					<p className="muted">支持原生窗口嵌入与还原，真实游戏输入与接手仍待实机验收。</p>
+					{state?.fault && <details><summary>窗口连接详情</summary><code>{state.fault}</code></details>}
+				</div>
+			</div>}
 		</div>
-	);
+	</div>;
 }
 function EvidencePanel() {
 	return (
@@ -428,6 +391,7 @@ const components = {
 	videos: VideosPanel,
 	files: FilesPanel, editor: EditorPanel, development: DevelopmentPanel, tasks: TasksPanel, output: OutputPanel,
 	bridge: ConnectionPanel, research: ResearchPanel, mecha: MechaPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel,
+	observation: ObservationPanel,
 	"game-agent": GameTasksPanel, "game-summary": GameTaskSummary,
 };
 
@@ -442,11 +406,14 @@ const panelTitles: Record<string, string> = {
 };
 function addPanel(api: DockApi, id: string) {
 	const existing = api.getPanel(id);
-	if (existing) { existing.api.setActive(); return; }
+	const multiple = ["production", "power", "logistics"].includes(id);
+	if (existing && !multiple) { existing.api.setActive(); return; }
+	let instance = id, index = 1;
+	while (api.getPanel(instance)) instance = id + "-" + ++index;
 	const reference = api.getPanel("output") ?? api.getPanel("editor") ?? api.getPanel("game") ?? api.panels[0];
 	const bottom = ["output", "tasks", "events", "journal", "videos", "model-usage"].includes(id);
 	api.addPanel({
-		id, component: id, title: panelTitles[id],
+		id: instance, component: id, title: panelTitles[id] + (index > 1 ? " " + index : ""),
 		...(reference ? { position: { referencePanel: reference.id, direction: bottom && !api.getPanel("output") ? "below" as const : "within" as const } } : {}),
 		...(bottom ? { initialHeight: 240 } : {}),
 	});
@@ -455,7 +422,7 @@ function buildGameLayout(api: DockApi) {
 	api.addPanel({ id: "game", component: "game", title: panelTitles.game });
 }
 function buildObservationLayout(api: DockApi) {
-	api.addPanel({ id: "bridge", component: "bridge", title: panelTitles.bridge });
+	api.addPanel({ id: "observation", component: "observation", title: "当前世界" });
 }
 function buildDevelopmentLayout(api: DockApi) {
 	api.addPanel({ id: "editor", component: "editor", title: panelTitles.editor });
@@ -466,10 +433,11 @@ const builders = { game: buildGameLayout, observation: buildObservationLayout, d
 
 function App() {
 	const bridge = useBridge().state;
-	const game = useGameTasks().state;
+	const { state: game, healthy: gameHealthy } = useGameTasks();
 	const activeDevelopmentTask = useDevelopmentActiveTask();
 	const observationOnly = Boolean(bridge.observationPolicy);
 	const [power, setPower] = useState<PowerState | null>(null);
+	const [native, setNative] = useState<NativeState | null>(null);
 	const [workspace, setWorkspace] = useState<Workspace | null>(null);
 	const [visited, setVisited] = useState<Workspace[]>([]);
 	const [settings, setSettings] = useState(false);
@@ -487,7 +455,8 @@ function App() {
 	useEffect(() => {
 		let active = true, notified = false;
 		void window.deck.snapshot().then(value => { if (active && !notified) setPower(value.power); }).catch(() => {});
-		const unsubscribe = window.deck.onEvent(event => { if (event.type === "system-power" && event.power) { notified = true; setPower(event.power); } });
+		void window.deck.status().then(value => { if (active) setNative(value); }).catch(() => {});
+		const unsubscribe = window.deck.onEvent(event => { if (event.type === "native-state") void window.deck.status().then(value => { if (active) setNative(value); }).catch(() => {}); if (event.type === "system-power" && event.power) { notified = true; setPower(event.power); } });
 		void Promise.all([
 			window.deck.workbench<Workspace | null>("ui-get", { key: "workspace" }),
 			...(["game", "observation", "development"] as const).map(value => persistedLayout.load(value)),
@@ -563,7 +532,8 @@ function App() {
 		await persistedLayout.save(workspace, api.toJSON()).catch(() => setLayoutNotice("默认布局未能保存。"));
 	}
 	const connected = bridge.observation?.connected === true;
-	const connectionText = power && power.phase !== "ready" ? "连接待检查" : bridge.error ? "连接需要处理" : connected ? "MCP 已连接" : "游戏未连接";
+	const taskNeedsAttention = gameHealthy && (game.error || game.unresolved.length > 0 || !game.runtimeAvailable || !game.storageAvailable);
+	const connectionText = power && power.phase !== "ready" ? "连接待检查" : bridge.error || native?.fault ? "连接需要处理" : taskNeedsAttention ? "任务需要处理" : connected ? "MCP 已连接" : native?.attached ? "窗口已嵌入 · MCP 未连接" : "游戏未连接";
 	const panels = workspace === "development"
 		? ["files", "editor", "development", "output", "tasks", "game-summary", "production", "power", "logistics", "events"]
 		: workspace === "observation"
@@ -575,7 +545,7 @@ function App() {
 			<nav className="workspace-navigation" aria-label="工作区">
 				{(Object.keys(workspaceNames) as Workspace[]).map(value => <button key={value} data-workspace-button={value} aria-current={workspace === value ? "page" : undefined} onClick={() => switchWorkspace(value)}>{workspaceNames[value]}</button>)}
 			</nav>
-			<button className={"global-connection" + (connected ? " connected" : "")} onClick={() => switchWorkspace("observation")}><span className={connected ? "dot live" : "dot"} />{connectionText}</button>
+			<button className={"global-connection" + (connected ? " connected" : "")} onClick={() => switchWorkspace(taskNeedsAttention ? "game" : "observation")}><span className={connected ? "dot live" : "dot"} />{connectionText}</button>
 			<div className="header-menus" ref={menuArea}>
 				{(["panels", "layout", "more"] as const).map(value => <button key={value} data-menu={value} disabled={!ready} aria-haspopup="menu" aria-expanded={menu === value} onClick={() => setMenu(menu === value ? null : value)}>{value === "panels" ? "＋ 面板" : value === "layout" ? "布局" : "更多"}</button>)}
 				{menu && <div className="header-menu" role="menu" aria-label={menu === "panels" ? "添加面板" : menu === "layout" ? "布局" : "更多"}>

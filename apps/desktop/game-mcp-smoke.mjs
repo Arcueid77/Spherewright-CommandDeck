@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { selectWorkspace } from "./ui-navigation-smoke.mjs";
+import { selectWorkspace, verifyResponsiveLayout } from "./ui-navigation-smoke.mjs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -90,6 +90,7 @@ export async function runMcpGameSmoke(driver) {
 		assert.equal(await evaluate("document.querySelector('.game-task-editor').hidden"), true);
 		assert.equal(await evaluate("getComputedStyle(document.querySelector('.game-goal-title')).webkitLineClamp"), "3");
 		assert.equal(await evaluate("[...document.querySelectorAll('.current-game-task .accent')].filter(button=>button.getBoundingClientRect().height>0).length"), 1);
+		await verifyResponsiveLayout(driver, "game");
 		await driver.testCommand("capture-game");
 		if (autonomous) { assert.equal(await driver.testCommand("game-confirmation-count"), 2); assert.equal(before.tasks.filter(task => task.scope.autonomousAuthorizationHash && task.intent?.state === "completed").length, 2); }
 		await driver.testCommand("reload"); await until(() => evaluate("document.readyState==='complete' && Boolean(window.deck)"), "RELOAD");

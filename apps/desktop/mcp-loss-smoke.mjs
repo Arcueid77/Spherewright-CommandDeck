@@ -1,3 +1,4 @@
+import { disabledGameExecutionSource } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ export async function runGameMcpLossSmoke(driver, { evaluate, state, until, requ
 		await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "MCP_RECOVERY_LAYOUT_READY");
 		await until(() => evaluate("Boolean(document.querySelector('.game-tasks-panel'))"), "MCP_RECOVERY_PANEL");
 	}
-	const disabledExecution = () => evaluate("(()=>{const panel=document.querySelector('.game-tasks-panel');return ['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()");
+	const disabledExecution = () => evaluate(disabledGameExecutionSource);
 	await driver.testCommand("answer-game-confirmation", { response: 1 }); await evaluate(`window.deck.confirmResearch(${JSON.stringify(taskId)})`);
 	const buffered = expected.commitTimeout ? await bufferCommitReceipt(driver, { client: originalClient, state, world, until, base }) : null;
 	await until(async () => { const value = await state(); return !value.busy && value.phase === "blocked" && value.unresolved.length === 1 && originalClient.exitConfirmed; }, "ORIGINAL_MCP_EXITED", expected.commitTimeout ? originalClient.timeoutMs + 5000 : 12000);

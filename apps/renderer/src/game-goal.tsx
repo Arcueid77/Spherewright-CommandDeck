@@ -54,7 +54,7 @@ export function GameGoalPanel({ goal, connected }: { goal: GameGoal; connected: 
 		</dl>
 		{goal.objective.kind === "production" && <div className="game-goal-measurement" aria-label="产量验收">
 			<p>{rateText} · 目标 {goal.objective.minimumPerMinute}/分钟</p>
-			<p>窗口进度 {Math.floor(measurement?.seconds ?? 0)}/{goal.objective.windowSeconds} 游戏秒</p>
+			<p>窗口进度 {Math.min(Math.floor(measurement?.seconds ?? 0), goal.objective.windowSeconds ?? 0)}/{goal.objective.windowSeconds} 游戏秒</p>
 			<progress max={goal.objective.windowSeconds} value={Math.min(measurement?.seconds ?? 0, goal.objective.windowSeconds ?? 0)} aria-label="产量验收窗口进度" />
 		</div>}
 		{goal.problem && <p className="notice">{problems[goal.problem] ?? "任务已停止推进，请核对原动作与验收记录。"}</p>}
@@ -70,6 +70,7 @@ export function GameGoalPanel({ goal, connected }: { goal: GameGoal; connected: 
 			{goal.activityProgress?.feedback && <p>{goal.activityProgress.feedback.message}</p>}
 			<p>已用模型请求 {goal.usage.modelRequests}/{goal.limits.modelRequests} · 游戏工具 {goal.usage.toolCalls}/{goal.limits.toolCalls} · 提交 {goal.usage.writes}/{goal.limits.writes}</p>
 			<p className="data-scope">本目标时限 {new Date(goal.deadlineAt).toLocaleString()}</p>
+			{measurement && <p>实测覆盖 {Math.floor(measurement.seconds)} 游戏秒 · 窗口最低 {measurement.minimumRate ?? "待测量"}/分钟</p>}
 			{measurement?.startTick !== null && measurement?.startTick !== undefined && <p className="data-scope">观测 tick {measurement.startTick}–{measurement.endTick} · {Math.floor(measurement.ageMs / 1000)} 秒前收到</p>}
 			{goal.completionChecks.length ? <ul>{goal.completionChecks.map(check => {
 				const observed = goal.observations.find(value => value.label === check.label);

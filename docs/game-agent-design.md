@@ -131,6 +131,16 @@ Executing requires evidence of an accepted action. Completed requires the corres
 
 Opening an action reveals its plan, original receipts and related observations. Closing chat or reloading the UI continues to display the same task. A model change preserves goal/action ownership and refreshes world facts.
 
+### Workspace navigation
+
+The home page has Game, Observation and Development workspaces. Workspace selection updates display visibility and layout selection. Task controls initiate model turns, native actions and development commands.
+
+Game opens with the native viewport and a fixed current-task sidebar. The sidebar shows a three-line goal summary, status, stage, next step and measured acceptance progress. One primary action stays at the bottom. Acceptance conditions, original actions, budgets, experience sources and execution records expand on demand. A current task takes precedence over the new-task form, and unresolved actions take precedence over both. Continue or adjust opens the existing goal in the form with its remaining budget.
+
+Observation uses left-side topic navigation for research, production, power, logistics, mecha and connection details. The shared status area shows observation age, tick and coverage. Production, power and logistics also support additional panels through Add panel. Development opens files, editor/diff and its Agent, with output appearing for an active task. Add panel → Current game task provides a read-only summary.
+
+Layouts use separate workspace keys. The original development layout is retained as the fallback source for its first restoration. Reset current workspace layout applies to the selected workspace. Mounted workspaces retain editor, Agent and game-form drafts across switches. More groups model settings, diagnostics, usage, history/media and integrations. Layout contains reset and return-popout controls.
+
 ### Illustrative blue-matrix display
 
 These are illustrative field values that may appear at different stages.

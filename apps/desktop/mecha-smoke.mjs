@@ -1,4 +1,4 @@
-import { selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
+import { selectWorkspace, selectObservationTopic } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 
 export async function runMechaPanelSmoke(driver, { evaluate, until }) {
@@ -7,7 +7,7 @@ export async function runMechaPanelSmoke(driver, { evaluate, until }) {
 	assert.ok(initial.metadata.readTools.includes("spherewright_get_player_state"));
 	const open = async () => {
 		await selectWorkspace(evaluate, "observation");
-		await addWorkbenchPanel(evaluate, "mecha");
+		await selectObservationTopic(evaluate, "mecha");
 		await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"机甲状态\"]'))"), "MECHA_PANEL");
 	};
 	const click = async label => {

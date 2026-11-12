@@ -37,7 +37,7 @@ export async function runPortableSmoke(driver, videoArchive, journal) {
 	let renderer; const rendererDeadline = performance.now() + 10000;
 	while (true) {
 		renderer = await testCommand("portable-renderer-state");
-		if (renderer.brand?.includes("COMMANDDECK") && renderer.groups > 0 && renderer.body > 100) break;
+		if (renderer.brand?.toLowerCase().includes("commanddeck") && renderer.groups > 0 && renderer.body > 100) break;
 		if (performance.now() >= rendererDeadline) throw new Error("PORTABLE_RENDERER_NOT_READY " + JSON.stringify(renderer));
 		await new Promise(resolve => setTimeout(resolve, 50));
 	}

@@ -1,3 +1,4 @@
+import { selectWorkspace } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile, realpath, lstat } from "node:fs/promises";
@@ -40,7 +41,7 @@ export async function runCommandFaultSmoke(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source });
 	const count = async () => Number(await readFile(join(workspace, ".local/count"), "utf8"));
 	async function until(predicate, label) { const deadline = performance.now() + 18000; while (!await predicate()) { if (performance.now() >= deadline) throw new Error("COMMAND_FAULT_TIMEOUT_" + label); await delay(50); } }
-	async function ready() { await until(() => evaluate("Boolean(document.querySelector('header')?.getAttribute('aria-busy')==='false')"), "UI_READY"); }
+	async function ready() { await selectWorkspace(evaluate, "development"); await until(() => evaluate("Boolean(document.querySelector('header')?.getAttribute('aria-busy')==='false')"), "UI_READY"); }
 	await ready();
 	const registered = await driver.registerCommandWorkspace(), root = registered.roots[0];
 	assert.equal(registered.roots.length, 1); assert.equal(root.path, workspace); assert.equal(root.canWrite, false); assert.equal(root.canExecute, true);

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { IDockviewPanelProps } from "dockview-react";
 import { ageObservation } from "./observation-state";
 import { UiPerformance, type UiPerformanceSnapshot } from "./ui-performance";
 
@@ -59,7 +60,41 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
 	return <Context.Provider value={{ state: shown, notice, uiPerformance: measure.snapshot(), refresh, act, choose }}>{children}</Context.Provider>;
 }
 function DataState({ value }: { value: Datum<{ capturedAtGameTick: number; source: string; coverage?: Coverage }> | undefined }) {
-	return <><div className={`observation-state ${value?.state ?? "unavailable"}`}>{status[value?.state ?? "unavailable"] ?? value?.state}{value?.ageMs !== null && value?.ageMs !== undefined ? ` · ${fmt(value.ageMs / 1000)} 秒前收到` : ""}</div>{value?.reason && <p className="muted">{reasons[value.reason] ?? "本轮数据未能完整核对，不能作为实时依据。"}</p>}{value?.data && <p className="data-scope">tick {value.data.capturedAtGameTick}{value.data.coverage && <> · 已建工厂 {value.data.coverage.returned} / {value.data.coverage.total} · {value.data.coverage.complete ? "分页完整" : "只取得部分页面"}</>}<br />来源：{value.data.source}</p>}</>;
+	return <div className="data-state"><div className={`observation-state ${value?.state ?? "unavailable"}`}>{status[value?.state ?? "unavailable"] ?? "状态待核对"}{value?.ageMs !== null && value?.ageMs !== undefined ? ` · ${fmt(value.ageMs / 1000)} 秒前收到` : ""}</div>{value?.reason && <p className="notice">{reasons[value.reason] ?? "本轮数据未能完整核对，不能作为实时依据。"}</p>}{value?.data && <p className="data-scope">tick {value.data.capturedAtGameTick}{value.data.coverage && <> · 已建工厂 {value.data.coverage.returned} / {value.data.coverage.total} · {value.data.coverage.complete ? "分页完整" : "只取得部分页面"}</>}<br />来源 · {value.data.source}</p>}</div>;
+}
+
+const observationTopics = { research: "科研", production: "生产", power: "供电", logistics: "物流", mecha: "机甲", connection: "连接详情" };
+type ObservationTopic = keyof typeof observationTopics;
+const topicPanels = { research: ResearchPanel, production: ProductionPanel, power: PowerPanel, logistics: LogisticsPanel, mecha: MechaPanel, connection: ConnectionPanel };
+
+export function ObservationPanel(props: IDockviewPanelProps<{ topic?: ObservationTopic }>) {
+	const { state } = useBridge(), observation = state.observation;
+	const initialTopic = props.params.topic && Object.hasOwn(observationTopics, props.params.topic) ? props.params.topic : "research";
+	const [topic, setTopic] = useState<ObservationTopic>(initialTopic);
+	const [visited, setVisited] = useState<ObservationTopic[]>([initialTopic]);
+	const value = topic === "mecha" ? observation?.mecha : topic === "production" ? observation?.production : observation?.summary;
+	const coverage = topic === "mecha" ? null : (value?.data as Snapshot | undefined)?.coverage;
+	function select(value: ObservationTopic) { setTopic(value); setVisited(old => old.includes(value) ? old : [...old, value]); props.api.updateParameters({ topic: value }); }
+	return <div className="observation-panel">
+		<nav className="observation-navigation" aria-label="观测主题">{(Object.keys(observationTopics) as ObservationTopic[]).map(value => <button key={value} data-observation-topic={value} aria-current={topic === value ? "page" : undefined} onClick={() => select(value)}>{observationTopics[value]}</button>)}</nav>
+		<div className="observation-main">
+			<div className="observation-status" aria-label="观测状态">
+				<div className="observation-heading"><strong>{observationTopics[topic]}</strong><span>{observation?.connected ? "MCP 已连接" : "MCP 未连接"}</span></div>
+				<DataState value={value} />
+				{value?.ageMs !== null && value?.ageMs !== undefined && <time className="data-scope">观察时间 {new Date(Date.now() - value.ageMs).toLocaleTimeString()}</time>}
+			</div>
+			<div className="observation-content">
+				{visited.map(value => { const Topic = topicPanels[value]; return <div className="observation-topic" key={value} hidden={value !== topic}><Topic /></div>; })}
+				<details className="observation-details"><summary>采样与覆盖详情</summary>
+					<p>数据范围 · {value?.data?.scope ?? "等待现场快照"}</p>
+					{coverage && <p>分页 {coverage.pages} 页 · 已返回 {coverage.returned}/{coverage.total} 个工厂 · {coverage.complete ? "分页完整" : "覆盖尚未完整"}</p>}
+					{observation?.production.data?.window && <p>生产采样 · {status[observation.production.data.window.state] ?? "采样待核对"} · {fmt(observation.production.data.window.elapsedGameSeconds)} 游戏秒{observation.production.data.window.resetReason ? " · 采样窗口已重置" : ""}</p>}
+					{value?.reason && <p><code>{value.reason}</code></p>}
+					{observation?.events.slice(-6).map((event, index) => <p key={index}>{reasons[event.reason] ?? "读取状态发生变化"}<small> {event.reason}</small></p>)}
+				</details>
+			</div>
+		</div>
+	</div>;
 }
 export function ConnectionPanel() {
 	const c = useBridge(), { state } = c, observation = state.observation;

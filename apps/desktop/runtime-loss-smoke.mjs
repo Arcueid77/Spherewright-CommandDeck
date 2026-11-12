@@ -1,3 +1,4 @@
+import { disabledGameExecutionSource, openHeaderMenu } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ export async function runRuntimeLossSmoke(driver) {
 	assert.equal(driver.getProbeSequence(), sequence, "RUNTIME_EXIT_ALLOCATED_NEW_PROBE"); assert.deepEqual(retained, original, "RUNTIME_EXIT_CLEARED_PREVIOUS_RESULT");
 	await driver.testCommand("reload"); assert.deepEqual((await driver.api("snapshot")).lastProbeResult, original);
 	assert.equal(driver.getProbeSequence(), sequence);
+	await openHeaderMenu(source => driver.testCommand("evaluate", { source }), "more", "M0 连接验证");
 	const uiDeadline = performance.now() + 10000;
 	while (!await driver.testCommand("evaluate", { source: "(()=>{const panel=document.querySelector('.agent');return Boolean(panel?.textContent.includes('运行时已停止')&&[...panel.querySelectorAll('button')].length>=2&&[...panel.querySelectorAll('button')].every(button=>button.disabled))})()" })) { assert.ok(performance.now() < uiDeadline, "RUNTIME_LOSS_PROBE_CONTROLS_NOT_DISABLED"); await new Promise(resolve => setTimeout(resolve, 50)); }
 	await writeFile(join(proofDirectory, "desktop-smoke-runtime-loss.application.private.json"), JSON.stringify({ runId: driver.runId, syntheticOnly: true, runtimeExitObserved: true, previousResultRetained: true, noProbeAllocated: true, noRuntimeRestart: true, syntheticProbeRequests: 2, gameCalls: 0, realModelRequests: 0 }));
@@ -53,7 +55,7 @@ export async function runGameRuntimeLossSmoke(driver, { evaluate, state, until, 
 	await driver.testCommand("reload");
 	await until(() => evaluate("(()=>{const header=document.querySelector('header'),button=document.querySelector('[data-workspace-button=game]');if(header?.getAttribute('aria-busy')!=='false'||!button||button.disabled)return false;button.click();return true})()"), "RELOADED_LAYOUT_READY");
 	await until(async () => (await evaluate("document.body.innerText")).includes("运行时已停止"), "RUNTIME_LOSS_VISIBLE_AFTER_RELOAD");
-	assert.equal(await evaluate("(()=>{const panel=document.querySelector('.game-tasks-panel');return ['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.disabled))})()"), true, "RUNTIME_LOSS_NEW_EXECUTION_CONTROLS_ENABLED");
+	assert.equal(await evaluate(disabledGameExecutionSource), true, "RUNTIME_LOSS_NEW_EXECUTION_CONTROLS_ENABLED");
 	assert.deepEqual((await state()).tasks, value.tasks); assert.equal(await driver.getSyntheticCommitCount(), commits); assert.equal(requests(), planning ? 1 : 3);
 	await driver.api("game", { action: "stop" }); await until(async () => !(await state()).busy, "STOP_AFTER_RUNTIME_EXIT");
 	await driver.api("bridge", { action: "disconnect" }); assert.equal(driver.bridgeExitConfirmed(), true);

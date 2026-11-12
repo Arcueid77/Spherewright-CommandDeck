@@ -15,8 +15,8 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	const expected = { rootId: history.workbench.roots[0].id, path: "synthetic-popout-draft.txt", sha256: null, text: "Synthetic retained draft " + context.runId, diskText: "" };
 	const panels = [["editor", "代码 / 差异"], ["tasks", "任务记录"], ["production", "生产"]];
 	async function until(check, code) { const deadline = performance.now() + 12000; while (!await check()) { assert.ok(performance.now() < deadline, code); await new Promise(resolve => setTimeout(resolve, 50)); } }
-	await selectWorkspace(evaluate, "development");
 	if (popoutCase.phase === "record") {
+		await selectWorkspace(evaluate, "development");
 		assert.equal((await windows()).length, 0);
 		assert.equal(await request("ui-get", { key: "editor" }), null);
 		await request("ui-save", { key: "editor", value: expected });
@@ -43,6 +43,8 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	assert.deepEqual(await request("ui-get", { key: "editor" }), expected);
 	await until(async () => (await request("ui-get", { key: "layout-development" }))?.popoutGroups?.length === 3, "PACKAGED_POPOUT_LAYOUT_PERSISTED");
 	if (popoutCase.phase === "reopen") {
+		assert.equal(await evaluate("document.querySelector('[data-workspace=game]')?.hidden"), false);
+		await selectWorkspace(evaluate, "development");
 		await openHeaderMenu(evaluate, "layout", "收回全部浮窗");
 		await until(async () => {
 			if ((await windows()).length !== 0) return false;
@@ -60,6 +62,7 @@ export async function runPackagedPopoutSmoke(driver, manifest) {
 	for (const action of ["probe", "start-fixture", "bridge-select"]) await assert.rejects(api(action, {}), /PORTABLE_SMOKE_ACTION_REJECTED/);
 	assert.equal(driver.getRuntimePid(), runtime); assert.equal(driver.getProbeSequence(), 0);
 	assert.deepEqual(await assertPortableHistory(api, history), before);
+	if (popoutCase.phase === "record") await selectWorkspace(evaluate, "game");
 	const proof = { runId: context.runId, sourceRevision: manifest.sourceRevision, piCommit: manifest.piCommit, packaged: true, popoutPhase: popoutCase.phase, independentWindows: 3, panels: panels.map(([id]) => id), layoutAndReadOnlyDraftRetained: true, wholeApplicationReopen: popoutCase.phase === "reopen", allWindowsReturned: popoutCase.phase === "reopen", originalClosedHistoryRetained: true, originalRuntimeRetained: true, noTasksOrModelReplay: true, childWindowsWithoutPreloadOrNode: true, gameViewportRemainsInMain: true, gameCalls: 0, realModelRequests: 0, syntheticModelRequests: 0, physicalInput: "not_tested", multiScreen: "not_tested" };
 	await writeFile(join(context.root, "application-proof.json"), JSON.stringify(proof), { flag: "wx" });
 	assert.equal(await driver.getTray().activate("exit"), true);

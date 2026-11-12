@@ -79,6 +79,10 @@ async function testCommand(message) {
 		}
 		else if (message.name === "minimize-ui") { window.minimize(); result = true; }
 		else if (message.name === "window-state") result = { visible: window.isVisible(), minimized: window.isMinimized() };
+		else if (message.name === "resize-ui" && Number.isInteger(message.width) && Number.isInteger(message.height) && message.width >= 1000 && message.width <= 4000 && message.height >= 680 && message.height <= 2200) {
+			window.setContentSize(message.width, message.height);
+			result = window.getContentSize();
+		}
 		else if (message.name === "reload") {
 			const loaded = once(window.webContents, "did-finish-load");
 			window.webContents.reload();
@@ -188,7 +192,7 @@ if (typeof process.send !== "function") {
 				minWidth: 1000,
 				minHeight: 680,
 				backgroundColor: "#0b1119",
-				title: "Spherewright CommandDeck · M0",
+				title: "Spherewright CommandDeck",
 				webPreferences: {
 					preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)),
 					contextIsolation: true,

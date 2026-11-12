@@ -1,3 +1,4 @@
+import { disabledGameExecutionSource } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
@@ -9,7 +10,7 @@ import { runtimeStorageScenarios, mcpRuntimeStorageScenarios, storageFaultBounda
 
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const originalFile = "storage-original.private.json";
-const disabled = "(()=>{const panel=document.querySelector('.game-tasks-panel');return panel&&['开始分析','核对并确认入队'].every(label=>[...panel.querySelectorAll('button')].some(button=>button.textContent===label&&button.matches(':disabled')))})()";
+const disabled = disabledGameExecutionSource;
 
 export function armRuntimeStorageFault(host, { boundary, stopRuntime, mcpClient }) {
 	assert.equal(host.syntheticOnly, true); assert.ok(["receipt", "terminal"].includes(boundary)); assert.equal(typeof stopRuntime, "function");

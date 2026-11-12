@@ -1,4 +1,4 @@
-import { selectWorkspace, addWorkbenchPanel } from "./ui-navigation-smoke.mjs";
+import { selectObservationTopic, verifyResponsiveLayout } from "./ui-navigation-smoke.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile, readFile, realpath } from "node:fs/promises";
@@ -28,7 +28,7 @@ export async function runBridgeSmoke(driver) {
 	assert.equal(initial.requestPerformance.byKind.metadata.started, 4); assert.equal(initial.requestPerformance.pending, 0);
 	assert.ok(!JSON.stringify(initial).includes("PRIVATE_SYNTHETIC"));
 	const denied = await evaluate("(async()=>{let n=0;for(const action of ['call','tools/call','select','commit'])try{await window.deck.bridge(action,{})}catch{n++}return n})()"); assert.equal(denied, 4);
-	await selectWorkspace(evaluate, "observation"); await addWorkbenchPanel(evaluate, "bridge");
+	await selectObservationTopic(evaluate, "connection");
 	await until(async () => (await evaluate("document.body.innerText")).includes("MCP 服务已连接"), "CONNECTION");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Unity 更新间隔"), "RUNTIME_PERFORMANCE");
 	const timing = await evaluate("document.querySelector('[aria-label=\"运行性能\"]').innerText");
@@ -48,17 +48,18 @@ export async function runBridgeSmoke(driver) {
 	try { driver.emit({ type: 'bridge-changed' }); await until(async () => (await uiTiming())?.frame.nextFrameMs?.maxMs >= 65, "UI_VISIBLE_DELAY"); await until(async () => (await uiTiming())?.connected?.frame.nextFrameMs?.maxMs >= 65, "CONFIRMED_CONNECTED_UI_DELAY"); uiDelayed = await uiTiming(); }
 	finally { await evaluate("window.requestAnimationFrame=window.__m2OriginalFrame;delete window.__m2OriginalFrame"); }
 	assert.ok(uiDelayed.frame.totalMs.maxMs >= uiDelayed.frame.nextFrameMs.maxMs); assert.ok(!JSON.stringify(uiDelayed).includes('PRIVATE_SYNTHETIC'));
-	await addWorkbenchPanel(evaluate, "research");
+	await selectObservationTopic(evaluate, "research");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic research"), "RESEARCH");
-	await addWorkbenchPanel(evaluate, "production");
+	await selectObservationTopic(evaluate, "production");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic matrix 6001"), "PRODUCTION");
 	const rendered = await evaluate("document.body.innerText"); assert.ok(rendered.includes("分页完整")); assert.ok(rendered.includes("窗口就绪")); assert.ok(rendered.includes("估计")); assert.ok(!rendered.includes("PRIVATE_SYNTHETIC"));
 	for (const [tab, expected] of [["供电", "60"], ["物流", "2"]]) {
-		await addWorkbenchPanel(evaluate, tab === "供电" ? "power" : "logistics");
+		await selectObservationTopic(evaluate, tab === "供电" ? "power" : "logistics");
 		await until(async () => (await evaluate("[...document.querySelectorAll('.bridge-panel table')].find(table=>table.getBoundingClientRect().height>0)?.querySelector('tbody tr td:nth-child(2)')?.textContent")) === expected, tab === "供电" ? "POWER" : "LOGISTICS");
 	}
-	await addWorkbenchPanel(evaluate, "production");
+	await selectObservationTopic(evaluate, "production");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic matrix 6001"), "RETURN_PRODUCTION");
+	await verifyResponsiveLayout(driver, "observation");
 	const capture = await driver.testCommand("capture-bridge");
 	// A synthetic transport-loss notice exercises the real renderer handler; the supervisor stays alive.
 	driver.emit({ type: "supervisor-disconnected", text: "Synthetic UI transport-loss fixture" });
@@ -67,7 +68,7 @@ export async function runBridgeSmoke(driver) {
 	await driver.testCommand("reload");
 	await until(async () => (await evaluate("document.body.innerText")).includes("Synthetic matrix 6001"), "RELOAD");
 	assert.equal(driver.getBridgePid(), pid);
-	await selectWorkspace(evaluate, "observation"); await addWorkbenchPanel(evaluate, "bridge");
+	await selectObservationTopic(evaluate, "connection");
 	await until(async () => (await uiTiming())?.connected?.frame.sampleCount > 0, "RELOADED_CONNECTED_UI_MEASUREMENT");
 	await driver.api("bridge", { action: "disconnect" });
 	await until(async () => (await evaluate("document.body.innerText")).includes("旧数据 · 已过期"), "DISCONNECTED");
@@ -76,7 +77,7 @@ export async function runBridgeSmoke(driver) {
 	assert.equal(ended.lifetime.state, 'exit_observed'); assert.equal(ended.pending, 0); assert.equal(ended.transportClosed, true);
 	await delay(40); const retained = (await state()).requestPerformance;
 	assert.equal(retained.started, ended.started); assert.equal(retained.lifetime.durationMs, ended.lifetime.durationMs);
-	await selectWorkspace(evaluate, "observation"); await addWorkbenchPanel(evaluate, "bridge");
+	await selectObservationTopic(evaluate, "connection");
 	await until(async () => (await evaluate("document.querySelector('[aria-label=\"MCP 客户端测量\"]')?.innerText"))?.includes('子进程退出已确认'), "CLIENT_EXIT_MEASUREMENT");
 	await until(async () => (await uiTiming())?.connected?.active === false, "CONNECTED_UI_WINDOW_ENDED");
 	const uiConnectedEnded=(await uiTiming()).connected; await delay(1100); const uiConnectedLater=(await uiTiming()).connected;

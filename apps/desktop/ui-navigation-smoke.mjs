@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { copyFile } from "node:fs/promises";
+import { join } from "node:path";
+
+export const disabledGameExecutionSource = "(()=>{const panel=document.querySelector('.game-tasks-panel'),forms=panel?.querySelectorAll('fieldset'),buttons=panel?.querySelectorAll('.game-task-primary button');return Boolean(forms?.length===2&&[...forms].every(field=>field.matches(':disabled'))&&buttons?.length&&[...buttons].filter(button=>/核对并确认|开始分析|开始游戏任务|核对授权并开始|核对并继续/.test(button.textContent)).every(button=>button.matches(':disabled')))})()";
 
 async function waitFor(check, label) {
 	const deadline = performance.now() + 12000;
@@ -28,16 +32,43 @@ export async function addWorkbenchPanel(evaluate, id) {
 	await evaluate("document.querySelector('[data-add-panel=" + id + "]').click()");
 }
 
+export async function selectObservationTopic(evaluate, topic) {
+	await selectWorkspace(evaluate, "observation");
+	await evaluate("[...document.querySelectorAll('[data-workspace=observation] .dv-tab')].find(tab=>tab.textContent.trim()==='当前世界').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,pointerType:'mouse',isPrimary:true}))");
+	await waitFor(() => evaluate("Boolean(document.querySelector('[data-observation-topic=" + topic + "]'))"), "OBSERVATION_TOPIC_" + topic);
+	await evaluate("document.querySelector('[data-observation-topic=" + topic + "]').click()");
+}
+
+export async function verifyResponsiveLayout(driver, workspace) {
+	const evaluate = source => driver.testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, workspace);
+	await driver.testCommand("show-ui");
+	for (const [width, height] of [[1366, 768], [3440, 1369]]) {
+		assert.deepEqual(await driver.testCommand("resize-ui", { width, height }), [width, height]);
+		await waitFor(() => evaluate("innerWidth===" + width + "&&innerHeight===" + height), "RESPONSIVE_SIZE");
+		await waitFor(() => evaluate("(()=>{const dock=document.querySelector('[data-workspace=" + workspace + "] .workspace-dock'),grid=dock?.querySelector('.dv-grid-view');return Boolean(grid&&Math.abs(grid.getBoundingClientRect().width-dock.clientWidth)<2&&Math.abs(grid.getBoundingClientRect().height-dock.clientHeight)<2)})()"), "RESPONSIVE_DOCK_FILLS_" + workspace);
+		await new Promise(resolve => setTimeout(resolve, 120));
+		const result = await evaluate("(()=>{const header=document.querySelector('header'),buttons=[...header.querySelectorAll('button')].filter(button=>button.getBoundingClientRect().height>0),primary=document.querySelector('.current-game-task .game-task-primary'),next=document.querySelector('.current-game-task .game-goal-next'),bounds=primary?.getBoundingClientRect();return {overflow:document.documentElement.scrollWidth>innerWidth,headerFits:buttons.every(button=>{const r=button.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=header.getBoundingClientRect().bottom}),fonts:buttons.every(button=>Number.parseFloat(getComputedStyle(button).fontSize)>=14),primaryFits:!bounds||bounds.height===0||bounds.top>=header.getBoundingClientRect().bottom&&bounds.bottom<=innerHeight,nextVisible:!next||next.getBoundingClientRect().bottom<=bounds.top}})()");
+		assert.deepEqual(result, { overflow: false, headerFits: true, fonts: true, primaryFits: true, nextVisible: true }, workspace + " " + width + "x" + height);
+		const kind = workspace === "observation" ? "bridge" : workspace === "game" ? "game" : "workbench";
+		const capture = await driver.testCommand("capture-" + kind);
+		if (capture.captured) await copyFile(join(driver.root, kind === "game" ? ".local/m3-smoke-game.private.png" : kind === "bridge" ? ".local/m2-smoke-bridge.private.png" : ".local/m1-smoke-workbench.private.png"), join(driver.root, ".local/workspace-" + workspace + "-" + width + "x" + height + ".private.png"));
+	}
+	await driver.testCommand("resize-ui", { width: 1440, height: 900 });
+}
+
 export async function verifyWorkspaceNavigation(driver) {
 	const evaluate = source => driver.testCommand("evaluate", { source });
 	const request = (action, args = {}) => driver.api("workbench", { action, args });
 	await selectWorkspace(evaluate, "game");
 	assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-workspace=game] .dv-tab')].map(tab=>tab.textContent.trim())"), ["游戏 / 原生视口"]);
 	assert.equal(await evaluate("Boolean(document.querySelector('[data-workspace=game] .current-game-task'))"), true);
+	await verifyResponsiveLayout(driver, "game");
 	const before = { tasks: (await request("state")).tasks, game: await driver.api("game", { action: "snapshot" }), probes: driver.getProbeSequence(), native: await driver.api("status") };
 	for (const workspace of ["observation", "development", "game", "development"]) await selectWorkspace(evaluate, workspace);
 	assert.equal(await evaluate("Boolean(document.querySelector('[data-workspace=development] .game-panel'))"), false);
 	assert.equal(await evaluate("Boolean(document.querySelector('[data-workspace=development] .output-panel'))"), false);
+	await verifyResponsiveLayout(driver, "development");
 	assert.deepEqual((await request("state")).tasks, before.tasks);
 	assert.deepEqual((await driver.api("game", { action: "snapshot" })).tasks, before.game.tasks);
 	assert.equal(driver.getProbeSequence(), before.probes);
