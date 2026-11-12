@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { selectWorkspace } from "./ui-navigation-smoke.mjs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { contextSeedPrompt, contextContinuePrompt, contextCompactPrompt } from "./development-context-case.mjs";
@@ -6,6 +7,7 @@ import { contextSeedPrompt, contextContinuePrompt, contextCompactPrompt } from "
 // Runs inside the existing owned workbench fixture; no real provider or game.
 export async function runDevelopmentContextSmoke(driver, rootId, { readPath = "code.mjs", readOnlyWorkspace = false, keepProfile = false, onComplete, onCompactionPending } = {}) {
 	const request = (action, args = {}) => driver.api("workbench", { action, args }), evaluate = source => driver.testCommand("evaluate", { source });
+	await selectWorkspace(evaluate, "development");
 	const id = "deckvault-" + randomUUID(), key = "synthetic-development-smoke-" + randomUUID(), calls = [], errors = [], runtime = driver.getRuntimePid();
 	const server = createServer(async (incoming, response) => {
 		try {
