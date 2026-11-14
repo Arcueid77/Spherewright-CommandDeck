@@ -8,6 +8,7 @@ const { stdout } = await promisify(execFile)(nativeExecutable, ["--test-layout-q
 const proof = JSON.parse(stdout);
 assert.equal(proof.requestBeforeCompletion, true);
 assert.equal(proof.requestAfterCompletion, true);
+assert.equal(proof.renderTargetGuard, true);
 assert.equal(proof.gameCalls, 0);
 await mkdir(".local", { recursive: true });
 await writeFile(".local/adapter-layout-smoke.json", JSON.stringify(proof, null, 2));

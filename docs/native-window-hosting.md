@@ -122,6 +122,12 @@ That first real attempt loaded and opted in, then failed before publishing its e
 
 The published Plugin session read for the first process reports `gameLoaded=false` and no game tick. No window adoption, save or load was requested. A second fresh no-world read preceded its normal window close; the process exited without forced termination. Subsequent cold testing must preserve exact cohort hashes and recheck the actual runtime; it must not load a save to test geometry.
 
+### Render-size protection / 渲染尺寸保护
+
+For DSP 0.10.35.29151, the bloom effect downsamples its render target. The native host retains the last game size while its client area is too small, and covers an unsafe narrow viewport until the layout is enlarged. The headless layout fixture checks normal, minimized and narrow geometries. Live recovery validation remains pending.
+
+DSP 0.10.35.29151 的辉光效果会多次缩小渲染目标。宿主客户区过小时，原生宿主保留游戏上一次的尺寸；嵌入区域过窄时由 Deck 界面遮住游戏，调整布局后恢复显示。无界面布局测试覆盖正常、最小化和狭窄尺寸，实机恢复验证尚待完成。
+
 ### Real DSP empty-menu cohort: 2026-10-20
 
 The second cohort used implementation commit `e00f56ce5441e3a707a4445a88fd07641a0b8c08`, after [CI 39427237164](https://github.com/Arcueid77/Spherewright-CommandDeck/actions/runs/39427237164) completed successfully. The locally compiled plugin records that full source revision. Only the four candidate DLLs in the separate CommandDeck addon folder were replaced; the original four Spherewright plugin DLLs still matched their recorded hashes. Neither the product source checkout nor its mixed worktree was changed.

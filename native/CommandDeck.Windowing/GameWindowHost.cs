@@ -100,6 +100,7 @@ public sealed class GameWindowHost
             var currentGame = game; var currentUi = ui;
             Desktop.Require(!closing && fault == null && !revisions.Running && Volatile.Read(ref focusOperations) == 0, "WINDOW_CAPTURE_TRANSITION_PENDING");
             Desktop.Require(host != 0 && Desktop.IsWindow(host) && Desktop.IsWindowVisible(host) && !Desktop.IsIconic(host), "WINDOW_CAPTURE_HOST_UNAVAILABLE");
+            Desktop.Require(Desktop.GetClientRect(host, out var hostBounds) && SupportsRenderTarget(hostBounds.Right, hostBounds.Bottom), "WINDOW_CAPTURE_HOST_UNAVAILABLE");
             Desktop.Require(currentGame?.SameLifetime() == true && currentGame.Hwnd == expectedGameWindow && Desktop.GetParent(currentGame.Hwnd) == host && Desktop.IsWindowVisible(currentGame.Hwnd), "WINDOW_CAPTURE_GAME_CHANGED");
             Desktop.Require(currentUi?.SameLifetime() == true && Desktop.GetParent(currentUi.Hwnd) == host && Desktop.IsWindowVisible(currentUi.Hwnd), "WINDOW_CAPTURE_UI_CHANGED");
             Desktop.Require(Desktop.GetClientRect(currentGame!.Hwnd, out var bounds) && bounds.Right > 0 && bounds.Bottom > 0, "WINDOW_CAPTURE_SIZE_UNAVAILABLE");
@@ -178,6 +179,26 @@ public sealed class GameWindowHost
         ScheduleLayout();
     }
 
+    // DSP's bloom effect repeatedly halves the render target. Tiny or very
+    // narrow targets can otherwise produce a zero-width intermediate texture.
+    private static bool SupportsRenderTarget(int width, int height)
+        => width >= 64 && height >= 64 && (long)width * 2 >= height;
+
+    internal static ViewportRect? ResolveViewport(int width, int height, bool hasUi, ViewportRect? requested)
+    {
+        if (!SupportsRenderTarget(width, height)) return null;
+        if (hasUi && requested?.Visible == true)
+        {
+            int x = Math.Max(0, Math.Min(width, requested.X));
+            int y = Math.Max(0, Math.Min(height, requested.Y));
+            int w = Math.Min(requested.Width, width - x);
+            int h = Math.Min(requested.Height, height - y);
+            if (SupportsRenderTarget(w, h))
+                return new ViewportRect { X = x, Y = y, Width = w, Height = h, Visible = true };
+        }
+        return new ViewportRect { Width = width, Height = height, Visible = false };
+    }
+
     private void ScheduleLayout()
     {
         lock (sync)
@@ -214,14 +235,10 @@ public sealed class GameWindowHost
         lock (sync) rect = desired;
         bool hasUi = ui?.SameLifetime() == true;
         int width = client.Right, height = client.Bottom;
-        int x = 0, y = 0, w = width, h = height;
-        bool cutout = hasUi && rect?.Visible == true && rect.Width > 0 && rect.Height > 0;
-        if (cutout)
-        {
-            x = Math.Max(0, Math.Min(width, rect!.X)); y = Math.Max(0, Math.Min(height, rect.Y));
-            w = Math.Min(rect.Width, width - x); h = Math.Min(rect.Height, height - y);
-            cutout = w > 0 && h > 0;
-        }
+        var layout = ResolveViewport(width, height, hasUi, rect);
+        if (layout is null) return;
+        int x = layout.X, y = layout.Y, w = layout.Width, h = layout.Height;
+        bool cutout = layout.Visible;
         if (hasUi)
         {
             Desktop.Require(Desktop.GetParent(ui!.Hwnd) == host, "UI_PARENT_CHANGED");
@@ -242,8 +259,7 @@ public sealed class GameWindowHost
             }
             finally { if (region != 0) Desktop.DeleteObject(region); }
         }
-        if (!cutout) { x = y = 0; w = width; h = height; }
-        Desktop.Position(currentGame!.Hwnd, x, y, Math.Max(1, w), Math.Max(1, h), (nint)1,
+        Desktop.Position(currentGame!.Hwnd, x, y, w, h, (nint)1,
             Desktop.FrameChanged | Desktop.NoActivate | Desktop.Show);
         Desktop.Require(Desktop.GetParent(currentGame.Hwnd) == host, "GAME_PARENT_CHANGED");
     }
