@@ -2,11 +2,11 @@ import React, { createContext, useContext, useEffect, useId, useRef, useState, t
 import { useBridge } from "./bridge";
 import { profileToken, type Profile } from "./providers";
 import { ModelUsage, type Usage, type ModelContext } from "./model-usage";
-import { GameGoalPanel, canContinueGoal, type GameGoal } from "./game-goal";
+import { GameGoalPanel, canContinueGoal, type GameGoal, type WorldProductionReading } from "./game-goal";
 
-type Intent = { intentId: string; taskId: string; state: string; actionId: string | null; terminal: { beforeQueue: number[]; afterQueue: number[]; freshQueue: number[]; completedAtGameTick: number } | null };
+type Intent = { intentId: string; taskId: string; state: string; actionId: string | null; terminal: { beforeQueue?: number[]; afterQueue?: number[]; freshQueue?: number[]; completedAtGameTick: number | null; actionKind?: string; succeeded?: boolean; failureKind?: string | null } | null };
 type Task = { id: string; state: string; expiresAt: number | null; scope: { kind?: string; actionKind?: string; techId: number; planetId: number; capturedAtGameTick: number }; details: { mode?: string; techName?: string; prompt?: string; provider?: string; model?: string; usage?: Usage; context?: ModelContext }; intent: Intent | null };
-type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; goal?: GameGoal | null; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; mcp?: { available: boolean; tools: number; families: string[]; awaitingConfirmation: boolean; awaitingAuthorization: boolean; authorized: boolean; expiresAt: number | null; submissions: number }; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
+type GameState = { busy: boolean; runtimeAvailable: boolean; systemPaused?: boolean; storageAvailable: boolean; phase: string; currentTaskId: string | null; error: string | null; developmentFrozen: boolean; unresolved: Intent[]; tasks: Task[]; goal?: GameGoal | null; events: { sequence: number; kind: string; text: string; name: string; code: string | null }[]; syntheticOnly?: boolean; readOnlyObservation?: boolean; recovery?: { state: string; id?: string; createdAt?: number }; mcp?: { available: boolean; exitAvailable?: boolean; recoveryAvailable?: boolean; tools: number; families: string[]; awaitingConfirmation: boolean; awaitingAuthorization: boolean; authorized: boolean; expiresAt: number | null; submissions: number }; catalog?: { id: string; planetId: number; capturedAtGameTick: number; expiresAt: number; truncated: boolean; items: { techId: number; name: string; prerequisitesObservedComplete: boolean }[] } | null };
 type Context = { state: GameState; profiles: Profile[]; healthy: boolean; busy: boolean; notice: string; act: (action: string, args?: Record<string, unknown>) => Promise<void>; confirm: (taskId: string) => Promise<void> };
 const Context = createContext<Context>(null!);
 export const useGameTasks = () => useContext(Context);
@@ -30,6 +30,21 @@ const errors: Record<string, string> = { GAME_MODEL_OUTPUT_LIMIT: "模型输出�
 
 Object.assign(errors, {
 	GAME_GOAL_TOOL_LIMIT: "本目标的工具额度已用完，当前目标与原动作记录已保存。",
+	GAME_MCP_TRANSPORT_BUDGET_EXHAUSTED: "本轮游戏服务请求额度已用完。已受理动作仍可按原回执核销。",
+	GAME_MCP_RECOVERY_BUDGET_EXHAUSTED: "本轮原动作核销读取额度已用完，原动作保持待核销。",
+	GAME_EXIT_NOT_READY: "请先停止当前任务并核销原动作，再保存退出。",
+	GAME_EXIT_PREVIEW_REJECTED: "保存退出预检已失效或被拒绝，请重新核对现场。",
+	GAME_EXIT_ORIGINAL_PENDING: "保存退出的原动作尚未核销，游戏不会被强制关闭。",
+	GAME_EXIT_OUTCOME_UNKNOWN: "保存已核对，但游戏关闭状态未确认；请核对窗口，不要重复提交。",
+	GAME_RECOVERY_NOT_READY: "请先嵌入主菜单、连接同源服务并核销原动作。",
+	GAME_RECOVERY_COHORT_CHANGED: "当前游戏或服务版本与保存记录不一致，暂不自动恢复。",
+	GAME_RECOVERY_PREVIEW_REJECTED: "原生预检未确认准确的无损主存档，未提交读档。",
+	GAME_RECOVERY_ORIGINAL_PENDING: "原读档动作尚未核销，不会重复提交。",
+	GAME_RECOVERY_CANDIDATE_CHANGED: "保存记录已变化，未提交读档。",
+	GAME_RECOVERY_STORE_UNAVAILABLE: "安全恢复记录不可用；原动作保持待核销。",
+	GAME_RECOVERY_REQUIRES_MAIN_MENU: "请先把同一游戏窗口停在主菜单。",
+	GAME_RECOVERY_AUTHORIZATION_EXPIRED: "本次恢复授权已过期，未提交读档。",
+	GAME_RECOVERY_SCHEMA_UNAVAILABLE: "当前服务未提供兼容的安全恢复接口。",
 	GAME_GOAL_REMAINING_BUDGET_REQUIRED: "本轮设置超过原目标的剩余预算或时间，请核对设置。",
 	INVALID_GAME_OBJECTIVE: "请核对目标产量和持续游戏时间。",
 	GAME_GOAL_PRODUCTION_SCOPE_CHANGED: "产量观察的世界或窗口不一致，请重新核对现场。",
@@ -90,11 +105,14 @@ export function GameTasksPanel() {
 	function editGoal() {
 		const goal = state.goal;
 		setTaskKind("mcp");
-		if (goal && state.currentTaskId && canContinueGoal(goal)) {
-			setContinueTaskId(state.currentTaskId); setPrompt(goal.title); setContinuous(true); setAcceptance(goal.objective.kind);
+		if (goal) {
+			const continuing = Boolean(state.currentTaskId && canContinueGoal(goal));
+			setContinueTaskId(continuing ? state.currentTaskId : null); setPrompt(goal.title); setContinuous(true); setAcceptance(goal.objective.kind);
 			setItemId(goal.objective.itemId ?? 6001); setRate(goal.objective.minimumPerMinute ?? 60); setWindowSeconds(goal.objective.windowSeconds ?? 60);
-			setRequests(goal.limits.modelRequests - goal.usage.modelRequests); setCalls(goal.limits.toolCalls - goal.usage.toolCalls); setWrites(goal.limits.writes - goal.usage.writes);
-			setMinutes(Math.max(0.01, Math.floor((goal.deadlineAt - Date.now()) / 60000 * 100) / 100));
+			if (continuing) {
+				setRequests(goal.limits.modelRequests - goal.usage.modelRequests); setCalls(goal.limits.toolCalls - goal.usage.toolCalls); setWrites(goal.limits.writes - goal.usage.writes);
+				setMinutes(Math.max(0.01, Math.floor((goal.deadlineAt - Date.now()) / 60000 * 100) / 100));
+			} else { setRequests(128); setCalls(1024); setWrites(128); setMinutes(60); }
 			const previous = c.profiles.find(value => value.providerId === task?.details.provider && value.modelId === task?.details.model);
 			if (previous) setModel(profileToken(previous));
 		} else setContinueTaskId(null);
@@ -133,12 +151,21 @@ export function GameTasksPanel() {
 	else if (showForm) primary = taskKind === "mcp"
 		? <button className="accent" type="submit" form={formId + "-mcp"} disabled={locked || !profile || !prompt.trim() || !state.mcp?.available || mode === "autonomous" && !allowedFamilies.length}>{continueTaskId ? "核对并继续目标" : mode === "autonomous" ? "核对授权并开始" : "开始游戏任务"}</button>
 		: <button className="accent" type="submit" form={formId + "-research"} disabled={locked || !researchReady || !catalogFresh || !researchProfile || !state.catalog?.items.some(value => value.techId === Number(tech))}>开始分析</button>;
-	else primary = <button className="accent" disabled={controlDisabled || state.readOnlyObservation || !state.runtimeAvailable} onClick={editGoal}>{state.goal && canContinueGoal(state.goal) ? "继续或调整目标" : "新建游戏任务"}</button>;
+	else primary = <button className="accent" disabled={controlDisabled || state.readOnlyObservation || !state.runtimeAvailable} onClick={editGoal}>{state.goal ? canContinueGoal(state.goal) ? "继续或调整目标" : "基于原目标开启新一轮" : "新建游戏任务"}</button>;
+	const observed = bridge.observation, production = observed?.production, snapshot = production?.data;
+	const observedPlanet = snapshot?.planets.find(value => value.planetId === task?.scope.planetId);
+	const observedItem = state.goal?.objective.kind === "production" ? observedPlanet?.production.find(value => value.itemId === state.goal?.objective.itemId) : undefined;
+	const worldProduction: WorldProductionReading | null = state.goal?.objective.kind === "production" ? {
+		connected: observed?.connected === true && observed.session.state === "observed" && observed.session.data?.gameLoaded === true,
+		state: production?.state ?? "unavailable", ageMs: production?.ageMs ?? null,
+		windowSeconds: snapshot?.window?.elapsedGameSeconds ?? null, rate: snapshot?.window?.state === "ready" ? observedItem?.actualProductionPerMinute ?? null : null,
+		itemName: observedItem?.itemName ?? null, planetName: observedPlanet?.name ?? null, matchingPlanet: Boolean(observedPlanet),
+	} : null;
 
 	return <div className="game-tasks-panel">
 		<div className="game-task-scroll">
 			{state.syntheticOnly && <p className="notice">合成验收 · NO DSP · 只操作替身</p>}
-			{!showForm && state.goal ? <GameGoalPanel goal={state.goal} connected={c.healthy && state.storageAvailable && bridge.observation?.connected === true} /> : <section className="current-task-overview">
+			{!showForm && state.goal ? <GameGoalPanel goal={state.goal} connected={c.healthy && state.storageAvailable && bridge.observation?.connected === true} worldProduction={worldProduction} /> : <section className="current-task-overview">
 				<div className="game-goal-heading"><h2>{showForm ? continueTaskId ? "继续当前目标" : "新建游戏任务" : "当前任务"}</h2><span className="task-status" role="status">{phaseText}</span></div>
 				{!showForm && <><p className="game-goal-title">{task?.details.prompt || task?.details.techName || "等待现场反馈"}</p><dl className="game-goal-next"><dt>当前阶段</dt><dd>{phaseText}</dd><dt>下一步</dt><dd>{unresolved ? "先核销原动作" : state.phase === "awaiting_approval" ? "核对预检并确认" : state.busy ? "等待当前回执" : "核对本次结果后开始下一项任务"}</dd></dl></>}
 			</section>}
@@ -151,6 +178,7 @@ export function GameTasksPanel() {
 			{state.phase === "idle" && task && ["preparing", "awaiting_approval", "approved"].includes(task.state) && <p className="notice">上次预检已失效，请重新分析。</p>}
 
 			<div className="game-task-editor" hidden={!showForm}>
+				{showForm && hasCurrent && state.goal && !continueTaskId && <p className="muted">已复制原目标。新一轮会重新核对授权和预算，原任务与回执保留。</p>}
 				<form id={formId + "-mcp"} className="mcp-game-form" onSubmit={start} hidden={taskKind !== "mcp"}>
 					<fieldset disabled={locked}>
 						<label>游戏目标<textarea aria-label="MCP 游戏任务目标" value={prompt} onChange={event => setPrompt(event.target.value)} required maxLength={2000} rows={3} /></label>
@@ -158,11 +186,12 @@ export function GameTasksPanel() {
 						<label>运行方式<select aria-label="MCP 游戏任务模式" value={mode} onChange={event => setMode(event.target.value)}><option value="autonomous">自主执行 · 本轮授权</option><option value="observe">观察与建议</option><option value="assist">协助执行 · 每次确认</option></select></label>
 						<details className="game-task-settings"><summary>高级设置</summary>
 							{mode !== "observe" && <><label className="game-goal-toggle"><input aria-label="按目标持续执行" type="checkbox" checked={continuous} onChange={event => { setContinuous(event.target.checked); setContinueTaskId(null); }} />按目标持续推进</label>
-								{continuous && <><label>验收方式<select aria-label="目标验收方式" value={acceptance} onChange={event => setAcceptance(event.target.value)}><option value="evidence">现场条件验收</option><option value="production">持续产量验收</option></select></label>
+								{continuous && <><label>验收方式<select aria-label="目标验收方式" value={acceptance} onChange={event => setAcceptance(event.target.value)}><option value="evidence">现场条件验收</option><option value="production">产量采样验收</option></select></label>
 									{acceptance === "production" && <div className="game-goal-production-fields">
 										<label>目标产物<select aria-label="目标产物" value={itemId} onChange={event => setItemId(Number(event.target.value))}>{["电磁矩阵（蓝糖）", "能量矩阵（红糖）", "结构矩阵（黄糖）", "信息矩阵（紫糖）", "引力矩阵（绿糖）", "宇宙矩阵（白糖）"].map((name, index) => <option key={name} value={6001 + index}>{name}</option>)}</select></label>
 										<label>每分钟目标产量<input aria-label="目标每分钟产量" type="number" min={1} max={1e9} value={rate} onChange={event => setRate(Number(event.target.value))} /></label>
-										<label>持续游戏秒数<input aria-label="产量持续游戏秒数" type="number" min={10} max={3600} value={windowSeconds} onChange={event => setWindowSeconds(Number(event.target.value))} /></label>
+										<label>采样覆盖游戏秒数<input aria-label="产量持续游戏秒数" type="number" min={10} max={3600} value={windowSeconds} onChange={event => setWindowSeconds(Number(event.target.value))} /></label>
+										<p className="muted">每次采样为 10 游戏秒窗口；最大采样间隔为 5 游戏秒，未采样窗口不视为逐一核验。</p>
 									</div>}
 								</>}
 							</>}
@@ -194,7 +223,8 @@ export function GameTasksPanel() {
 				{task && <><p className="full-goal-title">{task.details.prompt}</p><p className="data-scope">{task.details.model} · {generic ? task.scope.actionKind || "Spherewright MCP 任务" : "指定科技 #" + task.scope.techId + " · 星球 #" + task.scope.planetId + " · 初次观察 tick " + task.scope.capturedAtGameTick}</p>
 					<ModelUsage value={task.details.usage} context={task.details.context} />
 				</>}
-				{task?.intent?.terminal && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前 · {task.intent.terminal.beforeQueue.map(id => "#" + id).join(" → ") || "空"}<br />之后 · {task.intent.terminal.afterQueue.map(id => "#" + id).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">科技研究完成需继续观察。</p></div>}
+				{task?.intent?.terminal && !generic && <div className="game-task-receipt"><b>队列变化已核对</b><p>之前 · {(task.intent.terminal.beforeQueue ?? []).map(id => "#" + id).join(" → ") || "空"}<br />之后 · {(task.intent.terminal.afterQueue ?? []).map(id => "#" + id).join(" → ")}<br />终态 tick {task.intent.terminal.completedAtGameTick}</p><p className="muted">科技研究完成需继续观察。</p></div>}
+				{task?.intent?.terminal && generic && <div className="game-task-receipt"><b>{task.intent.terminal.succeeded ? "原动作已核对" : "原动作已核对为失败"}</b><p>{task.intent.terminal.failureKind === "mecha_power_starved" ? "机甲缺能，已保留部分采集结果；补充燃料后需重新预检。" : "保留原回执，后续操作需要新的现场预检。"}</p></div>}
 				{state.unresolved.map(intent => <div className="game-task-receipt" key={intent.intentId}><p>未决动作 {intent.actionId || "尚无编号"}</p><button disabled={controlDisabled || state.busy || !intent.actionId} onClick={() => void c.act("reconcile", { intentId: intent.intentId })}>核销原动作</button></div>)}
 				<section className="game-task-transcript" aria-label="Agent 与执行记录">{state.events.filter(event => event.kind !== "usage").map(event => <div key={event.sequence} className={"game-event " + event.kind}>{event.kind === "stage" ? phases[event.text] ?? event.text : event.kind === "tool" ? event.name + " · " + (event.text === "started" ? "开始" : "完成") : event.code ? errors[event.code] ?? event.code : event.text}</div>)}</section>
 				<p className="muted">游戏输入互斥尚待实机验收。停止后续会冻结新提交，已受理动作继续核销。</p>

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { ReadOnlyMcpClient } from "../apps/desktop/mcp-client.mjs";
 import { createGameGoal, gameObjective, gameGoalProjection } from "../apps/desktop/game-goal.mjs";
-import { extendProductionGoal, productionGoalSample } from "../apps/desktop/game-production-goal.mjs";
+import { extendProductionGoal, extendProductionAverage, productionGoalSample, productionGoalVerified, resetProductionAfterTerminal } from "../apps/desktop/game-production-goal.mjs";
 import { JournalProjector } from "../apps/desktop/journal-format.mjs";
 
 const scope = { sessionId: "synthetic-game-session", planetId: 1, bridgeInstanceId: "synthetic-game-bridge", loaded: true, capturedAtGameTick: 1234 };
@@ -67,10 +67,23 @@ test("goal objective rejects invalid rates, unknown fields and forged completion
 	for (const value of [{ kind: "evidence", completed: true }, { kind: "production", itemId: 6001, minimumPerMinute: 0, windowSeconds: 60 }, { kind: "production", itemId: 6001, minimumPerMinute: 60, windowSeconds: 9 }]) assert.throws(() => gameObjective(value), /INVALID_GAME_OBJECTIVE/);
 });
 
+test("a production task prepares an advisory native supply draft before the model, without writes", async t => {
+	let initial;
+	const f = await fixture(t, async ({ initialSupplyPlan, invoke }) => {
+		initial = initialSupplyPlan;
+		assert.equal((await invoke("deck_goal_supply_plan", {})).state, "observed");
+	}, "foundry");
+	f.start({ objective: { kind: "production", itemId: 6001, minimumPerMinute: 60, windowSeconds: 60 } });
+	await f.host.settled();
+	assert.equal(initial.plannedRatePerMinute, 72); assert.equal(initial.machineCount, 4);
+	assert.equal(initial.power.capacityWatts, 6000000); assert.equal(initial.executable, false);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
 test("a goal executes through the same stdio gateway and waits for its original action without a model poll", async t => {
 	let waiting;
 	const f = await fixture(t, async ({ invoke, goalTools }) => {
-		assert.equal(goalTools.length, 5);
+		assert.equal(goalTools.length, 6); assert.ok(goalTools.some(tool => tool.name === "deck_goal_supply_plan"));
 		await invoke("deck_goal_plan", plan(1));
 		const receipt = await craft(invoke);
 		assert.equal(f.host.snapshot().goal.behavior.actionId, receipt.result.actionId);
@@ -87,6 +100,8 @@ test("a goal executes through the same stdio gateway and waits for its original 
 	f.start(); await approve(f); await f.host.settled();
 	assert.equal(f.host.snapshot().goal.status, "completed");
 	assert.equal(f.host.snapshot().goal.usage.writes, 1);
+	assert.ok(f.host.snapshot().goal.transport.workUsed > 0);
+	assert.ok(f.host.snapshot().goal.transport.reconciliationUsed > 0);
 	assert.equal(f.host.snapshot().phase, "goal_completed");
 	assert.equal(f.host.ledger.children(f.host.currentTaskId).length, 1);
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
@@ -312,7 +327,7 @@ test("production goal requires its unchanged native checks and enough continuous
 		const receipt = await craft(invoke);
 		await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId });
 		let result;
-		for (let index = 0; index < 3; index++) result = await invoke("deck_goal_verify", {});
+		for (let index = 0; index < 5; index++) result = await invoke("deck_goal_verify", {});
 		assert.equal(result.completed, true);
 	});
 	f.start({ objective: { kind: "production", itemId: 6001, minimumPerMinute: 60, windowSeconds: 30 } });
@@ -320,6 +335,8 @@ test("production goal requires its unchanged native checks and enough continuous
 	assert.equal(f.host.snapshot().goal.status, "completed");
 	assert.equal(f.host.snapshot().goal.verification.minimumRate, 60);
 	assert.ok(f.host.snapshot().goal.verification.seconds >= 30);
+	assert.equal(f.host.snapshot().goal.verification.evidenceKind, "sampled-native-10s");
+	assert.equal(f.host.snapshot().goal.verification.maximumObservedGapTicks, 300);
 });
 
 test("production waiting monitors the game window without spending model requests", async t => {
@@ -327,7 +344,7 @@ test("production waiting monitors the game window without spending model request
 		await invoke("deck_goal_plan", plan(1));
 		const receipt = await craft(invoke);
 		await invoke("spherewright_get_action_result", { actionId: receipt.result.actionId });
-		const result = await invoke("deck_goal_wait", { reason: "等待连续产量窗口", timeoutSeconds: 5 });
+		const result = await invoke("deck_goal_wait", { reason: "等待产量采样窗口", timeoutSeconds: 10 });
 		assert.equal(result.satisfied, true);
 		assert.ok(result.goal.verification.seconds >= 20);
 		assert.equal(result.goal.usage.modelRequests, 0);
@@ -460,13 +477,39 @@ test("production coverage rejects overlaps as extra time, gaps, low rates, stale
 	const sample = (startTick, endTick, rate = 60) => ({ startTick, endTick, rate });
 	let value = extendProductionGoal(null, sample(1, 600), objective, 0, 1);
 	value = extendProductionGoal(value, sample(1, 600), objective, 0, 2);
-	assert.equal(value.seconds, 10); assert.equal(value.samples, 1);
+	assert.equal(value.seconds, 10); assert.equal(value.samples, 1); assert.equal(value.observedAt, 1);
 	value = extendProductionGoal(value, sample(301, 900), objective, 0, 3);
 	assert.equal(value.seconds, 15);
+	assert.equal(value.maximumObservedGapTicks, 300);
 	value = extendProductionGoal(value, sample(1001, 1600), objective, 0, 4);
-	assert.equal(value.seconds, 10);
+	assert.equal(value.seconds, 10); assert.equal(value.reason, "GAME_GOAL_SAMPLE_GAP");
 	value = extendProductionGoal(value, sample(1601, 2200, 30), objective, 0, 5);
 	assert.equal(value.seconds, 0);
 	assert.equal(extendProductionGoal(value, null, objective, 0, 6).state, "unavailable");
 	assert.throws(() => productionGoalSample({ sessionId: "other", requestedItemIds: [6001], planets: [] }, scope, objective), /GAME_GOAL_PRODUCTION_SCOPE_CHANGED/);
+	assert.equal(productionGoalVerified({ state: "verified", evidenceKind: "sampled-native-10s", observedAt: 1000 }, 16000), true);
+	assert.equal(productionGoalVerified({ state: "verified", evidenceKind: "sampled-native-10s", observedAt: 1000 }, 16001), false);
+	assert.equal(productionGoalVerified({ state: "verified", observedAt: 1000 }, 1001), false);
+	const legacy = { state: "verified", startTick: 1, endTick: 600, seconds: 10, minimumRate: 60, samples: 1, observedAt: 1 };
+	assert.equal(extendProductionGoal(legacy, sample(301, 900), objective, 0, 2).seconds, 10);
+});
+
+test("a 60-second average counts only six exact adjacent windows and never sums overlaps", () => {
+	const sample = (startTick, count = 10) => ({ startTick, endTick: startTick + 599, producedCount: count });
+	let value = extendProductionAverage(null, sample(1), 1, 1);
+	value = extendProductionAverage(value, sample(301), 1, 2); assert.equal(value.seconds, 10); assert.equal(value.producedCount, 10);
+	for (let index = 1; index < 6; index++) value = extendProductionAverage(value, sample(1 + index * 600), 1, index + 2);
+	assert.equal(value.state, "ready"); assert.equal(value.seconds, 60); assert.equal(value.ratePerMinute, 60);
+	assert.equal(extendProductionAverage(value, sample(3301), 1, 99), value);
+	let gap = extendProductionAverage(null, sample(1), 1, 1);
+	gap = extendProductionAverage(gap, sample(602), 1, 2); assert.equal(gap.seconds, 10); assert.equal(gap.reason, "GAME_GOAL_AVERAGE_GAP");
+});
+
+test("a terminal world mutation resets production evidence once; a save does not", () => {
+	const goal = { objective: { kind: "production" }, measurementStartTick: 100, verification: { state: "verified" }, productionAverage: { state: "ready" }, supplyPlan: { state: "observed" } };
+	const reply = actionKind => ({ success: true, result: { terminal: true, actionKind, completedAtGameTick: 200 } });
+	assert.equal(resetProductionAfterTerminal(goal, "spherewright_get_action_result", reply("save")), false);
+	assert.equal(resetProductionAfterTerminal(goal, "spherewright_get_action_result", reply("build")), true);
+	assert.equal(goal.measurementStartTick, 201); assert.equal(goal.verification, null); assert.equal(goal.productionAverage, null); assert.equal(goal.supplyPlan.state, "stale");
+	assert.equal(resetProductionAfterTerminal(goal, "spherewright_get_action_result", reply("build")), false);
 });

@@ -25,12 +25,14 @@ const nonnegative = value => Number.isSafeInteger(value) && value >= 0;
 const atRest = value => value && [value.x, value.y, value.z].every(Number.isFinite)
 	&& Math.hypot(value.x, value.y, value.z) <= 0.1;
 const exhaustedMiningMessage = "The normal mining order stopped after the mecha had no core energy, reactor energy, current reactor item, or usable fuel for 600 game ticks.";
+const powerStarvedHarvest = value => value.failureKind === "mecha_power_starved"
+	|| value.failureKind == null && value.message === exhaustedMiningMessage; // Older installed cohorts omit the structured reason.
 
 // This is a candidate for an explicit independent audit, never automatic success.
 export function energyStarvedHarvestCandidate(value) {
 	if (value?.actionKind !== "harvest" || value.state !== "action_failed" || value.terminal !== true || value.succeeded !== false
-		|| value.recoveryRequired !== false || value.failureKind != null || value.stalled !== false || value.doNotRetrySameTarget !== false
-		|| value.message !== exhaustedMiningMessage || !stateHash(value.beforeStateHash) || !stateHash(value.afterStateHash)
+		|| value.recoveryRequired !== false || !powerStarvedHarvest(value) || value.stalled !== false || value.doNotRetrySameTarget !== false
+		|| !stateHash(value.beforeStateHash) || !stateHash(value.afterStateHash)
 		|| !nonnegative(value.startedAtGameTick) || !nonnegative(value.completedAtGameTick) || value.completedAtGameTick < value.startedAtGameTick
 		|| !Number.isSafeInteger(value.targetObjectId) || value.targetObjectId <= 0
 		|| !Number.isSafeInteger(value.requestedCount) || value.requestedCount <= 0 || !Array.isArray(value.itemDeltas) || !value.itemDeltas.length) return false;

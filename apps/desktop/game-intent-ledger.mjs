@@ -192,6 +192,15 @@ export class GameIntentLedger {
 		if (!["COMMIT_RECEIPT_UNAVAILABLE", "ACCEPTANCE_BINDING_MISMATCH", "ORIGINAL_ACTION_BINDING_MISMATCH", "RESEARCH_TERMINAL_PROOF_INCOMPLETE", "ORIGINAL_ACTION_NOT_FOUND"].includes(reason)) reason = "COMMIT_RECEIPT_UNAVAILABLE";
 		return this.#transaction(() => { if (this.#intent(id).state !== "completed") this.#unknown(id, reason); });
 	}
+	cancelUnsentRecovery(authority, id) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const intent = this.#intent(id), task = this.#task(intent.task_id);
+			if (task.scope.kind !== "mcp-action" || task.scope.actionKind !== "resume-owned-game" || intent.state !== "recorded" || intent.action_id || intent.acceptance) throw new Error("GAME_RECOVERY_ORIGINAL_PENDING");
+			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify({ actionKind: "resume-owned-game", state: "not_dispatched", succeeded: false, nativeTerminalOnly: false }), id);
+			this.db.prepare("UPDATE game_tasks SET state='cancelled' WHERE id=?").run(task.id); return this.intent(id);
+		});
+	}
 	#unknown(id, reason) { const intent = this.#intent(id), gate = this.db.prepare("SELECT * FROM game_gate WHERE id=1").get(); if (!auditReasons.includes(gate?.reason)) this.db.prepare("INSERT INTO game_gate(id,intent_id,reason) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET intent_id=excluded.intent_id,reason=excluded.reason").run(id, reason); if (intent.state !== "completed") this.db.prepare("UPDATE game_intents SET state='unknown' WHERE id=?").run(id); this.db.prepare("UPDATE game_tasks SET state='blocked' WHERE id=?").run(intent.task_id); }
 	accept(id, receipt) {
 		const result = this.#transaction(() => { const intent = this.#intent(id); if (receipt?.accepted !== true || receipt.actionKind !== "select-research" || receipt.idempotencyKey !== intent.idempotency_key || !opaque(receipt.actionId) || intent.action_id && intent.action_id !== receipt.actionId) { this.#unknown(id, "ACCEPTANCE_BINDING_MISMATCH"); return null; } if (intent.action_id === receipt.actionId) return this.intent(id); this.db.prepare("UPDATE game_intents SET action_id=?,state='accepted',acceptance=? WHERE id=?").run(receipt.actionId, JSON.stringify({ accepted: true, actionId: receipt.actionId, actionKind: "select-research", idempotencyKey: receipt.idempotencyKey }), id); this.db.prepare("UPDATE game_tasks SET state='accepted' WHERE id=?").run(intent.task_id); return this.intent(id); });
@@ -244,17 +253,24 @@ export class GameIntentLedger {
 	}
 	#completeMcp(id, terminal, context, resolvingStoppedAction = false, energyAuditPlayer = null) {
 		const outcome = this.#transaction(() => {
-			const intent = this.#intent(id), scope = this.#task(intent.task_id).scope, newWorld = scope.actionKind === "new-game";
+			const intent = this.#intent(id), scope = this.#task(intent.task_id).scope, newWorld = scope.actionKind === "new-game", reopening = scope.actionKind === "resume-owned-game", menuReturn = scope.actionKind === "return-to-main-menu";
 			const energyStop = resolvingStoppedAction && energyAuditPlayer !== null && energyStarvedHarvestAudit(terminal, energyAuditPlayer, context, this.now());
 			const stopped = stoppedGameAction(terminal) || energyStop;
 			if (resolvingStoppedAction && !stopped || !resolvingStoppedAction && auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
-			if (!terminal || terminal.actionId !== intent.action_id || terminal.actionKind !== scope.actionKind || (!newWorld || terminal.idempotencyKey != null) && terminal.idempotencyKey !== intent.idempotency_key || !newWorld && (terminal.sessionId !== scope.sessionId || scope.planetId !== null && terminal.planetId !== scope.planetId)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
+			if (!terminal || terminal.actionId !== intent.action_id || terminal.actionKind !== scope.actionKind || (!(newWorld || reopening) || terminal.idempotencyKey != null) && terminal.idempotencyKey !== intent.idempotency_key || !(newWorld || reopening) && (terminal.sessionId !== scope.sessionId || scope.planetId !== null && terminal.planetId !== scope.planetId)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
 			if (!stopped && (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true || terminal.terminal === true && terminal.succeeded !== true)) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
 			if (!stopped && (terminal.terminal !== true || terminal.succeeded !== true || terminal.state !== "completed")) throw new Error("ORIGINAL_ACTION_PENDING");
-			if (context?.bridgeInstanceId !== scope.bridgeInstanceId || !newWorld && context.sessionId !== scope.sessionId || context.owned !== true || context.accessRestricted !== false) throw new Error("GAME_CONTEXT_CHANGED");
+			if (menuReturn) {
+				const proof = terminal.mainMenuReturnReadback;
+				if (!proof || proof.normalSaveConfirmed !== true || proof.completeSaveVerified !== true || proof.nativeEndRequested !== true || proof.mainMenuVerified !== true || !tick(proof.savedGameTick) || !tick(scope.capturedAtGameTick) || proof.savedGameTick < scope.capturedAtGameTick) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
+				if (context?.bridgeInstanceId !== scope.bridgeInstanceId || context.loaded !== false || !Number.isFinite(context.observedAt) || Math.abs(this.now() - context.observedAt) > 2000) throw new Error("GAME_CONTEXT_CHANGED");
+			} else if (reopening) {
+				if (context?.bridgeInstanceId !== scope.bridgeInstanceId || context.loaded !== true || context.owned !== true || context.accessRestricted !== false || !opaque(terminal.sessionId) || terminal.sessionId !== context.sessionId || terminal.planetId !== scope.planetId || context.planetId !== scope.planetId || !tick(scope.minimumRecoveryGameTick) || !tick(context.capturedAtGameTick) || context.capturedAtGameTick < scope.minimumRecoveryGameTick) throw new Error("GAME_CONTEXT_CHANGED");
+			} else if (context?.bridgeInstanceId !== scope.bridgeInstanceId || !newWorld && context.sessionId !== scope.sessionId || context.owned !== true || context.accessRestricted !== false) throw new Error("GAME_CONTEXT_CHANGED");
 			if (stopped && (context.writeHealth !== "healthy" || context.planetId !== scope.planetId || !tick(context.capturedAtGameTick) || context.capturedAtGameTick < terminal.completedAtGameTick)) throw new Error("HEALTHY_GAME_WRITES_REQUIRED");
 			if (newWorld && (!opaque(terminal.sessionId) || terminal.sessionId !== context.sessionId || !positive(terminal.planetId) || terminal.planetId !== context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
 			const summary = { actionId: terminal.actionId, actionKind: terminal.actionKind, state: terminal.state, succeeded: !stopped, completedAtGameTick: tick(terminal.completedAtGameTick) ? terminal.completedAtGameTick : null, nativeTerminalOnly: true };
+			if (menuReturn) Object.assign(summary, { mainMenuReturnReadback: { normalSaveConfirmed: true, completeSaveVerified: true, nativeEndRequested: true, mainMenuVerified: true, savedGameTick: terminal.mainMenuReturnReadback.savedGameTick }, proofHash: hash(terminal) });
 			if (stopped) Object.assign(summary, {
 				failureKind: terminal.failureKind ?? null,
 				doNotRetrySameTarget: terminal.doNotRetrySameTarget === true,
@@ -291,6 +307,14 @@ export class GameIntentLedger {
 	stop(id) { this.#plans.delete(id); this.#preparing.delete(id); return this.#transaction(() => { const intent = this.db.prepare("SELECT id,state FROM game_intents WHERE task_id=?").get(id); this.db.prepare("UPDATE game_tasks SET state=? WHERE id=? AND state<>'completed'").run(intent ? "reconciling" : "cancelled", id); return this.task(id); }); }
 	task(id) { const value = this.#task(id); return { id: value.id, state: value.state, scope: value.scope, previewHash: value.preview_hash, expiresAt: value.expires_at, approvalId: value.approval_id }; }
 	detailsFor(id) { this.#task(id); return JSON.parse(this.db.prepare("SELECT body FROM game_task_details WHERE task_id=?").get(id)?.body ?? "{}"); }
+	transportBudget(id, value) {
+		if (!value || !["workUsed", "workLimit", "reconciliationUsed", "reconciliationLimit"].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0) || value.workUsed > value.workLimit || value.reconciliationUsed > value.reconciliationLimit) throw new Error("INVALID_GAME_TRANSPORT_BUDGET");
+		return this.#transaction(() => {
+			if (this.#task(id).scope.kind !== "mcp-session") throw new Error("GAME_GOAL_TASK_REQUIRED");
+			const body = this.detailsFor(id); body.transport = { ...value };
+			this.db.prepare("UPDATE game_task_details SET body=? WHERE task_id=?").run(JSON.stringify(body), id);
+		});
+	}
 	children(parentTaskId) {
 		return this.db.prepare("SELECT id FROM game_tasks WHERE json_extract(scope,'$.parentTaskId')=? ORDER BY rowid DESC LIMIT 256").all(parentTaskId).map(({ id }) => {
 			const row = this.db.prepare("SELECT id FROM game_intents WHERE task_id=?").get(id);
@@ -343,5 +367,21 @@ export class GameIntentLedger {
 	}
 	events(id) { this.#task(id); return this.db.prepare("SELECT sequence,kind,body FROM game_task_events WHERE task_id=? ORDER BY sequence DESC LIMIT 100").all(id).reverse().map(({ body, ...value }) => ({ ...value, ...JSON.parse(body) })); }
 	advised(id) { return this.#transaction(() => { const task = this.#task(id); if (task.state !== "draft") throw new Error("GAME_TASK_NOT_ADVISORY"); this.db.prepare("UPDATE game_tasks SET state='advised' WHERE id=?").run(id); return this.task(id); }); }
+	completeHostExitParent(authority, parentId, actionId) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const parent = this.#task(parentId), action = this.#task(actionId), intent = this.db.prepare("SELECT state,terminal FROM game_intents WHERE task_id=?").get(actionId), proof = intent?.terminal ? JSON.parse(intent.terminal) : null;
+			if (parent.scope.kind !== "mcp-session" || parent.state !== "draft" || action.scope.parentTaskId !== parentId || action.scope.actionKind !== "return-to-main-menu" || intent?.state !== "completed" || proof?.mainMenuReturnReadback?.mainMenuVerified !== true) throw new Error("GAME_EXIT_ORIGINAL_PENDING");
+			this.db.prepare("UPDATE game_tasks SET state='completed' WHERE id=?").run(parentId); return this.task(parentId);
+		});
+	}
+	completeHostRecoveryParent(authority, parentId, actionId) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#transaction(() => {
+			const parent = this.#task(parentId), action = this.#task(actionId), intent = this.db.prepare("SELECT state,terminal FROM game_intents WHERE task_id=?").get(actionId), proof = intent?.terminal ? JSON.parse(intent.terminal) : null;
+			if (parent.scope.kind !== "mcp-session" || parent.state !== "draft" || action.scope.parentTaskId !== parentId || action.scope.actionKind !== "resume-owned-game" || intent?.state !== "completed" || proof?.succeeded !== true) throw new Error("GAME_RECOVERY_ORIGINAL_PENDING");
+			this.db.prepare("UPDATE game_tasks SET state='completed' WHERE id=?").run(parentId); return this.task(parentId);
+		});
+	}
 	close() { if (this.closed) return; this.closed = true; this.#plans.clear(); this.#preparing.clear(); this.#reading.clear(); this.db.close(); }
 }

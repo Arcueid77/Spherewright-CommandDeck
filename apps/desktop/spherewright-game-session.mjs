@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
 import { stoppedGameAction, energyStarvedHarvestCandidate, rejectedGameCommit } from "./game-action-outcome.mjs";
+import { GameTransportBudget } from "./game-transport-budget.mjs";
 
 const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -14,7 +15,7 @@ export function gameSessionLimits(value = {}) {
 }
 export async function gameContext(port, expected, writing = false) {
 	const status = await port.call("spherewright_get_status", {}), session = unwrap(await port.call("spherewright_get_session_state", {})), value = status?.status;
-	if (status?.success !== true || value?.bridgeConnected !== true || value.protocolVersion !== 1 || typeof value.bridgeInstanceId !== "string" || !value.bridgeInstanceId.length || session.bridgeConnected !== true) throw new Error("GAME_MCP_CONTEXT_UNAVAILABLE");
+	if (status?.success !== true || value?.bridgeConnected !== true || value.protocolVersion !== 1 || typeof value.bridgeInstanceId !== "string" || !value.bridgeInstanceId.length || session.bridgeConnected !== true || typeof value.gameLoaded === "boolean" && value.gameLoaded !== session.gameLoaded) throw new Error("GAME_MCP_CONTEXT_UNAVAILABLE");
 	const context = { bridgeInstanceId: value.bridgeInstanceId, sessionId: session.gameLoaded === true ? session.sessionId : null, planetId: session.gameLoaded === true ? session.localPlanetId : null, owned: session.ownedBySpherewright === true, accessRestricted: session.accessRestricted !== false, loaded: session.gameLoaded === true, capturedAtGameTick: session.gameTick ?? null };
 	if (expected && (expected.bridgeInstanceId !== context.bridgeInstanceId || expected.sessionId !== context.sessionId)) throw new Error("GAME_CONTEXT_CHANGED");
 	if (context.loaded && (!context.owned || context.accessRestricted || typeof context.sessionId !== "string" || !context.sessionId.length)) throw new Error("OWNED_GAME_WORLD_REQUIRED");
@@ -28,7 +29,8 @@ export async function readMcpAction(port, request) {
 	// Return native safety outcomes before a later context read can obscure them.
 	const stopped = stoppedGameAction(terminal);
 	const energyAudit = request.energyAudit === true && energyStarvedHarvestCandidate(terminal);
-	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || ["outcome_unknown", "recovery_required"].includes(terminal.state) || terminal.state === "action_failed" && !stopped && !energyAudit || terminal.recoveryRequired === true) return { request, terminal, context: null };
+	const reopening = request.actionKind === "resume-owned-game";
+	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && !reopening && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || reopening && terminal.idempotencyKey != null && terminal.idempotencyKey !== request.idempotencyKey || ["outcome_unknown", "recovery_required"].includes(terminal.state) || terminal.state === "action_failed" && !stopped && !energyAudit || terminal.recoveryRequired === true) return { request, terminal, context: null };
 	if (energyAudit) {
 		const before = await gameContext(port, request, true);
 		const player = unwrap(await port.call("spherewright_get_player_state", { sessionId: request.sessionId, planetId: request.planetId }));
@@ -36,14 +38,19 @@ export async function readMcpAction(port, request) {
 		if (!Number.isSafeInteger(before.capturedAtGameTick) || !Number.isSafeInteger(player.capturedAtGameTick) || player.capturedAtGameTick < before.capturedAtGameTick) throw new Error("POWER_STOP_AUDIT_UNPROVED");
 		return { request, terminal, context, player };
 	}
+	if (request.actionKind === "return-to-main-menu")
+		return { request, terminal, context: await gameContext(port) };
+	if (reopening)
+		return { request, terminal, context: await gameContext(port) };
 	return { request, terminal, context: await gameContext(port, request.actionKind === "new-game" ? undefined : request, stopped) };
 }
 
 // A transport/authority adapter, not another factory planner or native executor.
 export class SpherewrightGameSession {
 	#runGrant = null;
-	constructor({ port, ledger, authority, task, mode, limits, binding, goal, allowedFamilies, signal, stage, check, now = () => Date.now() }) {
+	constructor({ port, ledger, authority, task, mode, limits, binding, goal, allowedFamilies, signal, stage, check, transportBudget, onTransport = () => {}, now = () => Date.now() }) {
 		Object.assign(this, { port, ledger, authority, task, mode, limits, binding, goal, signal, stage, check, now });
+		this.rawPort = port; this.transportBudget = transportBudget ?? new GameTransportBudget(limits.toolCalls, onTransport); this.port = this.transportBudget.wrap(port);
 		this.allowedFamilies = new Set(allowedFamilies ?? []);
 		this.entries = new Map(port.tools().map(tool => [tool.name, tool])); this.context = task.scope; this.plans = new Map(); this.submissions = 0; this.calls = 0; this.pending = null; this.deadline = performance.now() + limits.durationMs; this.busy = false;
 		this.abort = () => { this.#runGrant = null; this.cancelApproval(); }; signal.addEventListener("abort", this.abort);
@@ -58,14 +65,15 @@ export class SpherewrightGameSession {
 	}
 	async authorizeRun() {
 		this.assertActive(); if (this.mode !== "autonomous" || this.#runGrant) throw new Error("FRESH_GAME_MCP_AUTHORIZATION_REQUIRED");
-		const disclosure = { goal: this.goal, ...(this.task.scope.objective ? { objective: this.task.scope.objective } : {}), allowedFamilies: [...this.allowedFamilies].sort(), limits: { ...this.limits }, context: { ...this.context }, binding: { ...this.binding }, newGameRequiresSeparateConfirmation: true, nativeInputExclusion: false };
+		const disclosure = { goal: this.goal, ...(this.task.scope.objective ? { objective: this.task.scope.objective } : {}), allowedFamilies: [...this.allowedFamilies].sort(), limits: { ...this.limits }, transportBudget: this.transportBudget.snapshot(), context: { ...this.context }, binding: { ...this.binding }, newGameRequiresSeparateConfirmation: true, nativeInputExclusion: false };
 		const approved = await this.waitForApproval({ kind: "run", taskId: this.task.id, disclosure, digest: digest(disclosure), expiresAt: this.now() + Math.min(120000, this.deadline - performance.now()), nonce: null, uiEpoch: null });
 		this.assertActive(); await gameContext(this.port, this.context); this.assertActive();
 		this.#runGrant = approved.digest;
 	}
 	async call(name, args) {
 		this.assertActive(); const entry = this.entries.get(name);
-		if (this.busy || !entry || !this.port.valid(name, args) || this.mode === "autonomous" && (!this.#runGrant || entry.kind !== "read" && !this.allowedFamilies.has(entry.family)) || this.mode === "observe" && entry.kind !== "read" || ++this.calls > this.limits.toolCalls) throw new Error("GAME_MCP_TOOL_SCOPE_REJECTED");
+		if (this.busy || !entry || !this.port.valid(name, args) || this.mode === "autonomous" && (!this.#runGrant || entry.kind !== "read" && !this.allowedFamilies.has(entry.family)) || this.mode === "observe" && entry.kind !== "read" || this.calls >= this.limits.toolCalls) throw new Error("GAME_MCP_TOOL_SCOPE_REJECTED");
+		this.calls++;
 		this.busy = true;
 		try {
 			if (entry.kind === "commit") return await this.commit(entry, args);
@@ -114,12 +122,16 @@ export class SpherewrightGameSession {
 		this.assertActive(); if (!confirmed) throw new Error("GAME_MCP_CONFIRMATION_CANCELLED");
 		await gameContext(this.port, plan.context, true); this.assertActive();
 		if (plan.expiresAt <= this.now()) throw new Error("FRESH_GAME_MCP_PLAN_REQUIRED");
-		this.plans.clear(); this.submissions++;
+		this.plans.clear();
 		// Persist before dispatch, generate the sole key in the trusted host, and
 		// never retry a commit even when the transport reports an error.
+		// Reserve and persist the transport charge before the durable intent. No
+		// budget or storage failure can appear after an intent and before dispatch.
+		this.transportBudget.claim("work", entry.name);
+		this.submissions++;
 		const intent = this.ledger.beginMcpIntent(this.authority, action.id, confirmed.digest, plan.expiresAt);
 		let reply;
-		try { reply = await this.port.call(entry.name, { ...Object.fromEntries(fields.filter(key => ["sessionId", "planetId"].includes(key)).map(key => [key, args[key]])), planToken: plan.token, idempotencyKey: intent.idempotencyKey }); }
+		try { reply = await this.rawPort.call(entry.name, { ...Object.fromEntries(fields.filter(key => ["sessionId", "planetId"].includes(key)).map(key => [key, args[key]])), planToken: plan.token, idempotencyKey: intent.idempotencyKey }); }
 		catch { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
 		if (plan.actionKind !== "new-game" && rejectedGameCommit(reply)) {
 			this.plans.clear();

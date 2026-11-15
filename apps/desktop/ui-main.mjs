@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { confirmResearchFromUi, startAutonomousGameFromUi } from "./research-confirmation.mjs";
+import { confirmResearchFromUi, startAutonomousGameFromUi, startGameExitFromUi, startGameRecoveryFromUi } from "./research-confirmation.mjs";
 import { createVideoProtocol, videoScheme, videoPlaybackUrl } from "./video-protocol.mjs";
 import { recordingPermissionGate } from "./recording-permission.mjs";
 import { createRendererProtocol, rendererScheme, rendererUrl } from "./renderer-protocol.mjs";
@@ -292,6 +292,18 @@ if (typeof process.send !== "function") {
 				try {
 					return await confirmGame(args?.taskId);
 				} finally { confirmingGame = false; }
+			});
+			handle("deck:exit-game", async () => {
+				if (confirmingGame || diagnosticSaving) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+				confirmingGame = true;
+				try { return await startGameExitFromUi({ request, confirm: confirmGame }); }
+				finally { confirmingGame = false; }
+			});
+			handle("deck:resume-game", async () => {
+				if (confirmingGame || diagnosticSaving) throw new Error("GAME_CONFIRMATION_ALREADY_OPEN");
+				confirmingGame = true;
+				try { return await startGameRecoveryFromUi({ request, confirm: confirmGame }); }
+				finally { confirmingGame = false; }
 			});
 			handle("deck:diagnostic-preview", options => request("diagnostics-preview", { options, generation: documentGeneration }));
 			handle("deck:diagnostic-discard", id => request("diagnostics-discard", { id, generation: documentGeneration }));

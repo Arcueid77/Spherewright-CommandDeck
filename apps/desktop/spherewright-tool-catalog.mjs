@@ -8,14 +8,15 @@ const object = value => value !== null && typeof value === "object" && !Array.is
 // These operations have additional conversation/restore authority, beyond an ordinary
 // action confirmation. Discovery must never turn their presence into that authority.
 const separateConsent = /^(?:save_import|resume_owned_game|reload_flight_checkpoint|quarantine_reconciliation|return_to_main_menu)$/;
-export function spherewrightCatalog(tools) {
+export function spherewrightCatalog(tools, { hostExit = false, hostRecovery = false } = {}) {
 	const entries = new Map();
 	for (const tool of tools) {
 		if (!/^spherewright_[a-z0-9_]{1,100}$/.test(tool.name ?? "") || tool.inputSchema?.type !== "object" || JSON.stringify(tool.inputSchema).length > 65536) continue;
 		const match = /^spherewright_(prepare|commit)_(.+)$/.exec(tool.name);
-		if (match && separateConsent.test(match[2])) continue;
+		const hostMenu = hostExit === true && match?.[2] === "return_to_main_menu", hostResume = hostRecovery === true && match?.[2] === "resume_owned_game";
+		if (match && separateConsent.test(match[2]) && !hostMenu && !hostResume) continue;
 		const read = !match && tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false;
-		if (!read && (!match || separateConsent.test(match[2]) || tool.annotations?.readOnlyHint !== false || tool.annotations?.destructiveHint !== (match[1] === "commit"))) continue;
+		if (!read && (!match || separateConsent.test(match[2]) && !hostMenu && !hostResume || tool.annotations?.readOnlyHint !== false || tool.annotations?.destructiveHint !== (match[1] === "commit"))) continue;
 		try {
 			const schema = { ...structuredClone(tool.inputSchema), additionalProperties: false };
 			const validator = Compile(schema);
@@ -24,7 +25,8 @@ export function spherewrightCatalog(tools) {
 	}
 	for (const [name, entry] of entries) if (entry.kind !== "read") {
 		const commit = entries.get(`spherewright_commit_${entry.family}`), prepare = entries.get(`spherewright_prepare_${entry.family}`);
-		if (!prepare || !commit || commit.tool.inputSchema.properties?.planToken?.type !== "string" || commit.tool.inputSchema.properties?.idempotencyKey?.type !== "string" || Object.keys(commit.tool.inputSchema.properties).some(key => !["sessionId", "planetId", "planToken", "idempotencyKey"].includes(key))) entries.delete(name);
+		const allowedCommitFields = hostRecovery && entry.family === "resume_owned_game" ? ["planToken", "idempotencyKey", "userConfirmedInConversation", "confirmationDigest"] : ["sessionId", "planetId", "planToken", "idempotencyKey"];
+		if (!prepare || !commit || commit.tool.inputSchema.properties?.planToken?.type !== "string" || commit.tool.inputSchema.properties?.idempotencyKey?.type !== "string" || Object.keys(commit.tool.inputSchema.properties).some(key => !allowedCommitFields.includes(key))) entries.delete(name);
 	}
 	return entries;
 }

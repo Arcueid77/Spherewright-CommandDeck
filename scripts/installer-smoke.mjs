@@ -21,6 +21,7 @@ const runId = randomUUID(), proofRoot = join(root, ".local/installer", runId), s
 await mkdir(proofRoot, { recursive: true }); await writeFile(join(scope, "installer-test-scope.txt"), manifest.testIdentity, { flag: "wx" });
 await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, testIdentity: manifest.testIdentity, source, scope, installation, payload, sourceRevision: manifest.sourceRevision, builderRevision: manifest.builderRevision }, null, 2), { flag: "wx" });
 const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
+if (process.env.COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS === "1") environment.COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS = "1";
 const switches = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART", "/NOCLOSEAPPLICATIONS", "/NOFORCECLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/DECKTESTID=" + manifest.testIdentity, "/DECKTESTROOT=" + scope];
 const executable = join(source, installerExecutable), uninstaller = join(installation, "unins000.exe"), registry = join(process.env.SystemRoot, "System32/reg.exe"), key = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\" + manifest.appId + "_is1";
 const profiles = [];

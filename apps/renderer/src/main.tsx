@@ -77,6 +77,8 @@ declare global {
 			chooseBridge(): Promise<unknown>;
 			game<T = unknown>(action: string, args?: Record<string, unknown>): Promise<T>;
 			confirmResearch(taskId: string): Promise<unknown>;
+			exitGame(): Promise<{ cancelled?: boolean; currentTaskId?: string }>;
+			resumeGame(): Promise<{ cancelled?: boolean; currentTaskId?: string }>;
 			diagnosticPreview(options: DiagnosticOptions): Promise<DiagnosticPreview>;
 			saveDiagnosticPreview(id: string): Promise<DiagnosticSave>;
 			discardDiagnosticPreview(id: string): Promise<unknown>;
@@ -449,6 +451,7 @@ function App() {
 	const [menu, setMenu] = useState<"panels" | "layout" | "more" | null>(null);
 	const [layoutReady, setLayoutReady] = useState<Partial<Record<Workspace, boolean>>>({});
 	const [layoutNotice, setLayoutNotice] = useState("");
+	const [lifecycleTask, setLifecycleTask] = useState<{ id: string; kind: "exit" | "recovery" } | null>(null);
 	const dock = useRef<Partial<Record<Workspace, DockApi>>>({});
 	const menuArea = useRef<HTMLDivElement>(null);
 	const navigation = useWorkbenchNavigation();
@@ -479,6 +482,11 @@ function App() {
 		void window.deck.workbench("ui-save", { key: "workspace", value }).catch(() => setLayoutNotice("工作区选择未能保存。"));
 	}
 	useEffect(() => { window.dispatchEvent(new Event("deck-workspace")); }, [workspace, layoutReady]);
+	useEffect(() => {
+		if (!lifecycleTask || game.currentTaskId !== lifecycleTask.id || game.busy) return;
+		if (game.phase === "completed") { setLayoutNotice(lifecycleTask.kind === "exit" ? game.recovery?.state === "ready" ? "游戏已正常保存并退出，可在主菜单恢复。" : "游戏已正常保存并退出；安全恢复记录不可用。" : "世界已恢复，旧任务保持停止。"); setLifecycleTask(null); }
+		else if (["failed", "blocked", "reconciling", "cancelled"].includes(game.phase)) { setLayoutNotice("游戏操作未完成，请查看当前任务和原动作回执。"); setLifecycleTask(null); }
+	}, [lifecycleTask, game.currentTaskId, game.busy, game.phase, game.recovery?.state]);
 	useEffect(() => {
 		const close = (event: PointerEvent) => { if (!menuArea.current?.contains(event.target as Node)) setMenu(null); };
 		const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
@@ -534,6 +542,16 @@ function App() {
 		builders[workspace](api);
 		await persistedLayout.save(workspace, api.toJSON()).catch(() => setLayoutNotice("默认布局未能保存。"));
 	}
+	async function exitGame() {
+		setMenu(null);
+		try { const result = await window.deck.exitGame(); if (!result?.cancelled) { if (result.currentTaskId) setLifecycleTask({ id: result.currentTaskId, kind: "exit" }); setLayoutNotice("正在保存并退出游戏；结果会显示在任务状态中。"); } }
+		catch { setLayoutNotice("保存退出未能开始，请核对连接、原动作和游戏状态。"); }
+	}
+	async function resumeGame() {
+		setMenu(null);
+		try { const result = await window.deck.resumeGame(); if (!result?.cancelled) { if (result.currentTaskId) setLifecycleTask({ id: result.currentTaskId, kind: "recovery" }); setLayoutNotice("正在恢复世界；结果会显示在任务状态中。"); } }
+		catch { setLayoutNotice("恢复未能开始，请核对主菜单、保存记录及服务版本。"); }
+	}
 	const connected = bridge.observation?.connected === true;
 	const taskNeedsAttention = gameHealthy && (game.error || game.unresolved.length > 0 || !game.runtimeAvailable || !game.storageAvailable);
 	const connectionText = power && power.phase !== "ready" ? "连接待检查" : bridge.error || native?.fault ? "连接需要处理" : taskNeedsAttention ? "任务需要处理" : connected ? "MCP 已连接" : native?.attached ? "窗口已嵌入 · MCP 未连接" : "游戏未连接";
@@ -558,6 +576,9 @@ function App() {
 						<button role="menuitem" onClick={() => { setMenu(null); for (const api of Object.values(dock.current)) for (const popout of api?.getPopouts() ?? []) popout.window.close(); }}>收回全部浮窗</button>
 					</>}
 					{menu === "more" && <>
+						<div className="menu-group-label">游戏</div>
+						<button role="menuitem" disabled={observationOnly || game.busy || game.unresolved.length > 0 || !game.mcp?.exitAvailable || native?.kind !== "dsp" || !native?.attached || bridge.observation?.session.state !== "observed" || bridge.observation.session.data?.gameLoaded !== true || bridge.observation.session.data?.owned !== true || bridge.observation.session.data?.accessRestricted !== false} onClick={() => void exitGame()}>保存并退出游戏</button>
+						<button role="menuitem" title={game.recovery?.state === "pending" ? "原读档动作仍待核销" : game.recovery?.state !== "ready" ? "需要先通过保存并退出生成安全恢复记录" : "需要嵌入并连接游戏主菜单"} disabled={observationOnly || game.busy || game.unresolved.length > 0 || game.recovery?.state !== "ready" || !game.mcp?.recoveryAvailable || native?.kind !== "dsp" || !native?.attached || bridge.observation?.session.state !== "observed" || bridge.observation.session.data?.gameLoaded !== false} onClick={() => void resumeGame()}>恢复已记录的世界</button>
 						<div className="menu-group-label">设置</div>
 						<button role="menuitem" disabled={observationOnly} onClick={() => { setMenu(null); setSettings(true); }}>模型设置</button>
 						<div className="menu-group-label">工具</div>

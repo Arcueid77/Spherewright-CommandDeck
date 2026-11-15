@@ -3,10 +3,11 @@ export { gameObjective, validateGameGoal, createGameGoal } from "./game-goal-con
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
-import { extendProductionGoal, productionGoalSample } from "./game-production-goal.mjs";
+import { extendProductionGoal, extendProductionAverage, productionGoalSample, productionGoalVerified, resetProductionAfterTerminal } from "./game-production-goal.mjs";
 import { validateGameExperienceRecord } from "./game-experience.mjs";
 import { resolveGameActionContext } from "./game-action-context.mjs";
 import { observeGameProgress, gameProgressKey, recordGameMotion } from "./game-goal-progress.mjs";
+import { summarizeSupplyPlan } from "./game-supply-plan.mjs";
 
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
@@ -18,6 +19,7 @@ const checkSchema = {
 	properties: { label: string, tool: { type: "string", pattern: "^spherewright_", maxLength: 100 }, args: { type: "object" }, path: { type: "string", maxLength: 256, pattern: "^/" }, operator: { type: "string", enum: ["eq", "gte", "lte"] }, value: { type: ["string", "number", "boolean"], maxLength: 240 } },
 };
 export const gameGoalTools = [
+	{ name: "deck_goal_supply_plan", description: "Read a fresh Native Foundry material and machine draft for the fixed production objective at 120% of its requested rate, plus current power when available. This is advisory only: preserve native gaps, transport/site checks and current authorizations; never assume a plan is executable or actual throughput.", inputSchema: { type: "object", additionalProperties: false, properties: {} } },
 	{ name: "deck_goal_execute_action", description: "Execute one ordinary autonomous native action. Uses the named native prepare tool and its exact arguments, commits its fresh plan once under the approved family and budget, then waits up to 120 seconds for the original action. Check result.succeeded and the original native outcome. New-world creation uses its separate native confirmation flow.", inputSchema: { type: "object", additionalProperties: false, required: ["prepareTool", "args"], properties: { prepareTool: { type: "string", pattern: "^spherewright_prepare_", maxLength: 100 }, args: { type: "object" } } } },
 	{ name: "deck_goal_plan", description: "Record the current stage, reason and next step. Define completionChecks using fields actually observed in native read results. Revise proposed conditions with an explanation when schema or state evidence changes; revisions are recorded. The user's fixed production item/rate/window still apply. Optional stageChecks verify this stage. activeTools selects relevant registered native tools.", inputSchema: { type: "object", additionalProperties: false, required: ["stage", "reason", "nextStep"], properties: { stage: string, reason: string, nextStep: string, completionChecks: { type: "array", minItems: 1, maxItems: 8, items: checkSchema }, stageChecks: { type: "array", maxItems: 4, items: checkSchema }, activeTools: { type: "array", minItems: 1, maxItems: 128, items: { type: "string", maxLength: 100 } } } } },
 	{ name: "deck_goal_wait", description: "Wait without model polling for a bounded native read condition or the original in-flight action. For a production goal with no in-flight action, omit condition to monitor its sustained production window. Waits spend the existing wall/tool allowance and return evidence. Do not resubmit accepted actions.", inputSchema: { type: "object", additionalProperties: false, required: ["reason", "timeoutSeconds"], properties: { reason: string, timeoutSeconds: { type: "integer", minimum: 1, maximum: 120 }, condition: checkSchema } } },
@@ -77,6 +79,7 @@ export class GameGoalController {
 		this.goal.updatedAt = this.now();
 		this.goal.usage.toolCalls = this.baseUsage.toolCalls + this.session.calls + this.coordinationCalls;
 		this.goal.usage.writes = this.baseUsage.writes + this.session.submissions;
+		this.goal.transport = this.session.transportBudget.snapshot();
 		this.ledger.goal(this.task.id, this.goal); this.emit();
 	}
 	assertActive() {
@@ -96,6 +99,7 @@ export class GameGoalController {
 		this.assertActive();
 		this.assertToolBudget();
 		const reply = await this.session.call(name, args);
+		resetProductionAfterTerminal(this.goal, name, reply);
 		observeGameProgress(this.goal, name, args, reply);
 		this.goal.context = { ...this.session.context }; this.persist();
 		return reply;
@@ -171,6 +175,7 @@ export class GameGoalController {
 		this.goal.activity = { state: this.session.entries.get(name)?.kind === "read" ? "observing" : "preparing", label: name }; this.persist();
 		try {
 			const result = await this.session.call(name, args);
+			resetProductionAfterTerminal(this.goal, name, result);
 			observeGameProgress(this.goal, name, args, result);
 			if (name === "spherewright_inspect_factory_entity" && result?.success === true && args.planetId === this.session.context.planetId && result.result?.objectId === args.objectId && /^sha256:[a-f0-9]{64}$/.test(result.result.endpointStateHash ?? "")) this.observedEndpoints.set(args.planetId + ":" + args.objectId, result.result.endpointStateHash);
 			if (result?.success === false) this.failure(name, args);
@@ -209,7 +214,7 @@ export class GameGoalController {
 					satisfied = observation.passed;
 					unavailable = !observation.available;
 				}
-				else if (productionWait) satisfied = this.goal.verification?.state === "verified";
+				else if (productionWait) satisfied = productionGoalVerified(this.goal.verification, this.now());
 				else { originalActions = await this.reconcile(); satisfied = !this.pending().length; }
 				if (satisfied || unavailable || performance.now() >= deadline) break;
 				await this.pause(Math.min(1000, Math.max(1, deadline - performance.now())), this.signal);
@@ -247,7 +252,27 @@ export class GameGoalController {
 			seen.add(page.nextCursor); cursor = page.nextCursor;
 		}
 		if (localFound && this.goal.measurementStartTick === undefined) this.goal.measurementStartTick = context.capturedAtGameTick ?? sample?.endTick ?? 0;
-		this.goal.verification = extendProductionGoal(this.goal.verification, sample, objective, this.goal.measurementStartTick ?? 0, this.now()); this.persist();
+		this.goal.verification = extendProductionGoal(this.goal.verification, sample, objective, this.goal.measurementStartTick ?? 0, this.now());
+		this.goal.productionAverage = extendProductionAverage(this.goal.productionAverage, sample, this.goal.measurementStartTick ?? 0, this.now()); this.persist();
+	}
+	async supplyPlan() {
+		this.assertActive();
+		const objective = this.goal.objective, context = this.session.context;
+		const plannedRate = objective.kind === "production" ? Math.ceil(objective.minimumPerMinute * 120) / 100 : 0;
+		if (objective.kind !== "production" || !context.loaded || !this.session.entries.has("spherewright_get_foundry_plan") || plannedRate > 1000000) {
+			this.goal.supplyPlan = { state: "unavailable", reason: "FOUNDRY_PLAN_UNAVAILABLE", observedAt: this.now() }; this.persist(); return this.goal.supplyPlan;
+		}
+		const args = { sessionId: context.sessionId, planetId: context.planetId, targetItemId: objective.itemId, targetRatePerMinute: plannedRate };
+		if (!this.session.port.valid("spherewright_get_foundry_plan", args)) { this.goal.supplyPlan = { state: "unavailable", reason: "FOUNDRY_SCHEMA_UNAVAILABLE", observedAt: this.now() }; this.persist(); return this.goal.supplyPlan; }
+		const reply = await this.read("spherewright_get_foundry_plan", args);
+		if (reply?.success !== true || !reply.result) { this.goal.supplyPlan = { state: "unavailable", reason: "FOUNDRY_PLAN_REFUSED", observedAt: this.now() }; this.persist(); return this.goal.supplyPlan; }
+		let power = null;
+		const powerArgs = { sessionId: context.sessionId, planetId: context.planetId };
+		if (this.session.entries.has("spherewright_get_power_summary") && this.session.port.valid("spherewright_get_power_summary", powerArgs) && this.session.calls + this.coordinationCalls < this.session.limits.toolCalls) {
+			const value = await this.read("spherewright_get_power_summary", powerArgs); if (value?.success === true) power = value.result;
+		}
+		this.goal.supplyPlan = summarizeSupplyPlan(reply.result, power, context, objective, plannedRate, this.now()); this.persist();
+		return this.goal.supplyPlan;
 	}
 	async verify() {
 		this.assertActive(); this.goal.status = "verifying"; this.persist(); this.stage("verifying");
@@ -260,7 +285,7 @@ export class GameGoalController {
 			const results = [];
 			for (const condition of this.goal.completionChecks) results.push(await this.check(condition));
 			if (this.goal.objective.kind === "production") await this.production();
-			const passed = results.length > 0 && results.every(value => value.passed) && (this.goal.objective.kind !== "production" || this.goal.verification?.state === "verified");
+			const passed = results.length > 0 && results.every(value => value.passed) && (this.goal.objective.kind !== "production" || productionGoalVerified(this.goal.verification, this.now()));
 			if (passed) {
 				this.goal.status = "completed"; this.goal.completedAt = this.now(); this.goal.problem = null;
 				if (this.goal.activityProgress) this.goal.activityProgress = { ...this.goal.activityProgress, idleDecisions: 0, feedback: null };
@@ -310,13 +335,14 @@ export class GameGoalController {
 			if (!object(args) || Object.keys(args).length) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
 			return this.checkpoint();
 		}
-		if (["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify"].includes(name) && (!object(args) || Object.keys(args).length)) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
+		if (["deck_goal_next_decision", "deck_goal_status", "deck_goal_verify", "deck_goal_supply_plan"].includes(name) && (!object(args) || Object.keys(args).length)) throw new Error("INVALID_GAME_GOAL_ARGUMENTS");
 		if (gameGoalTools.some(tool => tool.name === name) || ["deck_goal_guidance_access", "deck_goal_catalog_access", "deck_goal_experience_access"].includes(name)) {
 			this.assertToolBudget(); this.coordinationCalls++; this.persist();
 		}
 		if (["deck_goal_guidance_access", "deck_goal_catalog_access", "deck_goal_experience_access"].includes(name)) { this.assertActive(); return { allowed: true }; }
 		if (name === "deck_goal_next_decision") return this.nextDecision();
 		if (name === "deck_goal_status") return this.view();
+		if (name === "deck_goal_supply_plan") return this.supplyPlan();
 		if (name === "deck_goal_plan") return this.plan(args);
 		if (name === "deck_goal_execute_action") return this.executeAction(args);
 		if (name === "deck_goal_wait") return this.wait(args);

@@ -20,7 +20,7 @@ export function researchForModel(progression, techId) {
 	return { capturedAtGameTick: progression.capturedAtGameTick, techQueue: progression.techQueue, target: project(target), prerequisites: progression.technologies.filter((value) => target.prerequisiteTechIds.includes(value.techId)).map(project) };
 }
 
-export async function runGamePlanner({ directory, task, mode, prompt, providerId, modelId, playbook, observation, signal, observe, invoke, nativeTools, goalTools, limits, event, resolveProfile, testModelsPath }) {
+export async function runGamePlanner({ directory, task, mode, prompt, providerId, modelId, playbook, observation, initialSupplyPlan, signal, observe, invoke, nativeTools, goalTools, limits, event, resolveProfile, testModelsPath }) {
 	const generic = task.scope.kind === "mcp-session", requestLimit = generic ? limits.modelRequests : 4, toolLimit = generic ? limits.toolCalls : 8;
 	const cwd = join(directory, task.id); await mkdir(cwd, { recursive: true });
 	let protectedProfile, modelsPath;
@@ -154,6 +154,8 @@ export async function runGamePlanner({ directory, task, mode, prompt, providerId
 		if (goalTools) input += "\n这是持续目标。先观察，用 deck_goal_plan 保存阶段、原因、下一步和原生只读 completionChecks。验收路径必须来自实际观察到的字段，数据缺失时读取原工具并解释、修订方案。用户指定的产量与时间窗口由宿主固定核验。用 deck_goal_wait 等待制造、科研或持续产量窗口。用 deck_goal_verify 核验目标。根据阶段选择相关原生工具；对话收尾后宿主提供下一轮现场简报，累计预算不重置。";
 		if (goalTools) input += `\n可按阶段通过 deck_goal_plan.activeTools 载入的原生工具名称：${nativeTools.map(tool => tool.name).join(", ")}。菜单阶段先新建世界，载入后再选择相关工具与推进开局阶段。`;
 		if (goalTools) input += "\n原生科技、配方和建筑目录提供完整索引。用 deck_goal_catalog 按 ID 或名称读取近期所需的原始详情。每轮选择近期动作，完成后再规划下一步。";
+		if (goalTools && initialSupplyPlan) input += "\n当前目标的原生供给规划（只读理论估计，非建设授权；电力、物流、供料与实际产量须独立核验）：\n" + JSON.stringify(initialSupplyPlan);
+		if (goalTools) input += "\n产量目标可用 deck_goal_supply_plan 在现场变化后刷新有界物料、机器和供电草案；先核对原料、物流、电力及实际产量，不得把理论产能当作实测。";
 		if (goalTools && mode === "autonomous") input += "\n普通自主动作使用 deck_execute_*，选择动作目标、数量和位置，宿主提供当前会话、星球及已支持的易变状态绑定。稳定端点、蓝图和模式专属证据按工具定义提供。宿主依次完成新鲜预检、一次提交和原动作核销，返回 result.succeeded 与原生终态。activeTools 填写原生工具名，宿主自动映射为执行工具。菜单新建世界采用独立的原生确认流程。";
 		if (experienceBrief) {
 			input += "\nLab 可复用经验供操作参考，采用当前授权、预算及新鲜原生证据。按需用 deck_goal_experience 读取条目。来源、索引和当前要点如下。\n" + JSON.stringify(experienceBrief);

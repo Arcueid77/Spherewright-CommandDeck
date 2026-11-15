@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { confirmResearchFromUi, startAutonomousGameFromUi } from "../apps/desktop/research-confirmation.mjs";
+import { confirmResearchFromUi, startAutonomousGameFromUi, startGameExitFromUi, startGameRecoveryFromUi } from "../apps/desktop/research-confirmation.mjs";
 
 test("native confirmation defaults to cancel and uses only host challenge identity after the actual answer", async () => {
 	for (const response of [0, 1]) {
@@ -36,4 +36,42 @@ test("authorization setup timeout stops the pending round rather than inventing 
 	const calls = []; let confirms = 0;
 	await assert.rejects(startAutonomousGameFromUi({ args: { action: "start" }, timeoutMs: 0, request: async (name, args) => { calls.push({ name, args }); return { busy: true, currentTaskId: "task" }; }, confirm: async () => { confirms++; } }), /GAME_AUTHORIZATION_SETUP_TIMEOUT/);
 	assert.equal(confirms, 0); assert.deepEqual(calls.at(-1), { name: "game", args: { action: "stop" } });
+});
+
+test("save and exit asks once after preparation and cancellation submits nothing", async () => {
+	for (const response of [0, 1]) {
+		const calls = [], overlay = [];
+		const request = async (name, args) => {
+			calls.push({ name, args });
+			if (name === "game" && args.action === "exit-prepare") return { busy: true };
+			if (name === "game" && args.action === "snapshot") return { busy: false, phase: "awaiting_approval", currentTaskId: "exit-task" };
+			if (name === "game-confirmation") return { kind: "game-exit", nonce: "original-exit", taskId: "exit-task" };
+			return { confirmed: true };
+		};
+		const result = await startGameExitFromUi({ request, confirm: taskId => confirmResearchFromUi({ taskId, request, hideViewport: async () => {}, overlay: value => overlay.push(value), showDialog: async options => { assert.deepEqual(options.buttons, ["取消", "保存并退出"]); assert.equal(options.defaultId, 0); return { response }; } }) });
+		assert.deepEqual(overlay, [true, false]);
+		assert.deepEqual(calls.at(-1), response ? { name: "game-confirmed", args: { nonce: "original-exit" } } : { name: "game", args: { action: "stop" } });
+		assert.equal(response ? result.confirmed : result.cancelled, true);
+	}
+});
+
+test("save and exit does not ask for approval when preparation fails", async () => {
+	let confirmed = 0;
+	await assert.rejects(startGameExitFromUi({ request: async () => ({ busy: false, phase: "failed", error: "GAME_EXIT_PREVIEW_REJECTED" }), confirm: async () => { confirmed++; } }), /GAME_EXIT_PREVIEW_REJECTED/);
+	assert.equal(confirmed, 0);
+});
+
+test("saved-world recovery asks once and confirms only its host nonce", async () => {
+	for (const response of [0, 1]) {
+		const calls = [];
+		const request = async (name, args) => {
+			calls.push({ name, args });
+			if (name === "game" && args.action === "recovery-prepare") return { busy: false, phase: "awaiting_approval", currentTaskId: "restore-task" };
+			if (name === "game-confirmation") return { kind: "game-recovery", nonce: "original-restore", taskId: "restore-task", savedAt: 1000, savedTick: 1234, worldLabel: "Synthetic world" };
+			return { confirmed: true };
+		};
+		const result = await startGameRecoveryFromUi({ request, confirm: taskId => confirmResearchFromUi({ taskId, request, hideViewport: async () => {}, overlay: () => {}, showDialog: async options => { assert.deepEqual(options.buttons, ["取消", "恢复世界"]); assert.ok(options.detail.includes("旧任务保持停止")); assert.ok(options.detail.includes("1234")); assert.ok(options.message.includes("Synthetic world")); return { response }; } }) });
+		assert.deepEqual(calls.at(-1), response ? { name: "game-confirmed", args: { nonce: "original-restore" } } : { name: "game", args: { action: "stop" } });
+		assert.equal(response ? result.confirmed : result.cancelled, true);
+	}
 });

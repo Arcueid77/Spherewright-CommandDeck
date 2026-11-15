@@ -21,10 +21,11 @@ const player = () => ({ sessionId: "synthetic-session", planetId: 1, capturedAtG
 
 test("energy starvation is only an audit candidate, never an automatically resolved action", () => {
 	assert.equal(energyStarvedHarvestCandidate(terminal()), true);
+	assert.equal(energyStarvedHarvestCandidate({ ...terminal(), failureKind: "mecha_power_starved", message: "localized or revised explanation" }), true);
 	assert.equal(stoppedGameAction(terminal()), false);
 	for (const change of [
 		{ actionKind: "move" }, { state: "outcome_unknown" }, { terminal: false }, { succeeded: true },
-		{ recoveryRequired: true }, { failureKind: "position_stalled" }, { stalled: true },
+		{ recoveryRequired: true }, { failureKind: "position_stalled" }, { failureKind: "other_failure" }, { stalled: true },
 		{ message: "other failure" }, { beforeStateHash: null }, { afterStateHash: null },
 		{ completedAtGameTick: 9 }, { targetObjectId: 0 }, { requestedCount: 0 },
 		{ itemDeltas: [] }, { itemDeltas: [{ itemId: 9001, beforeCount: 7, afterCount: 10, delta: 2 }] },

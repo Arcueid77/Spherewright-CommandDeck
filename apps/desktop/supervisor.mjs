@@ -23,6 +23,8 @@ import { bridgeFixtureOptions, runBridgeSmoke } from "./bridge-smoke.mjs";
 import { settleShutdown, closeUiAndWait } from "./shutdown-drain.mjs";
 import { GameTasks } from "./game-tasks.mjs";
 import { createOwnerGameControl } from "./owner-game-control.mjs";
+import { captureStableGameWindow, closeRestoredGameWindow } from "./game-exit-window.mjs";
+import { GameRecoveryVault } from "./game-recovery-vault.mjs";
 import { gameFixtureOptions, runGameSmoke } from "./game-smoke.mjs";
 import { observationArguments, assertObservationAction } from "./observation-policy.mjs";
 import { runObservationSmoke } from "./observation-smoke.mjs";
@@ -87,6 +89,10 @@ const vault = new CredentialVault(join(privateDirectory, ...(smoke ? ["vault-smo
 	available: () => process.platform === "win32" && safeStorage.isEncryptionAvailable(),
 	encrypt: (text) => safeStorage.encryptStringAsync(text), decrypt: async (bytes) => (await safeStorage.decryptStringAsync(bytes)).result,
 });
+const gameRecoveryVault = new GameRecoveryVault(join(privateDirectory, ...(smoke ? ["vault-smoke-" + process.env.COMMANDDECK_SMOKE_RUN_ID] : []), "game-recovery.vault.json"), {
+	available: () => process.platform === "win32" && safeStorage.isEncryptionAvailable(),
+	encrypt: text => safeStorage.encryptStringAsync(text), decrypt: async bytes => (await safeStorage.decryptStringAsync(bytes)).result,
+});
 let changingProfiles = false;
 function externalProfiles() { try { return publicProfiles().filter((profile) => !protectedProvider(profile.providerId)).map((profile) => ({ ...profile, source: "external" })); } catch { return []; } }
 const native = portableSmoke || diagnosticSmoke ? new OwnedFixtureHost() : new WindowHost();
@@ -98,6 +104,9 @@ const fixtureDirectory = gameFixtureContext && gameSmoke ? join(gameFixtureConte
 const gatewayFixtureDirectory = gatewayCase ? join(portableContext.root, "runtime-fixtures/gateway", portableContext.runId) : undefined;
 const bridge = new BridgeMonitor({ ...(gameSmoke ? gameFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { mode: process.argv.includes("--smoke-game-native") ? "generic" : storageCase ? "storage-normal" : mcpLossScenario ? mcpLossCase(mcpLossScenario).mode : runtimeScenario === "accepted" ? "pending" : "normal", ...(fixtureDirectory ? { directory: fixtureDirectory } : {}) }) : smoke && (gatewaySmoke || process.argv.includes("--smoke-bridge") || process.argv.includes("--smoke-observation") || process.argv.includes("--smoke-power")) ? bridgeFixtureOptions(root, process.env.COMMANDDECK_SMOKE_RUN_ID, { ...(gatewayFixtureDirectory ? { directory: gatewayFixtureDirectory } : {}), mecha: Boolean(gatewaySmoke) }) : {}), researchAuthority, observation: observationPolicy, emit: () => emit({ type: "bridge-changed" }) });
 const game = new GameTasks({ directory: dirname(join(privateDirectory, ledgerConfiguration.stores.find(store => store.role === "game").file)), bridge, researchAuthority, approvalAuthority: gameApprovalAuthority, syntheticOnly: gameSmoke || portableSmoke || diagnosticSmoke,
+	recoveryVault: gameRecoveryVault,
+	captureExitWindow: () => { if (typeof native.captureSource !== "function") throw new Error("GAME_EXIT_WINDOW_IDENTITY_UNAVAILABLE"); return captureStableGameWindow(native); },
+	closeExitWindow: source => closeRestoredGameWindow(native, source),
 	pollMilliseconds: gameSmoke && runtimeScenario === "accepted" ? 0 : 15000,
 	freezeDevelopment: async () => { if (!workbenchReady || changingProfiles || state.busy) throw new Error("DEVELOPMENT_RUNTIME_BUSY"); await workbenchCall("game-begin"); },
 	releaseDevelopment: () => workbenchCall("game-end"), planner: runGamePlanner, emit: () => emit({ type: "game-changed" }),
@@ -473,10 +482,12 @@ async function api(action, args, source) {
 		return diagnostics.discard(source, args?.generation, args?.id);
 	}
 	if (action === "game") {
-		if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
+		if (!args || !["snapshot", "start", "stop", "reconcile", "reprepare", "catalog", "exit-prepare", "recovery-prepare"].includes(args.action)) throw new Error("INVALID_GAME_ACTION");
 		if (args.action === "snapshot") return { ...game.snapshot(), readOnlyObservation: Boolean(observationPolicy), systemPaused: !systemPower.ready };
 		if (ui?.nativeProbePending || (!workbenchReady && !["stop", "reconcile"].includes(args.action))) throw new Error("GAME_RUNTIME_UNAVAILABLE");
 		if (args.action === "catalog") return game.catalog();
+		if (args.action === "exit-prepare") { if (source !== ui || !source?.registered || observationPolicy) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED"); return game.prepareExit(); }
+		if (args.action === "recovery-prepare") { if (source !== ui || !source?.registered || observationPolicy) throw new Error("TRUSTED_USER_APPROVAL_REQUIRED"); return game.prepareRecovery(); }
 		if (args.action === "start") return game.start(args.args);
 		if (args.action === "stop") return game.stop();
 		if (args.action === "reprepare") return game.reprepare();

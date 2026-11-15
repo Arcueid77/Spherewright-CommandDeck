@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld(
 		chooseBridge: () => ipcRenderer.invoke("deck:choose-bridge"),
 		game: (action, args = {}) => ipcRenderer.invoke("deck:game", { action, args }),
 		confirmResearch: (taskId) => ipcRenderer.invoke("deck:confirm-research", { taskId }),
+		exitGame: () => ipcRenderer.invoke("deck:exit-game"),
+		resumeGame: () => ipcRenderer.invoke("deck:resume-game"),
 		diagnosticPreview: (options) => ipcRenderer.invoke("deck:diagnostic-preview", options),
 		saveDiagnosticPreview: (id) => ipcRenderer.invoke("deck:diagnostic-save", id),
 		discardDiagnosticPreview: (id) => ipcRenderer.invoke("deck:diagnostic-discard", id),

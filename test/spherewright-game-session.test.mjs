@@ -10,6 +10,7 @@ import { GameTasks } from "../apps/desktop/game-tasks.mjs";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { spherewrightCatalog, validSpherewrightArguments, publicGameValue } from "../apps/desktop/spherewright-tool-catalog.mjs";
 import { readMcpAction } from "../apps/desktop/spherewright-game-session.mjs";
+import { GameRecoveryVault } from "../apps/desktop/game-recovery-vault.mjs";
 
 test("a stopped original route requires a fresh healthy owned context before failure reconciliation", async () => {
 	const request = { bridgeInstanceId: "bridge", sessionId: "session", planetId: 1, actionId: "action", actionKind: "harvest", idempotencyKey: "key" };
@@ -58,13 +59,180 @@ async function fixture(t, planner, mode = "normal") {
 	const client = new ReadOnlyMcpClient(child, { researchAuthority: authority }); await client.discover();
 	let held = false, frozen = 0;
 	const bridge = { metadata: client.metadata, acquireGame(value) { assert.equal(value, authority); assert.equal(held, false); held = true; return { client, selection: { cohortHash: "a".repeat(64) }, generic: true }; }, releaseResearch() { held = false; } };
-	const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, freezeDevelopment: async () => { frozen++; }, releaseDevelopment: async () => { frozen--; }, planner, syntheticOnly: true });
+	const closed = [], window = { sourceId: "window:12345:0", windowBinding: "a".repeat(32), gamePid: 12, gameStartedTicks: "638900000000000000", kind: "dsp", targetId: "synthetic" };
+	const protection = { available: () => true, encrypt: async text => Buffer.from(text).map(value => value ^ 0x5a), decrypt: async bytes => Buffer.from(bytes).map(value => value ^ 0x5a).toString() };
+	const recoveryVault = new GameRecoveryVault(join(directory, "recovery.vault.json"), protection);
+	if (mode.startsWith("recovery")) await recoveryVault.save({ token: "PRIVATE_SYNTHETIC_TOKEN", sourceSessionId: "prior-world", gameVersion: "1.2.3", planetId: 1, savedTick: 1234, cohortHash: "a".repeat(64), schemaHash: client.metadata.schemaHash });
+	const host = new GameTasks({ directory, bridge, researchAuthority: authority, approvalAuthority: approval, freezeDevelopment: async () => { frozen++; }, releaseDevelopment: async () => { frozen--; }, planner, syntheticOnly: true, captureExitWindow: async () => ({ ...window }), closeExitWindow: async value => { closed.push(value); }, recoveryVault });
+	await host.initialize();
 	t.after(async () => { await host.drain(); host.close(); await client.close(); const absolute = await realpath(directory); assert.equal(dirname(absolute).toLowerCase(), (await realpath(tmpdir())).toLowerCase()); assert.ok(basename(absolute).startsWith("commanddeck-unified-game-")); await rm(absolute, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 	const start = extra => host.start({ kind: "mcp", mode: "assist", providerId: "commanddeck-fixture", modelId: "fixture", prompt: "Synthetic finite native task", ...extra });
-	return { directory, client, host, approval, start, frozen: () => frozen };
+	return { directory, client, host, authority, approval, start, closed, window, recoveryVault, frozen: () => frozen };
 }
 async function waitFor(predicate) { const end = performance.now() + 5000; while (!predicate()) { assert.ok(performance.now() < end, "SYNTHETIC_STAGE_TIMEOUT"); await new Promise(resolve => setTimeout(resolve, 5)); } }
 async function approve(f) { await waitFor(() => f.host.snapshot().mcp.awaitingConfirmation); const challenge = f.host.confirmation(f.host.currentTaskId, 1); assert.equal(challenge.kind, "mcp"); assert.ok(!JSON.stringify(challenge).includes("PRIVATE_")); f.host.confirm(f.approval, challenge.nonce, 1); }
+
+test("explicit host exit saves and verifies the original menu action before closing its window", async t => {
+	const f = await fixture(t, async () => {}, "exit");
+	assert.equal(f.client.metadata.gameExitAvailable, true);
+	assert.ok(!f.client.gamePort(f.authority).tools().some(tool => tool.name.includes("return_to_main_menu")));
+	assert.throws(() => f.client.gameExitPort({}), /TRUSTED_GAME_EXIT_CAPABILITY_REQUIRED/);
+	f.host.prepareExit(); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "awaiting_approval");
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1); assert.equal(challenge.kind, "game-exit");
+	assert.throws(() => f.host.confirm({}, challenge.nonce, 1), /TRUSTED_USER_APPROVAL_REQUIRED/);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.closed.length, 1);
+	assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal(f.host.snapshot().recovery.state, "ready"); assert.equal((await f.recoveryVault.peek(f.host.snapshot().recovery.id)).savedTick, 1234);
+	assert.ok(!JSON.stringify(f.host.snapshot()).includes("PRIVATE_SYNTHETIC_TOKEN"));
+	const actions = f.host.ledger.tasks().filter(task => task.scope.actionKind === "return-to-main-menu");
+	assert.equal(actions.length, 1); assert.equal(actions[0].intent.terminal.mainMenuReturnReadback.completeSaveVerified, true);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("a saved exit can be restored once in a separately attached game without restarting the old task", async t => {
+	const f = await fixture(t, async () => { throw new Error("MODEL_MUST_NOT_START"); }, "exit-recovery");
+	f.host.prepareExit(); await f.host.settled(); let challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().recovery.state, "ready"); assert.equal(f.closed.length, 1);
+	Object.assign(f.window, { sourceId: "window:54321:0", windowBinding: "b".repeat(32), gamePid: 13, gameStartedTicks: "638900000000000001", targetId: "new-game-window" });
+	f.host.prepareRecovery(); await f.host.settled(); challenge = f.host.confirmation(f.host.currentTaskId, 2);
+	f.host.confirm(f.approval, challenge.nonce, 2); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 2);
+	assert.equal(f.closed.length, 1); assert.ok(!JSON.stringify(f.host.snapshot()).includes("PRIVATE_SYNTHETIC_TOKEN"));
+});
+
+test("an unproved menu result remains quarantined and never closes the window", async t => {
+	const f = await fixture(t, async () => {}, "exit-bad-proof");
+	f.host.prepareExit(); await f.host.settled();
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.closed.length, 0); assert.equal(f.host.snapshot().unresolved.length, 1);
+});
+
+test("cancelling a prepared exit performs no native commit and preserves the window", async t => {
+	const f = await fixture(t, async () => {}, "exit");
+	f.host.prepareExit(); await f.host.settled();
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.stop(); await f.host.settled();
+	assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 1), /FRESH_RESEARCH_APPROVAL_REQUIRED/);
+	assert.equal(f.closed.length, 0); assert.equal(f.host.snapshot().unresolved.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("a lost exit receipt freezes the original intent without closing or replay", async t => {
+	const f = await fixture(t, async () => {}, "exit-lost-ack");
+	f.host.prepareExit(); await f.host.settled();
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.closed.length, 0); assert.equal(f.host.snapshot().unresolved.length, 1);
+	assert.equal(f.host.snapshot().unresolved[0].state, "unknown");
+});
+
+test("stopping an accepted exit preserves its original action and never closes the window", async t => {
+	const f = await fixture(t, async () => {}, "exit-pending");
+	f.host.prepareExit(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await waitFor(() => f.host.snapshot().phase === "accepted" || f.host.snapshot().phase === "reconciling");
+	f.host.stop(); await f.host.settled();
+	assert.equal(f.closed.length, 0); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+	assert.ok(f.host.ledger.tasks().some(task => task.scope.actionKind === "return-to-main-menu" && task.intent?.actionId));
+});
+
+test("a confirmed exit refreshes an expired preview for the same world without asking twice", async t => {
+	const f = await fixture(t, async () => {}, "exit-expired");
+	f.host.prepareExit(); await f.host.settled();
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	await new Promise(resolve => setTimeout(resolve, 200));
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	const status = (await f.client.read("spherewright_get_status")).status;
+	assert.equal(status.syntheticPrepareCount, 2); assert.equal(status.syntheticCommitCount, 1);
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.closed.length, 1);
+});
+
+test("exit approval never carries over to a different world", async t => {
+	const f = await fixture(t, async () => {}, "exit-world-change");
+	f.host.prepareExit(); await f.host.settled();
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().error, "GAME_CONTEXT_CHANGED"); assert.equal(f.closed.length, 0);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("owner-approved recovery prepares after consent, opens only the recorded primary and leaves old tasks stopped", async t => {
+	const f = await fixture(t, async () => { throw new Error("MODEL_MUST_NOT_START"); }, "recovery");
+	assert.equal(f.host.snapshot().recovery.state, "ready");
+	assert.ok(!f.client.gamePort(f.authority).tools().some(tool => tool.name.includes("resume_owned_game")));
+	assert.throws(() => f.client.gameRecoveryPort({}), /TRUSTED_GAME_RECOVERY_CAPABILITY_REQUIRED/);
+	f.host.prepareRecovery(); await f.host.settled();
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticPrepareCount, 0);
+	const challenge = f.host.confirmation(f.host.currentTaskId, 1); assert.equal(challenge.kind, "game-recovery");
+	assert.ok(!JSON.stringify(challenge).includes("PRIVATE_SYNTHETIC_TOKEN"));
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+	assert.ok(!JSON.stringify(f.host.snapshot()).includes("PRIVATE_SYNTHETIC_TOKEN"));
+});
+
+test("a recovery preview that would discard progress is refused before commit", async t => {
+	const f = await fixture(t, async () => {}, "recovery-bad-plan");
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().error, "GAME_RECOVERY_PREVIEW_REJECTED");
+	assert.equal(f.host.snapshot().recovery.state, "ready");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+for (const mode of ["recovery-changed-scope", "recovery-altered-disclosure", "recovery-extra-blocker"]) test(`${mode} refuses the native preview without a commit`, async t => {
+	const f = await fixture(t, async () => {}, mode);
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().error, "GAME_RECOVERY_PREVIEW_REJECTED");
+	assert.equal(f.host.snapshot().recovery.state, "ready");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+});
+
+test("recovery consent does not carry over after a different world is loaded", async t => {
+	const f = await fixture(t, async () => {}, "recovery-world-change");
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().error, "GAME_MCP_CONTEXT_UNAVAILABLE");
+	const status = (await f.client.read("spherewright_get_status")).status;
+	assert.equal(status.syntheticPrepareCount, 0); assert.equal(status.syntheticCommitCount, 0);
+	assert.equal(f.host.snapshot().recovery.state, "ready");
+});
+
+test("a lost recovery acknowledgement retains the pending credential and original intent", async t => {
+	const f = await fixture(t, async () => {}, "recovery-lost-ack");
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().unresolved.length, 1); assert.equal(f.host.snapshot().recovery.state, "pending");
+	assert.throws(() => f.host.prepareRecovery(), /GAME_RECOVERY_NOT_READY/);
+});
+
+test("stopping during local recovery bookkeeping records that no commit was dispatched", async t => {
+	const f = await fixture(t, async () => {}, "recovery");
+	let release, reached; const waiting = new Promise(resolve => { reached = resolve; }), held = new Promise(resolve => { release = resolve; });
+	const transition = f.recoveryVault.transition.bind(f.recoveryVault);
+	t.mock.method(f.recoveryVault, "transition", async (...args) => { const value = await transition(...args); if (args[1] === "ready" && args[2] === "pending") { reached(); await held; } return value; });
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await waiting;
+	f.host.stop(); release(); await f.host.settled();
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
+	assert.equal(f.host.snapshot().unresolved.length, 0); assert.equal(f.host.snapshot().recovery.state, "ready");
+	const action = f.host.ledger.tasks().find(task => task.scope.actionKind === "resume-owned-game");
+	assert.equal(action.intent.terminal.state, "not_dispatched");
+});
+
+test("stopping an accepted recovery still reconciles the original without replay", async t => {
+	const f = await fixture(t, async () => {}, "recovery-pending");
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await waitFor(() => f.host.snapshot().phase === "accepted" || f.host.snapshot().phase === "reconciling");
+	f.host.stop(); await f.host.settled();
+	assert.equal(f.host.snapshot().unresolved.length, 0); assert.equal(f.host.snapshot().recovery.state, "used");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
 const prepare = { sessionId: "synthetic-game-session", planetId: 1, recipeId: 10, count: 2 };
 async function craft(invoke) { const result = await invoke("spherewright_prepare_handcraft", prepare); assert.match(result.result.planToken, /^deck-plan:/); assert.ok(!JSON.stringify(result).includes("PRIVATE_")); return invoke("spherewright_commit_handcraft", { sessionId: prepare.sessionId, planetId: 1, planToken: result.result.planToken, idempotencyKey: "model-supplied-key-is-never-used" }); }
 
@@ -103,6 +271,22 @@ test("energy-stopped harvest resolution requires host authority and retains the 
 	assert.throws(() => f.host.resolveEnergyStoppedHarvest({}, "retained-original", {}), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
 	f.host.resolveEnergyStoppedHarvest(f.approval, "retained-original", { state: "action_failed" });
 	await f.host.settled(); assert.equal(called, true); assert.equal(f.host.snapshot().error, null); assert.equal(f.frozen(), 0);
+});
+
+test("the user can independently reconcile a structured energy stop without replay", async t => {
+	const f = await fixture(t, async ({ invoke }) => {
+		const prepared = await invoke("spherewright_prepare_harvest", { sessionId: "synthetic-game-session", planetId: 1, targetObjectId: 42, count: 12 });
+		const accepted = await invoke("spherewright_commit_harvest", { sessionId: "synthetic-game-session", planetId: 1, planToken: prepared.result.planToken, idempotencyKey: "ignored-model-key" });
+		await assert.rejects(invoke("spherewright_get_action_result", { actionId: accepted.result.actionId }), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	}, "energy");
+	f.start({ objective: { kind: "evidence" } }); await approve(f); await f.host.settled();
+	const parent = f.host.snapshot().currentTaskId, original = f.host.snapshot().unresolved[0]; assert.equal(original.state, "unknown");
+	for (let index = 0; index < 40; index++) f.host.ledger.createMcpTask({ kind: "mcp-session", bridgeInstanceId: "synthetic-game-bridge", sessionId: "synthetic-game-session" });
+	f.host.reconcile(original.intentId); await f.host.settled();
+	assert.equal(f.host.snapshot().unresolved.length, 0); assert.equal(f.host.snapshot().currentTaskId, parent);
+	const saved = f.host.ledger.intent(original.intentId); assert.equal(saved.terminal.succeeded, false);
+	assert.equal(saved.terminal.failureKind, "mecha_power_starved"); assert.equal(saved.terminal.itemDeltas[0].delta, 3);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
 });
 
 test("one stdio discovery supports two native actions through one host ledger without per-action adapters", async t => {

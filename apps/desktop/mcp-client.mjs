@@ -59,7 +59,7 @@ export function launchMcp(selection, { descriptorPath, researchAuthority, observ
 export class ReadOnlyMcpClient {
 	#pending = new Map(); #sequence = 0; #buffer = ""; #tools = new Map(); #stage = "new"; #discoveryDeadline = Infinity;
 	#researchTools = new Set(); #researchAuthority; #hasPlaybook = false;
-	#gameTools = new Map();
+	#gameTools = new Map(); #hostExitTools = new Map(); #hostRecoveryTools = new Map();
 	#performance;
 	#observation; #observationStarted; #observationTools = 0; #observationTimer = null; #stopReason = null;
 	constructor(child, { timeoutMs = 12000, discoveryTimeoutMs = 30000, researchAuthority, startedAt, observation } = {}) {
@@ -155,10 +155,16 @@ export class ReadOnlyMcpClient {
 		this.#tools = accepted; this.#stage = "ready";
 		this.#researchTools = research; this.#hasPlaybook = resources.filter((value) => value?.uri === researchPlaybookUri).length === 1;
 		this.#gameTools = spherewrightCatalog(tools);
+		const hostExit = spherewrightCatalog(tools, { hostExit: true });
+		this.#hostExitTools = new Map([...hostExit].filter(([name]) => ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result", "spherewright_prepare_return_to_main_menu", "spherewright_commit_return_to_main_menu"].includes(name)));
+		const hostRecovery = spherewrightCatalog(tools, { hostRecovery: true });
+		this.#hostRecoveryTools = new Map([...hostRecovery].filter(([name]) => ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result", "spherewright_prepare_resume_owned_game", "spherewright_commit_resume_owned_game"].includes(name)));
 		this.metadata = { protocolVersion: init.protocolVersion, serverVersion: init.serverInfo.version, toolCount: tools.length, resourceCount: resources.length, readTools: [...this.#tools.keys()], researchAvailable: !this.#observation && this.#hasPlaybook && Object.keys(researchDefinitions).every((name) => research.has(name)), schemaHash: createHash("sha256").update(JSON.stringify(tools.map(({ name, inputSchema, annotations }) => ({ name, inputSchema, annotations })))).digest("hex") };
 		this.metadata.gameAvailable = !this.#observation && this.#hasPlaybook && ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result"].every(name => this.#gameTools.has(name));
 		this.metadata.gameToolCount = this.#gameTools.size;
 		this.metadata.gameActionFamilies = [...new Set([...this.#gameTools.values()].filter(entry => entry.kind === "prepare").map(entry => entry.family))].sort();
+		this.metadata.gameExitAvailable = !this.#observation && ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result", "spherewright_prepare_return_to_main_menu", "spherewright_commit_return_to_main_menu"].every(name => this.#hostExitTools.has(name));
+		this.metadata.gameRecoveryAvailable = !this.#observation && ["spherewright_get_status", "spherewright_get_session_state", "spherewright_get_action_result", "spherewright_prepare_resume_owned_game", "spherewright_commit_resume_owned_game"].every(name => this.#hostRecoveryTools.has(name));
 		return this.metadata;
 	}
 	supports(name) { return !this.closed && this.#stage === "ready" && this.#tools.has(name); }
@@ -172,6 +178,26 @@ export class ReadOnlyMcpClient {
 				return this.#callTool(name, args);
 			},
 			playbook: async () => { const reply = await this.#request("resources/read", { uri: researchPlaybookUri }); if (reply?.contents?.length !== 1 || reply.contents[0].uri !== researchPlaybookUri || typeof reply.contents[0].text !== "string" || reply.contents[0].text.length > 262144) throw new Error("GAME_PLAYBOOK_INVALID"); return reply.contents[0].text; },
+		});
+	}
+	gameExitPort(authority) {
+		if (!this.#researchAuthority || authority !== this.#researchAuthority || this.closed || this.#stage !== "ready" || !this.metadata.gameExitAvailable) throw new Error("TRUSTED_GAME_EXIT_CAPABILITY_REQUIRED");
+		return Object.freeze({
+			valid: (name, args) => validSpherewrightArguments(this.#hostExitTools.get(name), args),
+			call: (name, args) => {
+				if (this.closed || !validSpherewrightArguments(this.#hostExitTools.get(name), args)) { this.stats.rejectedCalls++; return Promise.reject(new Error("GAME_MCP_CALL_NOT_SUPPORTED")); }
+				return this.#callTool(name, args);
+			},
+		});
+	}
+	gameRecoveryPort(authority) {
+		if (!this.#researchAuthority || authority !== this.#researchAuthority || this.closed || this.#stage !== "ready" || !this.metadata.gameRecoveryAvailable) throw new Error("TRUSTED_GAME_RECOVERY_CAPABILITY_REQUIRED");
+		return Object.freeze({
+			valid: (name, args) => validSpherewrightArguments(this.#hostRecoveryTools.get(name), args),
+			call: (name, args) => {
+				if (this.closed || !validSpherewrightArguments(this.#hostRecoveryTools.get(name), args)) { this.stats.rejectedCalls++; return Promise.reject(new Error("GAME_MCP_CALL_NOT_SUPPORTED")); }
+				return this.#callTool(name, args);
+			},
 		});
 	}
 	async read(name, args = {}) {

@@ -1,20 +1,26 @@
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { GameIntentLedger } from "./game-intent-ledger.mjs";
 import { ResearchAdapter } from "./research-adapter.mjs";
 import { positive, opaque } from "./research-contract.mjs";
 import { SpherewrightGameSession, gameContext, gameSessionLimits, readMcpAction } from "./spherewright-game-session.mjs";
 import { GameGoalController, gameGoalProjection, gameObjective, gameGoalTools } from "./game-goal.mjs";
+import { energyStarvedHarvestCandidate, rejectedGameCommit, stoppedGameAction } from "./game-action-outcome.mjs";
+import { GameTransportBudget } from "./game-transport-budget.mjs";
 
 const codeOf = (error) => /^[A-Z0-9_]{1,128}$/.test(error?.message) ? error.message : "GAME_TASK_FAILED";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
+const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const sameExitWindow = (a, b) => a && b && ["sourceId", "windowBinding", "gamePid", "gameStartedTicks", "kind", "targetId"].every(key => a[key] === b[key]);
+const safeWorldLabel = value => typeof value === "string" && value.trim() && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value) ? value : "受管世界";
 
 // One host coordinator owns authorization, native submission and original-action reconciliation.
 export class GameTasks {
-	#authority; #approvalAuthority = {}; #confirmations = new Map(); #reconnectOriginal = false;
-	constructor({ directory, bridge, researchAuthority, approvalAuthority, freezeDevelopment, releaseDevelopment, planner, emit = () => {}, now = () => Date.now(), pollMilliseconds = 15000, syntheticOnly = false }) {
+	#authority; #approvalAuthority = {}; #confirmations = new Map(); #reconnectOriginal = false; #lifecycleTimer = null;
+	constructor({ directory, bridge, researchAuthority, approvalAuthority, freezeDevelopment, releaseDevelopment, planner, captureExitWindow, closeExitWindow, recoveryVault, emit = () => {}, now = () => Date.now(), pollMilliseconds = 15000, syntheticOnly = false }) {
 		if (!approvalAuthority || typeof planner !== "function") throw new Error("TRUSTED_GAME_HOST_REQUIRED");
 		this.#authority = researchAuthority; this.hostApproval = approvalAuthority; this.bridge = bridge; this.freezeDevelopment = freezeDevelopment; this.releaseDevelopment = releaseDevelopment; this.planner = planner; this.emit = emit; this.now = now; this.pollMilliseconds = pollMilliseconds;
+		this.captureExitWindow = captureExitWindow; this.closeExitWindow = closeExitWindow; this.recoveryVault = recoveryVault; this.recovery = { state: "unavailable" }; this.exitPlan = null; this.recoveryPlan = null;
 		this.syntheticOnly = syntheticOnly; this.phase = "idle"; this.currentTaskId = null; this.error = null; this.operation = null; this.closing = false; this.developmentHeld = false; this.bridgeLease = null; this.adapter = null; this.controller = null;
 		this.runtimeAvailable = true;
 		this.ledger = new GameIntentLedger(join(directory, "game-tasks.sqlite"), { approvalAuthority: this.#approvalAuthority, now,
@@ -32,10 +38,13 @@ export class GameTasks {
 			this.currentTaskId = parent && this.ledger.detailsFor(parent).goal ? parent : latest?.id ?? null;
 		}
 	}
-	async initialize() { if (this.ledger.unresolved().length) { await this.freezeDevelopment(); this.developmentHeld = true; } }
+	async initialize() {
+		if (this.ledger.unresolved().length) { await this.freezeDevelopment(); this.developmentHeld = true; }
+		if (this.recoveryVault) { try { this.recovery = await this.recoveryVault.snapshot(); } catch { this.recovery = { state: "unavailable" }; } }
+	}
 	runtimeUnavailable() {
 		if (!this.runtimeAvailable) return;
-		this.runtimeAvailable = false; this.#confirmations.clear(); this.catalogue = null; this.controller?.abort();
+		this.runtimeAvailable = false; this.#clearLifecycleTimer(); this.#confirmations.clear(); this.catalogue = null; this.exitPlan = null; this.recoveryPlan = null; this.controller?.abort();
 		// Invalidate authority without storage I/O. Existing unresolved/quarantine
 		// stages keep their original explanation; reconciliation still reads the ledger.
 		if (!this.operation && !["accepted", "reconciling", "blocked"].includes(this.phase)) { this.phase = "runtime_unavailable"; this.error = "GAME_RUNTIME_UNAVAILABLE"; }
@@ -54,7 +63,7 @@ export class GameTasks {
 		const catalog = this.catalogue ? { id: this.catalogue.id, planetId: this.catalogue.context.planetId, capturedAtGameTick: this.catalogue.capturedAtGameTick, expiresAt: this.catalogue.expiresAt, items: this.catalogue.items, truncated: this.catalogue.truncated } : null;
 		const storedGoal = tasks.find(task => task.id === this.currentTaskId)?.details.goal;
 		const goal = storedGoal ? gameGoalProjection(storedGoal, this.ledger.children(this.currentTaskId), { active: Boolean(this.goalController && this.operation), now: this.now() }) : null;
-		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, goal, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, mcp: { available: this.bridge.metadata?.gameAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, families: this.bridge.metadata?.gameActionFamilies ?? [], awaitingConfirmation: Boolean(this.mcpSession?.pending), awaitingAuthorization: this.mcpSession?.pending?.kind === "run", authorized: this.mcpSession?.authorized ?? false, expiresAt: this.mcpSession?.pending?.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
+		return { busy: Boolean(this.operation), runtimeAvailable: this.runtimeAvailable, storageAvailable: this.ledger.storageAvailable, phase: this.phase, currentTaskId: this.currentTaskId, error: this.error, developmentFrozen: this.developmentHeld, unresolved: this.ledger.unresolved(), tasks, goal, events: this.currentTaskId ? this.ledger.events(this.currentTaskId) : [], nativeInputExclusion: false, syntheticOnly: this.syntheticOnly, catalog, recovery: this.recovery, mcp: { available: this.bridge.metadata?.gameAvailable === true, exitAvailable: this.bridge.metadata?.gameExitAvailable === true, recoveryAvailable: this.bridge.metadata?.gameRecoveryAvailable === true, tools: this.bridge.metadata?.gameToolCount ?? 0, families: this.bridge.metadata?.gameActionFamilies ?? [], awaitingConfirmation: Boolean(this.mcpSession?.pending), awaitingAuthorization: this.mcpSession?.pending?.kind === "run", authorized: this.mcpSession?.authorized ?? false, expiresAt: this.mcpSession?.pending?.expiresAt ?? null, submissions: this.mcpSession?.submissions ?? 0 } };
 	}
 	#note(kind, value) {
 		if (this.currentTaskId) {
@@ -66,7 +75,17 @@ export class GameTasks {
 	}
 	#stage(phase) { this.phase = phase; this.#note("stage", { text: phase }); }
 	#notStopped() { this.#requireRuntime(); if (this.closing || this.controller?.signal.aborted) throw new Error("GAME_TASK_STOPPED"); }
-	#launch(phase, action) {
+	#clearLifecycleTimer() { if (this.#lifecycleTimer !== null) clearTimeout(this.#lifecycleTimer); this.#lifecycleTimer = null; }
+	#armLifecycleTimer(plan) {
+		this.#clearLifecycleTimer();
+		this.#lifecycleTimer = setTimeout(() => {
+			if (!this.operation && (this.exitPlan === plan || this.recoveryPlan === plan)) {
+				try { this.stop(); } catch { this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; this.emit(); }
+			}
+		}, Math.max(1, plan.approvalExpiresAt - this.now()));
+		this.#lifecycleTimer.unref?.();
+	}
+	#launch(phase, action, fallbackTaskId = null) {
 		this.#requireStorage();
 		if (this.operation) throw new Error("GAME_TASK_BUSY");
 		this.error = null; this.phase = phase;
@@ -74,7 +93,9 @@ export class GameTasks {
 		this.operation = operation;
 		operation.done = Promise.resolve().then(action).catch((error) => {
 			if (!this.#latchStorageFault()) { this.error = codeOf(error); this.phase = this.ledger.unresolved().length ? "blocked" : !this.runtimeAvailable ? "runtime_unavailable" : this.controller?.signal.aborted ? "cancelled" : "failed"; }
-			try { this.goalController?.stop(this.controller?.signal.aborted ? "paused" : "blocked", this.error); this.#note("error", { code: this.error }); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
+			const restorePrevious = !this.currentTaskId && fallbackTaskId;
+			if (restorePrevious) this.currentTaskId = fallbackTaskId;
+			try { if (!restorePrevious) { this.goalController?.stop(this.controller?.signal.aborted ? "paused" : "blocked", this.error); this.#note("error", { code: this.error }); } } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; }
 		}).finally(async () => {
 			try { if (!this.#latchStorageFault() && !this.ledger.unresolved().length && !["awaiting_approval", "planning", "preparing"].includes(this.phase)) await this.#release(); }
 			catch { this.phase = "blocked"; this.error = "DEVELOPMENT_GATE_RELEASE_UNCONFIRMED"; }
@@ -98,7 +119,7 @@ export class GameTasks {
 	}
 	async #readOriginal(request) {
 		// The ledger checks durable audit isolation before invoking this callback.
-		const intent = this.ledger.intent(request.intentId), details = this.ledger.tasks().find(task => task.id === intent.taskId)?.details;
+		const intent = this.ledger.intent(request.intentId), details = this.ledger.detailsFor(intent.taskId);
 		if (!details?.cohortHash || !details.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
 		if (!this.bridgeLease) {
 			if (!this.#reconnectOriginal) throw new Error("RESEARCH_ADAPTER_UNAVAILABLE");
@@ -109,9 +130,59 @@ export class GameTasks {
 			this.bridgeLease = await this.bridge.reconnectResearch(this.bridgeLease, details); this.adapter = null;
 		}
 		if (details.cohortHash !== this.bridgeLease.selection.cohortHash || details.schemaHash !== this.bridgeLease.client.metadata.schemaHash) throw new Error("ORIGINAL_MCP_COHORT_REQUIRED");
-		if (request.generic === true) return readMcpAction(this.bridgeLease.client.gamePort(this.#authority), request);
+		if (request.generic === true) {
+			const raw = this.bridgeLease.client.gamePort(this.#authority), original = this.ledger.task(this.ledger.intent(request.intentId).taskId);
+			const port = this.mcpSession && original.scope.parentTaskId === this.mcpSession.task.id ? this.mcpSession.transportBudget.wrap(raw, "reconciliation") : raw;
+			return readMcpAction(port, request);
+		}
 		this.adapter = new ResearchAdapter({ ...this.bridgeLease, authority: this.#authority, now: this.now, recoveryOnly: true });
 		return this.adapter.readResearchProof(request);
+	}
+	prepareExit() {
+		this.#requireRuntime();
+		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length || typeof this.captureExitWindow !== "function" || typeof this.closeExitWindow !== "function" || !this.bridge.metadata?.gameExitAvailable) throw new Error("GAME_EXIT_NOT_READY");
+		const previousTaskId = this.currentTaskId; this.currentTaskId = null; this.goalController = null; this.exitPlan = null; this.controller = new AbortController(); this.#confirmations.clear();
+		return this.#launch("preparing", async () => {
+			await this.#reserve(true); this.#notStopped();
+			const window = await this.captureExitWindow();
+			if (window?.kind !== "dsp") throw new Error("GAME_EXIT_WINDOW_IDENTITY_UNAVAILABLE");
+			const port = this.bridgeLease.client.gameExitPort(this.#authority), context = await gameContext(port, undefined, true);
+			if (!context.loaded || !context.owned || !positive(context.planetId)) throw new Error("OWNED_GAME_WORLD_REQUIRED");
+			const sessionReply = await port.call("spherewright_get_session_state", {}), session = sessionReply?.result;
+			if (sessionReply?.success !== true || session?.sessionId !== context.sessionId || !Number.isSafeInteger(session.revision) || !Number.isSafeInteger(context.capturedAtGameTick)) throw new Error("GAME_CONTEXT_CHANGED");
+			this.#notStopped();
+			const request = { sessionId: context.sessionId, planetId: context.planetId, expectedRevision: session.revision }, reply = await port.call("spherewright_prepare_return_to_main_menu", request), plan = reply?.result;
+			const expiresAt = Date.parse(plan?.expiresAtUtc);
+			this.#notStopped();
+			if (reply?.success !== true || plan?.prepared !== true || plan.actionKind !== "return-to-main-menu" || plan.commitAllowedNow !== true || !Array.isArray(plan.commitBlockers) || plan.commitBlockers.length || typeof plan.planToken !== "string" || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000) throw new Error("GAME_EXIT_PREVIEW_REJECTED");
+			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
+			this.#notStopped();
+			const parent = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: "assist", limits: { modelRequests: 1, toolCalls: 32, writes: 1, durationMs: 120000 } });
+			this.currentTaskId = parent.id; this.ledger.details(parent.id, { ...binding, mode: "assist", techName: "保存并退出游戏", prompt: "正常保存当前受管世界并退出游戏" });
+			this.exitPlan = { parentId: parent.id, context, window, port, binding, request, worldLabel: safeWorldLabel(session.saveName), token: plan.planToken, planExpiresAt: expiresAt, approvalExpiresAt: this.now() + 120000 };
+			this.#armLifecycleTimer(this.exitPlan);
+			this.#stage("awaiting_approval");
+		}, previousTaskId);
+	}
+	prepareRecovery() {
+		this.#requireRuntime();
+		if (this.closing || this.operation || this.bridgeLease || this.developmentHeld || this.ledger.unresolved().length || typeof this.captureExitWindow !== "function" || !this.bridge.metadata?.gameRecoveryAvailable || this.recovery.state !== "ready" || !this.recoveryVault) throw new Error("GAME_RECOVERY_NOT_READY");
+		const previousTaskId = this.currentTaskId; this.currentTaskId = null; this.goalController = null; this.exitPlan = null; this.recoveryPlan = null; this.controller = new AbortController(); this.#confirmations.clear();
+		return this.#launch("preparing", async () => {
+			await this.#reserve(true); this.#notStopped();
+			const window = await this.captureExitWindow(); if (window?.kind !== "dsp") throw new Error("GAME_EXIT_WINDOW_IDENTITY_UNAVAILABLE");
+			const port = this.bridgeLease.client.gameRecoveryPort(this.#authority), context = await gameContext(port), record = await this.recoveryVault.peek(this.recovery.id);
+			if (context.loaded || context.sessionId !== null) throw new Error("GAME_RECOVERY_REQUIRES_MAIN_MENU");
+			const sessionReply = await port.call("spherewright_get_session_state", {}), session = sessionReply?.result;
+			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
+			if (sessionReply?.success !== true || session?.gameLoaded !== false || session.gameVersion !== record.gameVersion || binding.cohortHash !== record.cohortHash || binding.schemaHash !== record.schemaHash) throw new Error("GAME_RECOVERY_COHORT_CHANGED");
+			this.#notStopped();
+			const parent = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: "assist", limits: { modelRequests: 1, toolCalls: 32, writes: 1, durationMs: 120000 } });
+			this.currentTaskId = parent.id; this.ledger.details(parent.id, { ...binding, mode: "assist", techName: "恢复上次保存的世界", prompt: "打开已核对的受管主存档，原任务保持停止" });
+			this.recoveryPlan = { parentId: parent.id, context, window, port, binding, record, approvalExpiresAt: this.now() + 120000 };
+			this.#armLifecycleTimer(this.recoveryPlan);
+			this.#stage("awaiting_approval");
+		}, previousTaskId);
 	}
 	catalog() {
 		this.#requireRuntime();
@@ -172,18 +243,21 @@ export class GameTasks {
 		this.currentTaskId = null; this.controller = new AbortController(); this.#confirmations.clear();
 		return this.#launch("observing", async () => {
 			await this.#reserve(true); this.#notStopped();
-			const port = this.bridgeLease.client.gamePort(this.#authority), context = await gameContext(port), playbook = await port.playbook(); this.#notStopped();
+			const rawPort = this.bridgeLease.client.gamePort(this.#authority);
+			const transportBudget = new GameTransportBudget(limits.toolCalls, value => { if (this.goalController) this.goalController.persist(); else if (this.currentTaskId) this.ledger.transportBudget(this.currentTaskId, value); });
+			const port = transportBudget.wrap(rawPort), context = await gameContext(port), playbook = await port.playbook(); this.#notStopped();
 			if (previous && (context.bridgeInstanceId !== previous.context.bridgeInstanceId || context.sessionId !== previous.context.sessionId || context.planetId !== previous.context.planetId)) throw new Error("GAME_CONTEXT_CHANGED");
 			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
 			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: args.mode, limits, ...(objective ? { objective } : {}), ...(args.mode === "autonomous" ? { allowedFamilies: [...allowedFamilies].sort() } : {}) }); this.currentTaskId = task.id;
 			this.ledger.details(task.id, { ...binding, mode: args.mode, techName: "Spherewright MCP 任务", prompt: args.prompt, provider: args.providerId, model: args.modelId });
-			this.mcpSession = new SpherewrightGameSession({ port, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, goal: args.prompt, allowedFamilies, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
+			this.mcpSession = new SpherewrightGameSession({ port: rawPort, transportBudget, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, goal: args.prompt, allowedFamilies, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
 			const timer = setTimeout(() => this.controller.abort(), limits.durationMs);
 			try {
 				this.goalController = objective ? new GameGoalController({ ledger: this.ledger, task, session: this.mcpSession, objective, prompt: args.prompt, previous, stage: phase => this.#stage(phase), emit: this.emit, signal: this.controller.signal, now: this.now }) : null;
 				if (args.mode === "autonomous") await this.mcpSession.authorizeRun();
 				this.#stage("planning");
-				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, nativeTools: this.mcpSession.tools(), goalTools: objective ? gameGoalTools : null, limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
+				if (objective?.kind === "production" && context.loaded && this.mcpSession.entries.has("spherewright_get_foundry_plan") && limits.toolCalls >= 4) await this.goalController.supplyPlan();
+				await this.planner({ task, mode: args.mode, prompt: args.prompt, providerId: args.providerId, modelId: args.modelId, playbook, observation: context, initialSupplyPlan: this.goalController?.goal.supplyPlan ?? null, nativeTools: this.mcpSession.tools(), goalTools: objective ? gameGoalTools : null, limits, signal: this.controller.signal, invoke: (name, value) => this.callForModel(task.id, name, value), event: (kind, value) => this.#note(kind, value) });
 				this.#notStopped();
 				if (this.ledger.unresolved().length) this.#stage("reconciling");
 				else if (this.goalController?.goal.status === "completed") this.#stage("goal_completed");
@@ -234,6 +308,16 @@ export class GameTasks {
 	}
 	confirmation(taskId, uiEpoch) {
 		this.#requireRuntime();
+		if (this.recoveryPlan && !this.operation && this.phase === "awaiting_approval" && taskId === this.recoveryPlan.parentId && Number.isSafeInteger(uiEpoch) && uiEpoch > 0 && this.recoveryPlan.approvalExpiresAt > this.now()) {
+			this.#confirmations.clear(); const nonce = randomUUID();
+			this.#confirmations.set(nonce, { kind: "game-recovery", taskId, uiEpoch, expiresAt: this.recoveryPlan.approvalExpiresAt });
+			return { kind: "game-recovery", nonce, taskId, expiresAt: this.recoveryPlan.approvalExpiresAt, savedAt: this.recoveryPlan.record.createdAt, savedTick: this.recoveryPlan.record.savedTick, worldLabel: this.recoveryPlan.record.worldLabel ?? "受管世界", syntheticOnly: this.syntheticOnly };
+		}
+		if (this.exitPlan && !this.operation && this.phase === "awaiting_approval" && taskId === this.exitPlan.parentId && Number.isSafeInteger(uiEpoch) && uiEpoch > 0 && this.exitPlan.approvalExpiresAt > this.now()) {
+			this.#confirmations.clear(); const nonce = randomUUID();
+			this.#confirmations.set(nonce, { kind: "game-exit", taskId, uiEpoch, expiresAt: this.exitPlan.approvalExpiresAt });
+			return { kind: "game-exit", nonce, taskId, expiresAt: this.exitPlan.approvalExpiresAt, syntheticOnly: this.syntheticOnly };
+		}
 		if (this.mcpSession && taskId === this.currentTaskId && this.phase === "awaiting_approval") return { ...this.mcpSession.confirmation(uiEpoch), syntheticOnly: this.syntheticOnly };
 		if (this.closing || this.operation || this.phase !== "awaiting_approval" || taskId !== this.currentTaskId || !Number.isSafeInteger(uiEpoch) || uiEpoch <= 0) throw new Error("GAME_CONFIRMATION_UNAVAILABLE");
 		const task = this.ledger.task(taskId);
@@ -255,6 +339,96 @@ export class GameTasks {
 		if (this.mcpSession && this.phase === "awaiting_approval") { try { return this.mcpSession.confirm(nonce, uiEpoch); } catch (error) { this.#latchStorageFault(); throw error; } }
 		const challenge = this.#confirmations.get(nonce); this.#confirmations.delete(nonce);
 		if (!challenge || this.closing || this.operation || challenge.uiEpoch !== uiEpoch || challenge.taskId !== this.currentTaskId || challenge.expiresAt <= this.now() || this.phase !== "awaiting_approval") throw new Error("FRESH_RESEARCH_APPROVAL_REQUIRED");
+		if (challenge.kind === "game-recovery") {
+			const plan = this.recoveryPlan;
+			if (!plan || plan.parentId !== challenge.taskId || plan.approvalExpiresAt !== challenge.expiresAt) throw new Error("GAME_RECOVERY_CANDIDATE_CHANGED");
+			this.#clearLifecycleTimer(); this.recoveryPlan = null;
+			return this.#launch("confirming", async () => {
+				if (!sameExitWindow(plan.window, await this.captureExitWindow())) throw new Error("GAME_EXIT_WINDOW_CHANGED");
+				const context = await gameContext(plan.port, plan.context), record = await this.recoveryVault.peek(plan.record.id);
+				if (context.loaded || record.token !== plan.record.token || record.savedTick !== plan.record.savedTick || record.planetId !== plan.record.planetId || record.cohortHash !== plan.binding.cohortHash || record.schemaHash !== plan.binding.schemaHash) throw new Error("GAME_RECOVERY_CANDIDATE_CHANGED");
+				const sessionReply = await plan.port.call("spherewright_get_session_state", {}), session = sessionReply?.result;
+				if (sessionReply?.success !== true || session?.gameLoaded !== false || session.gameVersion !== record.gameVersion) throw new Error("GAME_RECOVERY_COHORT_CHANGED");
+				this.#notStopped();
+				const request = { resumeToken: record.token, recoveryMode: "open_saved_primary" };
+				if (!plan.port.valid("spherewright_prepare_resume_owned_game", request)) throw new Error("GAME_RECOVERY_SCHEMA_UNAVAILABLE");
+				const reply = await plan.port.call("spherewright_prepare_resume_owned_game", request), preview = reply?.result, expiresAt = Date.parse(preview?.expiresAtUtc);
+				const expectedDisclosure = `Open only the exact complete owned OwnedPrimary at tick ${record.savedTick}, pausing at Native load completion. Discarded progress: 0 ticks, from known floor ${record.savedTick}. Existing applicable conversation authority may cover this exact disclosed choice. Old automation remains stopped; no automatic Save, Resume, charging, flight, task renewal or action replay.`;
+				if (reply?.success !== true || preview?.prepared !== true || preview.recoveryMode !== "open_saved_primary" || preview.recoveryEvidenceVersion !== 1 || preview.opensSavedWorldOnly !== true || preview.opensExactLastExitOnly !== false || preview.previousAutomationRemainsStopped !== true || preview.newChargingProhibited !== true || preview.exactEmbeddedIdentityVerified !== true || preview.discardedUnstoredProgressGameTicks !== 0 || preview.expectedPlanetId !== record.planetId || preview.candidateGameTick !== record.savedTick || preview.minimumGameTick !== record.savedTick || preview.sourceGameVersion !== record.gameVersion || preview.targetGameVersion !== record.gameVersion || preview.userConfirmationRequired !== true || preview.commitAllowedNow !== false || !Array.isArray(preview.commitBlockers) || preview.commitBlockers.length !== 1 || preview.commitBlockers[0]?.code !== "USER_CONFIRMATION_REQUIRED" || preview.confirmationPrompt !== expectedDisclosure || !/^sha256:[a-f0-9]{64}$/.test(preview.confirmationDigest ?? "") || typeof preview.planToken !== "string" || preview.planToken.length < 16 || preview.planToken.length > 4096 || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000 || preview.effectiveRecoveryDeadlineUtc != null || preview.maximumChargeGameTicks !== 0 || preview.maximumChargeWallSeconds !== 0 || preview.recoveryScope !== "" || preview.nativeChargeFeasibilityRequiresFreshCapture !== false || preview.priorFailedResumeProvenanceUsed !== false || preview.priorFailedResumeV2ProvenanceUsed !== false || preview.priorFailedResumeV3ProvenanceUsed !== false || preview.priorActionTerminalFailureAttested !== false || preview.priorActionTerminalCompletionAttested !== false || preview.failedRemoteLastExitReauthorizationUsed !== false || preview.completedRemoteLastExitContinuationUsed !== false || preview.remotePrimaryRecoveryAuthorizationUsed !== false || preview.conservedObservedProgressDebitGameTicks != null || preview.legacyLocalMoveUnknownProvenanceUsed !== false) throw new Error("GAME_RECOVERY_PREVIEW_REJECTED");
+				this.#notStopped(); if (challenge.expiresAt <= this.now()) throw new Error("GAME_RECOVERY_AUTHORIZATION_EXPIRED");
+				const attemptId = randomUUID(), publicScope = { candidateId: record.id, savedTick: record.savedTick, recoveryMode: "open_saved_primary" };
+				const action = this.ledger.createMcpTask({ ...context, planetId: record.planetId, minimumRecoveryGameTick: record.savedTick, recoveryRecordId: record.id, recoveryAttemptId: attemptId, kind: "mcp-action", parentTaskId: plan.parentId, actionKind: "resume-owned-game", requestHash: digest(publicScope) });
+				this.ledger.details(action.id, plan.binding);
+				const intent = this.ledger.beginMcpIntent(this.#approvalAuthority, action.id, digest({ ...publicScope, binding: plan.binding }), expiresAt);
+				try {
+					this.recovery = await this.recoveryVault.transition(record.id, "ready", "pending", attemptId);
+					this.#notStopped();
+					if (challenge.expiresAt <= this.now() || expiresAt <= this.now()) throw new Error("GAME_RECOVERY_AUTHORIZATION_EXPIRED");
+				} catch (error) {
+					this.ledger.cancelUnsentRecovery(this.#approvalAuthority, intent.intentId);
+					try { const current = await this.recoveryVault.snapshot(); this.recovery = current.state === "pending" && current.id === record.id ? await this.recoveryVault.cancelUnsent(record.id, attemptId) : current; } catch { this.recovery = { state: "unavailable" }; }
+					throw error;
+				}
+				let accepted;
+				try { accepted = await plan.port.call("spherewright_commit_resume_owned_game", { planToken: preview.planToken, idempotencyKey: intent.idempotencyKey, userConfirmedInConversation: true, confirmationDigest: preview.confirmationDigest }); }
+				catch { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
+				if (accepted?.success !== true || accepted.result?.accepted !== true || accepted.result?.idempotentReplay !== false || !opaque(accepted.result?.actionId)) { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
+				this.ledger.acceptMcp(intent.intentId, { ...accepted.result, actionKind: "resume-owned-game", idempotencyKey: intent.idempotencyKey, idempotencyEchoed: false }); this.#stage("accepted");
+				await this.#pollOriginal(intent.intentId, "confirming");
+				const original = this.ledger.intent(intent.intentId);
+				if (original.state !== "completed" || original.terminal?.succeeded !== true) throw new Error("GAME_RECOVERY_ORIGINAL_PENDING");
+				this.recovery = await this.recoveryVault.transition(record.id, "pending", "used");
+				if (this.controller.signal.aborted || this.closing) { this.#stage("cancelled"); return; }
+				this.ledger.completeHostRecoveryParent(this.#approvalAuthority, plan.parentId, action.id); this.#stage("completed");
+			});
+		}
+		if (challenge.kind === "game-exit") {
+			const plan = this.exitPlan;
+			if (!plan || plan.parentId !== challenge.taskId || plan.approvalExpiresAt !== challenge.expiresAt) throw new Error("GAME_EXIT_PREVIEW_REJECTED");
+			this.#clearLifecycleTimer(); this.exitPlan = null; // Never reuse a confirmed native plan or its original action.
+			return this.#launch("confirming", async () => {
+				if (!sameExitWindow(plan.window, await this.captureExitWindow())) throw new Error("GAME_EXIT_WINDOW_CHANGED");
+				const context = await gameContext(plan.port, plan.context, true); this.#notStopped();
+				if (context.planetId !== plan.context.planetId) throw new Error("GAME_CONTEXT_CHANGED");
+				const currentReply = await plan.port.call("spherewright_get_session_state", {}), current = currentReply?.result;
+				if (currentReply?.success !== true || current?.sessionId !== plan.context.sessionId || !Number.isSafeInteger(current.revision)) throw new Error("GAME_CONTEXT_CHANGED");
+				this.#notStopped();
+				let request = plan.request, token = plan.token, expiresAt = plan.planExpiresAt;
+				if (expiresAt <= this.now() || current.revision !== request.expectedRevision) {
+					request = { sessionId: context.sessionId, planetId: context.planetId, expectedRevision: current.revision };
+					const refreshed = await plan.port.call("spherewright_prepare_return_to_main_menu", request), value = refreshed?.result;
+					expiresAt = Date.parse(value?.expiresAtUtc); token = value?.planToken;
+					if (refreshed?.success !== true || value?.prepared !== true || value.actionKind !== "return-to-main-menu" || value.commitAllowedNow !== true || !Array.isArray(value.commitBlockers) || value.commitBlockers.length || typeof token !== "string" || !Number.isFinite(expiresAt) || expiresAt <= this.now() || expiresAt > this.now() + 120000) throw new Error("GAME_EXIT_PREVIEW_REJECTED");
+				}
+				this.#notStopped(); if (challenge.expiresAt <= this.now()) throw new Error("GAME_EXIT_AUTHORIZATION_EXPIRED");
+				const action = this.ledger.createMcpTask({ ...context, kind: "mcp-action", parentTaskId: plan.parentId, actionKind: "return-to-main-menu", requestHash: digest(request) });
+				this.ledger.details(action.id, plan.binding);
+				const previewHash = digest({ request, context, binding: plan.binding, actionKind: "return-to-main-menu" });
+				const intent = this.ledger.beginMcpIntent(this.#approvalAuthority, action.id, previewHash, expiresAt);
+				let reply;
+				try { reply = await plan.port.call("spherewright_commit_return_to_main_menu", { sessionId: plan.context.sessionId, planetId: plan.context.planetId, planToken: token, idempotencyKey: intent.idempotencyKey }); }
+				catch { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
+				if (rejectedGameCommit(reply)) {
+					const context = await gameContext(plan.port, plan.context, true);
+					this.ledger.rejectMcpIntent(this.#approvalAuthority, intent.intentId, reply, context); throw new Error("GAME_EXIT_PREVIEW_REJECTED");
+				}
+				if (reply?.success !== true || !reply.result) { this.ledger.markUnknown(intent.intentId); throw new Error("COMMIT_RECEIPT_UNAVAILABLE"); }
+				this.ledger.acceptMcp(intent.intentId, reply.result); this.#stage("accepted");
+				await this.#pollOriginal(intent.intentId, "confirming");
+				const original = this.ledger.intent(intent.intentId);
+				if (original.state !== "completed" || original.terminal?.mainMenuReturnReadback?.mainMenuVerified !== true) throw new Error("GAME_EXIT_ORIGINAL_PENDING");
+				if (this.recoveryVault?.available()) {
+					try {
+						const response = await plan.port.call("spherewright_get_session_state", {}), saved = response?.result;
+						if (response?.success !== true || saved?.gameLoaded !== false || saved.restartResumeAvailable !== true || typeof saved.restartResumeToken !== "string" || typeof saved.gameVersion !== "string" || !Number.isSafeInteger(saved.lastOwnedSaveGameTick) || saved.lastOwnedSaveGameTick < original.terminal.mainMenuReturnReadback.savedGameTick) throw new Error("GAME_RECOVERY_CREDENTIAL_UNAVAILABLE");
+						this.recovery = await this.recoveryVault.save({ token: saved.restartResumeToken, sourceSessionId: plan.context.sessionId, planetId: plan.context.planetId, savedTick: saved.lastOwnedSaveGameTick, gameVersion: saved.gameVersion, cohortHash: plan.binding.cohortHash, schemaHash: plan.binding.schemaHash, worldLabel: plan.worldLabel });
+					} catch { this.recovery = { state: "unavailable" }; }
+				}
+				this.#notStopped();
+				await this.closeExitWindow(plan.window);
+				this.ledger.completeHostExitParent(this.#approvalAuthority, plan.parentId, action.id); this.#stage("completed");
+			});
+		}
 		return this.#launch("confirming", async () => {
 			const task = this.ledger.task(challenge.taskId), fresh = await this.adapter.observe(task.scope, { player: true, researchTechId: task.scope.techId }); this.#notStopped();
 			this.ledger.approve(this.#approvalAuthority, task.id, challenge.previewHash);
@@ -272,10 +446,10 @@ export class GameTasks {
 		for (const [nonce, value] of this.#confirmations) if (value.uiEpoch === uiEpoch) this.#confirmations.delete(nonce);
 		if (this.phase === "confirming" && !this.ledger.unresolved().length) { this.controller?.abort(); if (this.currentTaskId) this.ledger.stop(this.currentTaskId); }
 	}
-	async #pollOriginal(intentId) {
+	async #pollOriginal(intentId, finishedPhase = "completed") {
 		const deadline = performance.now() + this.pollMilliseconds;
 		for (let read = 0; read < 32; read++) {
-			try { await this.ledger.reconcile(intentId); this.#stage("completed"); return; }
+			try { await this.ledger.reconcile(intentId); this.#stage(finishedPhase); return; }
 			catch (error) { if (error.message !== "ORIGINAL_ACTION_PENDING") throw error; }
 			if (performance.now() >= deadline || this.closing) { this.#stage("reconciling"); return; }
 			await delay(250);
@@ -319,15 +493,35 @@ export class GameTasks {
 		const intent = this.ledger.unresolved().find((value) => value.intentId === intentId);
 		if (!intent || this.closing) throw new Error("ORIGINAL_GAME_INTENT_REQUIRED");
 		if (!intent.actionId) throw new Error("UNKNOWN_COMMIT_HAS_NO_ACTION_ID");
-		this.currentTaskId = intent.taskId;
+		const originalTask = this.ledger.task(intent.taskId), parent = originalTask.scope.parentTaskId;
+		this.currentTaskId = parent && this.ledger.detailsFor(parent).goal ? parent : intent.taskId;
 		return this.#launch("reconciling", async () => {
 			if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
 			this.#reconnectOriginal = true;
-			try { await this.#pollOriginal(intentId); } finally { this.#reconnectOriginal = false; }
+			try {
+				if (intent.state === "unknown") {
+					const action = this.ledger.task(intent.taskId), scope = action.scope;
+					if (scope.kind === "mcp-action") {
+						const request = Object.freeze({ requestId: randomUUID(), intentId, actionKind: scope.actionKind, actionId: intent.actionId, idempotencyKey: intent.idempotencyKey, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId, generic: true });
+						const prior = await this.#readOriginal(request);
+						if (energyStarvedHarvestCandidate(prior.terminal)) { await this.ledger.resolveEnergyStoppedHarvest(this.#approvalAuthority, intentId, prior.terminal); this.#stage("failed"); return; }
+						if (stoppedGameAction(prior.terminal)) { await this.ledger.resolveStoppedAction(this.#approvalAuthority, intentId, prior.terminal); this.#stage("failed"); return; }
+					}
+				}
+				await this.#pollOriginal(intentId, originalTask.scope.actionKind === "resume-owned-game" ? "reconciling" : "completed");
+				if (originalTask.scope.actionKind === "resume-owned-game" && this.ledger.intent(intentId).state === "completed" && this.recoveryVault) {
+					const stored = await this.recoveryVault.snapshot();
+					if (stored.state === "pending" && stored.id === originalTask.scope.recoveryRecordId) this.recovery = await this.recoveryVault.transition(stored.id, "pending", "used");
+					else if (stored.state !== "used" || stored.id !== originalTask.scope.recoveryRecordId) throw new Error("GAME_RECOVERY_CANDIDATE_CHANGED");
+					const parent = this.ledger.task(originalTask.scope.parentTaskId);
+					if (parent.state === "draft") this.ledger.completeHostRecoveryParent(this.#approvalAuthority, parent.id, originalTask.id);
+					this.#stage("completed");
+				}
+			} finally { this.#reconnectOriginal = false; }
 		});
 	}
 	stop() {
-		this.#confirmations.clear(); this.controller?.abort();
+		this.#clearLifecycleTimer(); this.#confirmations.clear(); this.exitPlan = null; this.recoveryPlan = null; this.controller?.abort();
 		if (this.#latchStorageFault()) { this.emit(); return this.snapshot(); }
 		try { this.goalController?.stop("paused"); if (this.currentTaskId) this.ledger.stop(this.currentTaskId); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); return this.snapshot(); }
 		this.phase = this.ledger.unresolved().length ? "reconciling" : "cancelled";
@@ -336,7 +530,7 @@ export class GameTasks {
 	}
 	async settled() { await this.operation?.done; return this.snapshot(); }
 	async drain() {
-		this.closing = true; this.catalogue = null; this.#confirmations.clear(); this.controller?.abort();
+		this.closing = true; this.#clearLifecycleTimer(); this.catalogue = null; this.exitPlan = null; this.recoveryPlan = null; this.#confirmations.clear(); this.controller?.abort();
 		if (this.ledger.storageAvailable) this.goalController?.stop("paused");
 		if (this.ledger.storageAvailable && this.currentTaskId && !this.ledger.unresolved().length) { try { this.ledger.stop(this.currentTaskId); } catch { this.#latchStorageFault(); this.error = "GAME_LEDGER_STORAGE_UNAVAILABLE"; } }
 		await this.operation?.done;
@@ -344,5 +538,5 @@ export class GameTasks {
 		if (this.bridgeLease) { this.bridge.releaseResearch(this.bridgeLease); this.bridgeLease = null; this.adapter = null; }
 	}
 	async resumeAfterCloseFailure() { this.closing = false; if (!this.#latchStorageFault()) { if (!this.ledger.unresolved().length) { this.phase = "cancelled"; await this.#release(); } else { this.phase = "blocked"; this.error = "UNRESOLVED_GAME_INTENT_BLOCKS_WRITES"; } } this.emit(); }
-	close() { this.ledger.close(); }
+	close() { this.#clearLifecycleTimer(); this.ledger.close(); }
 }

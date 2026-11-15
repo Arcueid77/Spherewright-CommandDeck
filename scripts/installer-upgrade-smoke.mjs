@@ -26,6 +26,7 @@ const runId = randomUUID(), proofRoot = join(root, ".local/installer-upgrade", r
 await mkdir(proofRoot, { recursive: true }); await writeFile(join(scope, "installer-test-scope.txt"), baseline.testIdentity, { flag: "wx" });
 await writeFile(join(proofRoot, "context.private.json"), JSON.stringify({ runId, driverRevision, scope, installation, baselineSource, candidateSource, baselineRevision: baseline.sourceRevision, candidateRevision: candidate.sourceRevision, testIdentity: baseline.testIdentity }, null, 2), { flag: "wx" });
 const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:PI_|COMMANDDECK_|NODE_|ELECTRON_|PSModulePath$)|KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i.test(key)));
+if (process.env.COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS === "1") environment.COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS = "1";
 const switches = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART", "/NOCLOSEAPPLICATIONS", "/NOFORCECLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS", "/DECKTESTID=" + baseline.testIdentity, "/DECKTESTROOT=" + scope];
 let profile, profileRunId, history, passed = false; const stages = [];
 const payload = manifest => join(installation, "releases", manifest.sourceRevision);
