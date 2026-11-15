@@ -359,7 +359,7 @@ export class GameTasks {
 				const attemptId = randomUUID(), publicScope = { candidateId: record.id, savedTick: record.savedTick, recoveryMode: "open_saved_primary" };
 				const action = this.ledger.createMcpTask({ ...context, planetId: record.planetId, minimumRecoveryGameTick: record.savedTick, recoveryRecordId: record.id, recoveryAttemptId: attemptId, kind: "mcp-action", parentTaskId: plan.parentId, actionKind: "resume-owned-game", requestHash: digest(publicScope) });
 				this.ledger.details(action.id, plan.binding);
-				const intent = this.ledger.beginMcpIntent(this.#approvalAuthority, action.id, digest({ ...publicScope, binding: plan.binding }), expiresAt);
+				const intent = this.ledger.beginMcpIntent(this.#approvalAuthority, action.id, digest({ ...publicScope, binding: plan.binding, nativeDisclosureDigest: preview.confirmationDigest }), expiresAt);
 				try {
 					this.recovery = await this.recoveryVault.transition(record.id, "ready", "pending", attemptId);
 					this.#notStopped();
@@ -404,7 +404,7 @@ export class GameTasks {
 				this.#notStopped(); if (challenge.expiresAt <= this.now()) throw new Error("GAME_EXIT_AUTHORIZATION_EXPIRED");
 				const action = this.ledger.createMcpTask({ ...context, kind: "mcp-action", parentTaskId: plan.parentId, actionKind: "return-to-main-menu", requestHash: digest(request) });
 				this.ledger.details(action.id, plan.binding);
-				const previewHash = digest({ request, context, binding: plan.binding, actionKind: "return-to-main-menu" });
+				const previewHash = digest({ request, context, binding: plan.binding, actionKind: "return-to-main-menu", nativePlanDigest: digest(token) });
 				const intent = this.ledger.beginMcpIntent(this.#approvalAuthority, action.id, previewHash, expiresAt);
 				let reply;
 				try { reply = await plan.port.call("spherewright_commit_return_to_main_menu", { sessionId: plan.context.sessionId, planetId: plan.context.planetId, planToken: token, idempotencyKey: intent.idempotencyKey }); }

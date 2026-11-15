@@ -184,6 +184,7 @@ test("owner-approved recovery prepares after consent, opens only the recorded pr
 	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used");
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
 	assert.ok(!JSON.stringify(f.host.snapshot()).includes("PRIVATE_SYNTHETIC_TOKEN"));
+	assert.ok(!JSON.stringify(f.host.ledger.db.prepare("SELECT * FROM game_tasks").all()).includes("sha256:" + "d".repeat(64)));
 });
 
 test("a recovery preview that would discard progress is refused before commit", async t => {
