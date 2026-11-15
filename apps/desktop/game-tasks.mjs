@@ -250,6 +250,7 @@ export class GameTasks {
 			const binding = { cohortHash: this.bridgeLease.selection.cohortHash, schemaHash: this.bridgeLease.client.metadata.schemaHash };
 			const task = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: args.mode, limits, ...(objective ? { objective } : {}), ...(args.mode === "autonomous" ? { allowedFamilies: [...allowedFamilies].sort() } : {}) }); this.currentTaskId = task.id;
 			this.ledger.details(task.id, { ...binding, mode: args.mode, techName: "Spherewright MCP 任务", prompt: args.prompt, provider: args.providerId, model: args.modelId });
+			if (!objective) this.ledger.transportBudget(task.id, transportBudget.snapshot());
 			this.mcpSession = new SpherewrightGameSession({ port: rawPort, transportBudget, ledger: this.ledger, authority: this.#approvalAuthority, task, mode: args.mode, limits, binding, goal: args.prompt, allowedFamilies, signal: this.controller.signal, stage: phase => this.#stage(phase), check: () => this.#notStopped(), now: this.now });
 			const timer = setTimeout(() => this.controller.abort(), limits.durationMs);
 			try {

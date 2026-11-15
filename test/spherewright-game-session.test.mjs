@@ -337,6 +337,13 @@ test("read-only mode exposes no prepare/commit and host rejects invented write c
 	f.start({ mode: "observe" }); await f.host.settled(); assert.equal(f.host.ledger.unresolved().length, 0); assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 0);
 });
 
+test("setup requests are retained even when a read-only round performs no later calls", async t => {
+	const f = await fixture(t, async () => {});
+	f.start({ mode: "observe" }); await f.host.settled();
+	const details = f.host.ledger.detailsFor(f.host.currentTaskId);
+	assert.equal(details.transport.workUsed, 3);
+});
+
 test("forged confirmation and UI invalidation never dispatch a commit", async t => {
 	const f = await fixture(t, async ({ invoke }) => craft(invoke)); f.start(); await waitFor(() => f.host.snapshot().mcp.awaitingConfirmation);
 	const challenge = f.host.confirmation(f.host.currentTaskId, 7); assert.throws(() => f.host.confirm({}, challenge.nonce, 7), /TRUSTED_USER_APPROVAL_REQUIRED/); assert.throws(() => f.host.confirm(f.approval, challenge.nonce, 8), /FRESH_GAME_MCP_APPROVAL_REQUIRED/);
