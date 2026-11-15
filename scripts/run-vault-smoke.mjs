@@ -8,5 +8,5 @@ import assert from "node:assert/strict";
 const execute = promisify(execFile), root = fileURLToPath(new URL("../", import.meta.url)), runId = randomUUID();
 for (const phase of ["write", "read"]) await execute(join(root, "node_modules/electron/dist/electron.exe"), [root, "--vault-smoke", phase], { cwd: root, windowsHide: true, timeout: 20000, env: { ...process.env, COMMANDDECK_VAULT_SMOKE_ID: runId } });
 const result = JSON.parse(await readFile(join(root, ".local/credential-vault-smoke.json"), "utf8"));
-assert.equal(result.runId, runId); assert.equal(result.separateProcessReopen, true);
+assert.equal(result.runId, runId); assert.equal(result.separateProcessReopen, true); assert.equal(result.gameRecoveryCiphertextOnly, true); assert.equal(result.gameRecoveryPendingRetained, true);
 console.log(JSON.stringify({ credentialVaultSmoke: "passed", syntheticOnly: true, modelRequests: 0, gameCalls: 0 }));
