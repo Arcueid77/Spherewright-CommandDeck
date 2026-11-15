@@ -8,7 +8,7 @@ function fixture(overrides = {}) {
 		enabled: true, ready: async () => {}, approvalAuthority: authority,
 		native: { request: async () => ({ kind: "dsp", attached: true, gameParentMatches: true, nativeParentMatches: true, clientWidth: 800, clientHeight: 600 }) },
 		api: async (...args) => { calls.push(args); return { started: true }; },
-		game: { currentTaskId: "task", snapshot: () => ({}), confirmation: (...args) => { calls.push(args); return { nonce: "nonce" }; }, confirm: (...args) => { calls.push(args); return { confirmed: true }; }, resolveEnergyStoppedHarvest: (...args) => { calls.push(args); return { audited: true }; }, stop: () => {} },
+		game: { currentTaskId: "task", snapshot: () => ({}), confirmation: (...args) => { calls.push(args); return { nonce: "nonce" }; }, confirm: (...args) => { calls.push(args); return { confirmed: true }; }, resolveEnergyStoppedHarvest: (...args) => { calls.push(args); return { audited: true }; }, reconcile: (...args) => { calls.push(args); return { reconciled: true }; }, stop: () => {} },
 		openPanel: () => calls.push("panel"), ...overrides,
 	};
 	return { control: createOwnerGameControl(dependencies), calls, authority };
@@ -23,6 +23,7 @@ test("owner game control requires a physically embedded DSP before starting or c
 	await assert.rejects(control.start({ kind: "mcp", mode: "autonomous" }), /EMBEDDED_GAME_REQUIRED/);
 	await assert.rejects(control.confirm("nonce"), /EMBEDDED_GAME_REQUIRED/);
 	await assert.rejects(control.resolveEnergyStoppedHarvest("intent", {}), /EMBEDDED_GAME_REQUIRED/);
+	await assert.rejects(control.reconcileOriginal("intent"), /EMBEDDED_GAME_REQUIRED/);
 	assert.deepEqual(calls, []);
 });
 
@@ -30,6 +31,12 @@ test("owner reconciliation uses the trusted host authority and the unchanged ori
 	const { control, calls, authority } = fixture(), original = { state: "action_failed" };
 	await control.resolveEnergyStoppedHarvest("intent", original);
 	assert.deepEqual(calls, [[authority, "intent", original]]);
+});
+
+test("owner reconciliation polls only the requested original intent", async () => {
+	const { control, calls } = fixture();
+	await control.reconcileOriginal("original-intent");
+	assert.deepEqual(calls, [["original-intent"]]);
 });
 
 test("owner game control uses the supervisor's existing task and approval authority", async () => {

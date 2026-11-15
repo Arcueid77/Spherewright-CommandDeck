@@ -32,6 +32,10 @@ export function createOwnerGameControl({ enabled, ready, native, game, api, appr
 			await embedded();
 			return game.resolveEnergyStoppedHarvest(approvalAuthority, intentId, originalFailure);
 		},
+		async reconcileOriginal(intentId) {
+			await embedded();
+			return game.reconcile(intentId);
+		},
 		stop: () => game.stop(),
 	});
 }
