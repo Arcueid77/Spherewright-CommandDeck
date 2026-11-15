@@ -450,7 +450,7 @@ export class GameTasks {
 		const deadline = performance.now() + this.pollMilliseconds;
 		for (let read = 0; read < 32; read++) {
 			try { await this.ledger.reconcile(intentId); this.#stage(finishedPhase); return; }
-			catch (error) { if (error.message !== "ORIGINAL_ACTION_PENDING") throw error; }
+			catch (error) { if (!["ORIGINAL_ACTION_PENDING", "GAME_MCP_CONTEXT_UNAVAILABLE"].includes(error.message)) throw error; }
 			if (performance.now() >= deadline || this.closing) { this.#stage("reconciling"); return; }
 			await delay(250);
 		}

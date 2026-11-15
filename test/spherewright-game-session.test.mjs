@@ -140,6 +140,14 @@ test("stopping an accepted exit preserves its original action and never closes t
 	assert.ok(f.host.ledger.tasks().some(task => task.scope.actionKind === "return-to-main-menu" && task.intent?.actionId));
 });
 
+test("exit waits through a transient menu transition without another commit", async t => {
+	const f = await fixture(t, async () => {}, "exit-transition");
+	f.host.prepareExit(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.closed.length, 1);
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
 test("a confirmed exit refreshes an expired preview for the same world without asking twice", async t => {
 	const f = await fixture(t, async () => {}, "exit-expired");
 	f.host.prepareExit(); await f.host.settled();
@@ -231,6 +239,14 @@ test("stopping an accepted recovery still reconciles the original without replay
 	f.host.confirm(f.approval, challenge.nonce, 1); await waitFor(() => f.host.snapshot().phase === "accepted" || f.host.snapshot().phase === "reconciling");
 	f.host.stop(); await f.host.settled();
 	assert.equal(f.host.snapshot().unresolved.length, 0); assert.equal(f.host.snapshot().recovery.state, "used");
+	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
+});
+
+test("recovery waits through a transient load transition without another commit", async t => {
+	const f = await fixture(t, async () => {}, "recovery-transition");
+	f.host.prepareRecovery(); await f.host.settled(); const challenge = f.host.confirmation(f.host.currentTaskId, 1);
+	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used");
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 1);
 });
 const prepare = { sessionId: "synthetic-game-session", planetId: 1, recipeId: 10, count: 2 };
