@@ -93,13 +93,16 @@ test("explicit host exit saves and verifies the original menu action before clos
 
 test("a saved exit can be restored once in a separately attached game without restarting the old task", async t => {
 	const f = await fixture(t, async () => { throw new Error("MODEL_MUST_NOT_START"); }, "exit-recovery");
+	const previous = f.host.ledger.createMcpTask({ kind: "mcp-session", bridgeInstanceId: "synthetic-game-bridge", sessionId: "synthetic-game-session" });
+	f.host.ledger.details(previous.id, { mode: "assist", prompt: "Original task remains visible" }); f.host.currentTaskId = previous.id;
 	f.host.prepareExit(); await f.host.settled(); let challenge = f.host.confirmation(f.host.currentTaskId, 1);
 	f.host.confirm(f.approval, challenge.nonce, 1); await f.host.settled();
-	assert.equal(f.host.snapshot().recovery.state, "ready"); assert.equal(f.closed.length, 1);
+	assert.equal(f.host.snapshot().recovery.state, "ready"); assert.equal(f.closed.length, 1); assert.equal(f.host.snapshot().currentTaskId, previous.id);
 	Object.assign(f.window, { sourceId: "window:54321:0", windowBinding: "b".repeat(32), gamePid: 13, gameStartedTicks: "638900000000000001", targetId: "new-game-window" });
 	f.host.prepareRecovery(); await f.host.settled(); challenge = f.host.confirmation(f.host.currentTaskId, 2);
 	f.host.confirm(f.approval, challenge.nonce, 2); await f.host.settled();
-	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used");
+	assert.equal(f.host.snapshot().phase, "completed"); assert.equal(f.host.snapshot().recovery.state, "used"); assert.equal(f.host.snapshot().currentTaskId, previous.id);
+	assert.equal(f.host.ledger.detailsFor(previous.id).prompt, "Original task remains visible");
 	assert.equal((await f.client.read("spherewright_get_status")).status.syntheticCommitCount, 2);
 	assert.equal(f.closed.length, 1); assert.ok(!JSON.stringify(f.host.snapshot()).includes("PRIVATE_SYNTHETIC_TOKEN"));
 });

@@ -483,10 +483,10 @@ function App() {
 	}
 	useEffect(() => { window.dispatchEvent(new Event("deck-workspace")); }, [workspace, layoutReady]);
 	useEffect(() => {
-		if (!lifecycleTask || game.currentTaskId !== lifecycleTask.id || game.busy) return;
-		if (game.phase === "completed") { setLayoutNotice(lifecycleTask.kind === "exit" ? game.recovery?.state === "ready" ? "游戏已正常保存并退出，可在主菜单恢复。" : "游戏已正常保存并退出；安全恢复记录不可用。" : "世界已恢复，旧任务保持停止。"); setLifecycleTask(null); }
+		if (!lifecycleTask || game.busy || !game.tasks.some(task => task.id === lifecycleTask.id)) return;
+		if (game.tasks.find(task => task.id === lifecycleTask.id)?.state === "completed") { setLayoutNotice(lifecycleTask.kind === "exit" ? game.recovery?.state === "ready" ? "游戏已正常保存并退出，可在主菜单恢复。" : "游戏已正常保存并退出；安全恢复记录不可用。" : "世界已恢复，旧任务保持停止。"); setLifecycleTask(null); }
 		else if (["failed", "blocked", "reconciling", "cancelled"].includes(game.phase)) { setLayoutNotice("游戏操作未完成，请查看当前任务和原动作回执。"); setLifecycleTask(null); }
-	}, [lifecycleTask, game.currentTaskId, game.busy, game.phase, game.recovery?.state]);
+	}, [lifecycleTask, game.tasks, game.busy, game.phase, game.recovery?.state]);
 	useEffect(() => {
 		const close = (event: PointerEvent) => { if (!menuArea.current?.contains(event.target as Node)) setMenu(null); };
 		const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };

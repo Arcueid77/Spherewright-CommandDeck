@@ -159,7 +159,7 @@ export class GameTasks {
 			this.#notStopped();
 			const parent = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: "assist", limits: { modelRequests: 1, toolCalls: 32, writes: 1, durationMs: 120000 } });
 			this.currentTaskId = parent.id; this.ledger.details(parent.id, { ...binding, mode: "assist", techName: "保存并退出游戏", prompt: "正常保存当前受管世界并退出游戏" });
-			this.exitPlan = { parentId: parent.id, context, window, port, binding, request, worldLabel: safeWorldLabel(session.saveName), token: plan.planToken, planExpiresAt: expiresAt, approvalExpiresAt: this.now() + 120000 };
+			this.exitPlan = { parentId: parent.id, previousTaskId, context, window, port, binding, request, worldLabel: safeWorldLabel(session.saveName), token: plan.planToken, planExpiresAt: expiresAt, approvalExpiresAt: this.now() + 120000 };
 			this.#armLifecycleTimer(this.exitPlan);
 			this.#stage("awaiting_approval");
 		}, previousTaskId);
@@ -179,7 +179,7 @@ export class GameTasks {
 			this.#notStopped();
 			const parent = this.ledger.createMcpTask({ ...context, kind: "mcp-session", mode: "assist", limits: { modelRequests: 1, toolCalls: 32, writes: 1, durationMs: 120000 } });
 			this.currentTaskId = parent.id; this.ledger.details(parent.id, { ...binding, mode: "assist", techName: "恢复上次保存的世界", prompt: "打开已核对的受管主存档，原任务保持停止" });
-			this.recoveryPlan = { parentId: parent.id, context, window, port, binding, record, approvalExpiresAt: this.now() + 120000 };
+			this.recoveryPlan = { parentId: parent.id, previousTaskId, context, window, port, binding, record, approvalExpiresAt: this.now() + 120000 };
 			this.#armLifecycleTimer(this.recoveryPlan);
 			this.#stage("awaiting_approval");
 		}, previousTaskId);
@@ -380,6 +380,7 @@ export class GameTasks {
 				this.recovery = await this.recoveryVault.transition(record.id, "pending", "used");
 				if (this.controller.signal.aborted || this.closing) { this.#stage("cancelled"); return; }
 				this.ledger.completeHostRecoveryParent(this.#approvalAuthority, plan.parentId, action.id); this.#stage("completed");
+				if (plan.previousTaskId) this.currentTaskId = plan.previousTaskId;
 			});
 		}
 		if (challenge.kind === "game-exit") {
@@ -427,6 +428,7 @@ export class GameTasks {
 				this.#notStopped();
 				await this.closeExitWindow(plan.window);
 				this.ledger.completeHostExitParent(this.#approvalAuthority, plan.parentId, action.id); this.#stage("completed");
+				if (plan.previousTaskId) this.currentTaskId = plan.previousTaskId;
 			});
 		}
 		return this.#launch("confirming", async () => {
@@ -521,9 +523,11 @@ export class GameTasks {
 		});
 	}
 	stop() {
+		const previousTaskId = this.exitPlan?.previousTaskId ?? this.recoveryPlan?.previousTaskId ?? null;
 		this.#clearLifecycleTimer(); this.#confirmations.clear(); this.exitPlan = null; this.recoveryPlan = null; this.controller?.abort();
 		if (this.#latchStorageFault()) { this.emit(); return this.snapshot(); }
 		try { this.goalController?.stop("paused"); if (this.currentTaskId) this.ledger.stop(this.currentTaskId); } catch (error) { if (!this.#latchStorageFault()) throw error; this.emit(); return this.snapshot(); }
+		if (previousTaskId && !this.ledger.unresolved().length) this.currentTaskId = previousTaskId;
 		this.phase = this.ledger.unresolved().length ? "reconciling" : "cancelled";
 		if (!this.operation) return this.#launch(this.phase, async () => {});
 		this.emit(); return this.snapshot();
