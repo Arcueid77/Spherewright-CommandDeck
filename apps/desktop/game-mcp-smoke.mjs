@@ -96,7 +96,7 @@ export async function runMcpGameSmoke(driver) {
 			assert.equal(await evaluate("document.querySelector('[aria-label=\"原任务产量验收\"]').textContent.includes('未采样的窗口未逐一核验')"), true);
 			await evaluate("document.querySelector('.game-task-primary .accent').click()");
 			await until(() => evaluate("!document.querySelector('.game-task-editor').hidden"), "NEW_ROUND_FORM");
-			assert.equal(await evaluate("document.querySelector('.mcp-game-form [aria-label=\"游戏任务目标\"]').value"), before.goal.title);
+			assert.equal(await evaluate("document.querySelector('.mcp-game-form [aria-label=\"MCP 游戏任务目标\"]').value"), before.goal.title);
 			assert.equal((await state()).tasks.length, before.tasks.length); assert.equal(await driver.getSyntheticCommitCount(), expectedCommits);
 			await evaluate("[...document.querySelectorAll('.game-task-primary button')].find(button=>button.textContent==='返回当前任务').click()");
 		}
