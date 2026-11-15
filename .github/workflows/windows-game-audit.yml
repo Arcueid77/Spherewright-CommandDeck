@@ -16,10 +16,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm run pi:install
+      - run: npm run pi:hydrate
+      - run: git diff --exit-code -- pi-model-data-lock.json
+      - run: npm run pi:build
+      - run: npm run pi:verify
       - name: Check receipt isolation and owner-only audit
         run: node --test test/game-action-outcome.test.mjs test/game-intent-ledger.test.mjs test/spherewright-game-session.test.mjs test/owner-game-control.test.mjs
