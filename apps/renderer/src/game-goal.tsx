@@ -14,8 +14,8 @@ export type GameGoal = {
 	wait: { reason: string; deadlineAt: number } | null;
 	completionChecks: { label: string; tool: string; path: string; operator: string; value: string | number | boolean }[];
 	observations: { label: string; passed: boolean; available: boolean; actual: string | number | boolean | null; observedAt: number }[];
-	verification: { state: string; stale: boolean; seconds: number; latestRate: number | null; minimumRate: number | null; ageMs: number; startTick: number | null; endTick: number | null; samples?: number; evidenceKind?: string; maximumObservedGapTicks?: number } | null;
-	productionAverage?: { state: string; observedAt: number; seconds: number; ratePerMinute?: number } | null;
+	verification: { state: string; reason?: string | null; stale: boolean; seconds: number; latestRate: number | null; minimumRate: number | null; ageMs: number; startTick: number | null; endTick: number | null; samples?: number; evidenceKind?: string; maximumObservedGapTicks?: number } | null;
+	productionAverage?: { state: string; reason?: string | null; observedAt: number; seconds: number; ratePerMinute?: number } | null;
 	behavior: { state: string; label: string; actionId: string | null; terminal: Record<string, unknown> | null };
 	limits: { modelRequests: number; toolCalls: number; writes: number; durationMs: number };
 	usage: { modelRequests: number; toolCalls: number; writes: number };
@@ -66,8 +66,11 @@ export function GameGoalPanel({ goal, connected, worldProduction }: { goal: Game
 			<p>{rateText} · 目标 {goal.objective.minimumPerMinute}/分钟</p>
 			<p>采样覆盖 {Math.min(Math.floor(measurement?.seconds ?? 0), goal.objective.windowSeconds ?? 0)}/{goal.objective.windowSeconds} 游戏秒</p>
 			<progress max={goal.objective.windowSeconds} value={Math.min(measurement?.seconds ?? 0, goal.objective.windowSeconds ?? 0)} aria-label="产量验收窗口进度" />
+			{measurement && <p>已采样 {measurement.samples ?? 0} 次 · 最大间隔 {measurement.maximumObservedGapTicks === undefined ? "未知" : (measurement.maximumObservedGapTicks / 60).toFixed(1) + " 游戏秒"}</p>}
+			{measurement?.reason === "GAME_GOAL_SAMPLE_GAP" && <p className="notice">采样间隔超过 5 游戏秒，覆盖已重新计算。</p>}
 			<small>每次为 10 游戏秒窗口；未采样的窗口未逐一核验。</small>
 			<p>完整 60 秒平均：{goal.productionAverage?.state === "ready" && goal.productionAverage.ratePerMinute !== undefined ? `${goal.productionAverage.ratePerMinute}/分钟${Date.now() - goal.productionAverage.observedAt > 15000 ? " · 历史读数" : ""}` : "等待无缺口、不重叠的完整窗口"}</p>
+			{goal.productionAverage?.reason === "GAME_GOAL_AVERAGE_GAP" && <p className="notice">完整平均所需窗口存在缺口，已重新累计。</p>}
 		</div>}
 		{goal.objective.kind === "production" && <div className="game-goal-measurement" aria-label="当前世界独立观测">
 			<b>当前世界 · 独立只读观测</b>
