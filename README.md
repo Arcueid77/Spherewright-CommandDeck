@@ -10,6 +10,10 @@ Implementation stages, dependencies and acceptance gates are tracked in the Chin
 
 **游戏 / 观测 / 开发** 分别进入对应工作区。游戏默认显示原生视口与当前任务侧栏，观测使用主题导航，开发默认显示文件、代码/差异与开发 Agent。“＋ 面板”按需添加面板，“布局”管理默认布局与浮窗，“更多”归集设置、工具、历史与媒体、集成。三个工作区分别保存布局，旧开发布局保留为恢复来源。工作区选择只更新显示。[任务展示与导航](docs/game-agent-design.zh-CN.md#工作区导航)
 
+Interactive desktop, native-window and packaged-UI tests require a GitHub-hosted runner. On an intentionally dedicated desktop only, set `COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS=1` to run them locally; they can show windows and take focus. `CI=true` alone does not opt in. The ordinary unit tests and build remain available without opening test windows. A refused interactive test is reported as not run, not as a pass.
+
+涉及真实窗口、焦点和打包界面的测试默认只在 GitHub 托管运行机上执行。只有在专门用于测试的桌面上，才可设置 `COMMANDDECK_ALLOW_VISIBLE_TEST_WINDOWS=1` 在本机运行；这些测试会显示窗口并抢占焦点。单独设置 `CI=true` 不代表同意。本地普通单元测试和构建仍可无测试窗口运行；被拒绝的交互测试记为未运行，不计为通过。
+
 ## Current status
 
 | Stage | Evidence already recorded | Main remaining boundary |

@@ -1,3 +1,6 @@
+import { requireInteractiveTestEnvironment } from "../apps/desktop/interactive-test-policy.mjs";
+requireInteractiveTestEnvironment();
+
 import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, mkdir, writeFile, copyFile, constants, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";

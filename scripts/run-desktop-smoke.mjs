@@ -1,3 +1,6 @@
+import { requireInteractiveTestEnvironment } from "../apps/desktop/interactive-test-policy.mjs";
+requireInteractiveTestEnvironment();
+
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";

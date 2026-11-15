@@ -1,3 +1,6 @@
+import { requireInteractiveTestEnvironment } from "../apps/desktop/interactive-test-policy.mjs";
+requireInteractiveTestEnvironment();
+
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
