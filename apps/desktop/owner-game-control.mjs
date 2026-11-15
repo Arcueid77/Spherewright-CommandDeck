@@ -28,6 +28,10 @@ export function createOwnerGameControl({ enabled, ready, native, game, api, appr
 			await embedded();
 			return game.confirm(approvalAuthority, nonce, approvalEpoch);
 		},
+		async resolveEnergyStoppedHarvest(intentId, originalFailure) {
+			await embedded();
+			return game.resolveEnergyStoppedHarvest(approvalAuthority, intentId, originalFailure);
+		},
 		stop: () => game.stop(),
 	});
 }

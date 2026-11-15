@@ -27,6 +27,31 @@ test("a stopped original route requires a fresh healthy owned context before fai
 	await assert.rejects(readMcpAction(port, request), /HEALTHY_GAME_WRITES_REQUIRED/);
 });
 
+test("energy-starved harvest reads fresh player evidence only for an explicit audit", async () => {
+	const request = { bridgeInstanceId: "bridge", sessionId: "session", planetId: 1, actionId: "action", actionKind: "harvest", idempotencyKey: "key" };
+	const terminal = { ...request, state: "action_failed", terminal: true, succeeded: false, recoveryRequired: false,
+		failureKind: null, stalled: false, doNotRetrySameTarget: false, startedAtGameTick: 10, completedAtGameTick: 20,
+		beforeStateHash: "sha256:" + "b".repeat(64), afterStateHash: "sha256:" + "a".repeat(64), targetObjectId: 42,
+		requestedCount: 12, itemDeltas: [{ itemId: 9001, beforeCount: 7, afterCount: 10, delta: 3 }],
+		message: "The normal mining order stopped after the mecha had no core energy, reactor energy, current reactor item, or usable fuel for 600 game ticks." };
+	const calls = [];
+	const port = { async call(name) {
+		calls.push(name);
+		if (name === "spherewright_get_status") return { success: true, status: { bridgeConnected: true, protocolVersion: 1, bridgeInstanceId: "bridge", writesConfigured: true, writeHealth: "healthy" } };
+		if (name === "spherewright_get_action_result") return { success: true, result: terminal };
+		if (name === "spherewright_get_player_state") return { success: true, result: { sessionId: "session", planetId: 1, capturedAtGameTick: 21 } };
+		return { success: true, result: { bridgeConnected: true, gameLoaded: true, ownedBySpherewright: true, accessRestricted: false, sessionId: "session", localPlanetId: 1, gameTick: 21, writesAllowed: true, writeHealth: "healthy", peacefulMode: "confirmed_peaceful", writeBlockers: [] } };
+	} };
+	const ordinary = await readMcpAction(port, request);
+	assert.equal(ordinary.context, null);
+	assert.ok(!calls.includes("spherewright_get_player_state"));
+	calls.length = 0;
+	const audit = await readMcpAction(port, { ...request, energyAudit: true });
+	assert.equal(audit.player.capturedAtGameTick, 21);
+	assert.equal(audit.context.writeHealth, "healthy");
+	assert.equal(calls.filter(name => name === "spherewright_get_player_state").length, 1);
+});
+
 async function fixture(t, planner, mode = "normal") {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-unified-game-")), authority = {}, approval = {};
 	const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/game-mcp-server.mjs", import.meta.url)), mode], { windowsHide: true, stdio: "pipe", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
@@ -66,6 +91,18 @@ test("stopped-action resolution accepts only host authority and translates it to
 	assert.equal(called, true);
 	assert.equal(f.host.snapshot().error, null);
 	assert.equal(f.frozen(), 0);
+});
+
+test("energy-stopped harvest resolution requires host authority and retains the original proof", async t => {
+	const f = await fixture(t, async () => {});
+	let called = false;
+	f.host.ledger.resolveEnergyStoppedHarvest = async (authority, id, proof) => {
+		assert.notEqual(authority, f.approval); assert.equal(id, "retained-original");
+		assert.equal(proof.state, "action_failed"); called = true;
+	};
+	assert.throws(() => f.host.resolveEnergyStoppedHarvest({}, "retained-original", {}), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
+	f.host.resolveEnergyStoppedHarvest(f.approval, "retained-original", { state: "action_failed" });
+	await f.host.settled(); assert.equal(called, true); assert.equal(f.host.snapshot().error, null); assert.equal(f.frozen(), 0);
 });
 
 test("one stdio discovery supports two native actions through one host ledger without per-action adapters", async t => {

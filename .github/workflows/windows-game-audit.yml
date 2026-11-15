@@ -1,0 +1,25 @@
+name: Windows game receipt audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Check receipt isolation and owner-only audit
+        run: node --test test/game-action-outcome.test.mjs test/game-intent-ledger.test.mjs test/spherewright-game-session.test.mjs test/owner-game-control.test.mjs

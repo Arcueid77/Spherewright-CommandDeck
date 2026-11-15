@@ -14,6 +14,8 @@ The current game mode uses `createAgentSession()` to assemble models, sessions, 
 
 The execution layer already maintains finite goal authorization, action scope, durable intent before dispatch, single submission, original-action reconciliation and unknown-result quarantine. General game tasks have source and synthetic desktop evidence. Evidence for the real research-enqueue workflow has its own scope. [Game execution session](../apps/desktop/spherewright-game-session.mjs) · [Action ledger](../apps/desktop/game-intent-ledger.mjs) · [Roadmap](../ROADMAP.md)
 
+An owner-only independent audit can resolve a retained energy-starved mining failure only when the exact original terminal receipt is re-read and a fresh same-world player observation proves that the order and queue have stopped and the partial yield remains present. The ledger retains the failure and its effects; it never reports the action as successful or submits it again. Other failures and unknown outcomes remain isolated.
+
 For a sustained objective, `startMcp()` creates a host goal controller. After each normal conversational stop, the Pi session receives a current task briefing and continues or ends according to verification, progress and remaining budget. Existing callers retain their single-round semantics. Version 1 goal metadata stores stages, conditions and usage in the existing v3 game ledger, with original action records retaining their format. [Task scheduling](../apps/desktop/game-tasks.mjs) · [Goal controller](../apps/desktop/game-goal.mjs) · [State contract](../apps/desktop/game-goal-contract.mjs)
 
 ## 2. Responsibilities and customization points

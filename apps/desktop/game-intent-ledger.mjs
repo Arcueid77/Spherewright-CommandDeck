@@ -7,7 +7,7 @@ import { modelUsageSnapshot } from "./model-usage.mjs";
 import { modelContextSnapshot } from "./model-context.mjs";
 import { decodeUsageJson, usageSample } from "./usage-summary.mjs";
 import { validateGameGoal } from "./game-goal-contract.mjs";
-import { stoppedGameAction, rejectedGameCommit } from "./game-action-outcome.mjs";
+import { stoppedGameAction, energyStarvedHarvestCandidate, energyStarvedHarvestAudit, rejectedGameCommit } from "./game-action-outcome.mjs";
 import { validateGameExperienceRecord } from "./game-experience.mjs";
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -228,10 +228,25 @@ export class GameIntentLedger {
 			return this.#completeMcp(id, reply.terminal, reply.context, true);
 		} finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
 	}
-	#completeMcp(id, terminal, context, resolvingStoppedAction = false) {
+	async resolveEnergyStoppedHarvest(authority, id, priorFailure) {
+		if (authority !== this.#authority) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		const gate = this.db.prepare("SELECT * FROM game_gate WHERE id=1").get();
+		const intent = this.#intent(id), scope = this.#task(intent.task_id).scope;
+		if (gate?.reason !== "NATIVE_OUTCOME_REQUIRES_AUDIT" || gate.intent_id !== id || scope.kind !== "mcp-action" || scope.actionKind !== "harvest" || intent.state !== "unknown" || !energyStarvedHarvestCandidate(priorFailure) || this.#reading.has(id)) throw new Error("KNOWN_ENERGY_STOP_REQUIRED");
+		const request = Object.freeze({ requestId: randomUUID(), intentId: id, actionKind: scope.actionKind, actionId: intent.action_id, idempotencyKey: intent.idempotency_key, bridgeInstanceId: scope.bridgeInstanceId, sessionId: scope.sessionId, planetId: scope.planetId, generic: true, energyAudit: true });
+		this.#reading.set(id, request);
+		try {
+			const reply = await this.#readResearchProof(request);
+			if (this.#reading.get(id) !== request || !equal(reply?.request, request) || !equal(reply.terminal, priorFailure)) throw new Error("STOPPED_ACTION_PROOF_CHANGED");
+			if (!energyStarvedHarvestAudit(reply.terminal, reply.player, reply.context, this.now())) throw new Error("POWER_STOP_AUDIT_UNPROVED");
+			return this.#completeMcp(id, reply.terminal, reply.context, true, reply.player);
+		} finally { if (this.#reading.get(id) === request) this.#reading.delete(id); }
+	}
+	#completeMcp(id, terminal, context, resolvingStoppedAction = false, energyAuditPlayer = null) {
 		const outcome = this.#transaction(() => {
 			const intent = this.#intent(id), scope = this.#task(intent.task_id).scope, newWorld = scope.actionKind === "new-game";
-			const stopped = stoppedGameAction(terminal);
+			const energyStop = resolvingStoppedAction && energyAuditPlayer !== null && energyStarvedHarvestAudit(terminal, energyAuditPlayer, context, this.now());
+			const stopped = stoppedGameAction(terminal) || energyStop;
 			if (resolvingStoppedAction && !stopped || !resolvingStoppedAction && auditReasons.includes(this.db.prepare("SELECT reason FROM game_gate WHERE id=1").get()?.reason)) throw new Error("INDEPENDENT_GAME_AUDIT_REQUIRED");
 			if (!terminal || terminal.actionId !== intent.action_id || terminal.actionKind !== scope.actionKind || (!newWorld || terminal.idempotencyKey != null) && terminal.idempotencyKey !== intent.idempotency_key || !newWorld && (terminal.sessionId !== scope.sessionId || scope.planetId !== null && terminal.planetId !== scope.planetId)) { this.#unknown(id, "ORIGINAL_ACTION_BINDING_MISMATCH"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
 			if (!stopped && (["outcome_unknown", "recovery_required", "action_failed"].includes(terminal.state) || terminal.recoveryRequired === true || terminal.terminal === true && terminal.succeeded !== true)) { this.#unknown(id, "NATIVE_OUTCOME_REQUIRES_AUDIT"); return "INDEPENDENT_GAME_AUDIT_REQUIRED"; }
@@ -249,6 +264,11 @@ export class GameIntentLedger {
 				itemDeltas: (terminal.itemDeltas ?? []).map(({ itemId, beforeCount, afterCount, delta }) => ({ itemId, beforeCount, afterCount, delta })),
 				proofHash: hash(terminal),
 				resolvedStoppedAction: resolvingStoppedAction,
+			});
+			if (energyStop) Object.assign(summary, {
+				auditKind: "energy_starved_harvest_v1", nativeFailureMessage: terminal.message,
+				playerStateHash: energyAuditPlayer.stateHash, playerCapturedAtGameTick: energyAuditPlayer.capturedAtGameTick,
+				playerOrderAbsent: true, queuedOrders: 0,
 			});
 			this.db.prepare("UPDATE game_intents SET state='completed',terminal=? WHERE id=?").run(JSON.stringify(summary), id);
 			this.db.prepare("UPDATE game_tasks SET state=? WHERE id=?").run(stopped ? "failed" : "completed", intent.task_id); this.db.prepare("DELETE FROM game_gate WHERE intent_id=?").run(id); return null;

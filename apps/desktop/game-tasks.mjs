@@ -304,6 +304,16 @@ export class GameTasks {
 			finally { this.#reconnectOriginal = false; }
 		});
 	}
+	resolveEnergyStoppedHarvest(authority, intentId, priorFailure) {
+		this.#requireStorage();
+		if (authority !== this.hostApproval || this.closing) throw new Error("TRUSTED_APPROVAL_AUTHORITY_REQUIRED");
+		return this.#launch("reconciling", async () => {
+			if (!this.developmentHeld) { await this.freezeDevelopment(); this.developmentHeld = true; }
+			this.#reconnectOriginal = true;
+			try { await this.ledger.resolveEnergyStoppedHarvest(this.#approvalAuthority, intentId, priorFailure); this.#stage("failed"); }
+			finally { this.#reconnectOriginal = false; }
+		});
+	}
 	reconcile(intentId) {
 		this.#requireStorage();
 		const intent = this.ledger.unresolved().find((value) => value.intentId === intentId);

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { publicGameValue } from "./spherewright-tool-catalog.mjs";
-import { stoppedGameAction, rejectedGameCommit } from "./game-action-outcome.mjs";
+import { stoppedGameAction, energyStarvedHarvestCandidate, rejectedGameCommit } from "./game-action-outcome.mjs";
 
 const digest = value => "sha256:" + createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -27,7 +27,15 @@ export async function readMcpAction(port, request) {
 	const terminal = unwrap(await port.call("spherewright_get_action_result", { actionId: request.actionId }));
 	// Return native safety outcomes before a later context read can obscure them.
 	const stopped = stoppedGameAction(terminal);
-	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || ["outcome_unknown", "recovery_required"].includes(terminal.state) || terminal.state === "action_failed" && !stopped || terminal.recoveryRequired === true) return { request, terminal, context: null };
+	const energyAudit = request.energyAudit === true && energyStarvedHarvestCandidate(terminal);
+	if (terminal.actionId !== request.actionId || terminal.actionKind !== request.actionKind || request.actionKind !== "new-game" && (terminal.idempotencyKey !== request.idempotencyKey || terminal.sessionId !== request.sessionId || request.planetId !== null && terminal.planetId !== request.planetId) || ["outcome_unknown", "recovery_required"].includes(terminal.state) || terminal.state === "action_failed" && !stopped && !energyAudit || terminal.recoveryRequired === true) return { request, terminal, context: null };
+	if (energyAudit) {
+		const before = await gameContext(port, request, true);
+		const player = unwrap(await port.call("spherewright_get_player_state", { sessionId: request.sessionId, planetId: request.planetId }));
+		const context = await gameContext(port, request, true);
+		if (!Number.isSafeInteger(before.capturedAtGameTick) || !Number.isSafeInteger(player.capturedAtGameTick) || player.capturedAtGameTick < before.capturedAtGameTick) throw new Error("POWER_STOP_AUDIT_UNPROVED");
+		return { request, terminal, context, player };
+	}
 	return { request, terminal, context: await gameContext(port, request.actionKind === "new-game" ? undefined : request, stopped) };
 }
 

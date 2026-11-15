@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { GameIntentLedger } from "../apps/desktop/game-intent-ledger.mjs";
 import { nativeResearchStateHash } from "../apps/desktop/research-preview.mjs";
 import { ModelUsage } from "../apps/desktop/model-usage.mjs";
+import { readMcpAction } from "../apps/desktop/spherewright-game-session.mjs";
 
 async function fixture(t, { pageSize } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "commanddeck-game-ledger-")), file = join(directory, "game-ledger.sqlite"), authority = {}, stores = []; let now = 100000;
@@ -123,6 +124,75 @@ test("legacy stopped-action classification requires trusted unchanged original p
 	const result = await f.ledger.resolveStoppedAction(f.authority, id, action.terminal);
 	assert.equal(result.terminal.succeeded, false);
 	assert.equal(result.terminal.resolvedStoppedAction, true);
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("energy-starved harvest stays isolated until its exact failure and fresh idle player are independently audited", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f), id = action.intent.intentId;
+	Object.assign(action.terminal, {
+		failureKind: null, stalled: false, doNotRetrySameTarget: false, targetObjectId: 42, requestedCount: 12,
+		message: "The normal mining order stopped after the mecha had no core energy, reactor energy, current reactor item, or usable fuel for 600 game ticks.",
+		itemDeltas: [{ itemId: 9001, beforeCount: 7, afterCount: 10, delta: 3 }],
+	});
+	const zero = { x: 0, y: 0, z: 0 };
+	const player = { sessionId: f.scope.sessionId, planetId: f.scope.planetId, capturedAtGameTick: 1202,
+		stateHashVersion: 1, stateHash: "sha256:" + "f".repeat(64), isAlive: true, isOnPlanet: true, isFlying: false,
+		isSailing: false, movementState: "Walk", speed: 0, inventory: [{ itemId: 9001, count: 10 }],
+		nativePhysics: { state: "observed", currentOrderPresent: false, queuedOrderCount: 0, controllerMovementStateInFrame: "Walk",
+			groundContact: { cachedWalkIsGrounded: true }, velocity: zero, walkManualVelocity: zero, walkRtsVelocity: zero, controllerVerticalSpeed: 0 } };
+	const context = { ...action.context, loaded: true, capturedAtGameTick: 1203 };
+	f.ledger.markUnknown(id);
+	f.ledger.db.prepare("UPDATE game_gate SET reason='NATIVE_OUTCOME_REQUIRES_AUDIT' WHERE intent_id=?").run(id);
+	f.setProofReply(request => ({ request, terminal: action.terminal, context, player }));
+	await assert.rejects(f.ledger.reconcile(id), /INDEPENDENT_GAME_AUDIT_REQUIRED/);
+	await assert.rejects(f.ledger.resolveEnergyStoppedHarvest({}, id, action.terminal), /TRUSTED_APPROVAL_AUTHORITY_REQUIRED/);
+	await assert.rejects(f.ledger.resolveEnergyStoppedHarvest(f.authority, id, { ...action.terminal, targetObjectId: 43 }), /STOPPED_ACTION_PROOF_CHANGED/);
+	for (const changed of [
+		{ ...player, nativePhysics: { ...player.nativePhysics, currentOrderPresent: true } },
+		{ ...player, nativePhysics: { ...player.nativePhysics, queuedOrderCount: 1 } },
+		{ ...player, speed: 1 }, { ...player, inventory: [{ itemId: 9001, count: 9 }] },
+		{ ...player, capturedAtGameTick: 1199 },
+	]) {
+		f.setProofReply(request => ({ request, terminal: action.terminal, context, player: changed }));
+		await assert.rejects(f.ledger.resolveEnergyStoppedHarvest(f.authority, id, action.terminal), /POWER_STOP_AUDIT_UNPROVED/);
+		assert.equal(f.ledger.unresolved()[0].state, "unknown");
+	}
+	f.setProofReply(request => ({ request, terminal: action.terminal, context, player }));
+	const result = await f.ledger.resolveEnergyStoppedHarvest(f.authority, id, action.terminal);
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(result.terminal.state, "action_failed");
+	assert.equal(result.terminal.auditKind, "energy_starved_harvest_v1");
+	assert.deepEqual(result.terminal.itemDeltas, action.terminal.itemDeltas);
+	assert.equal(f.ledger.task(action.task.id).state, "failed");
+	assert.equal(f.ledger.unresolved().length, 0);
+});
+
+test("energy-starved audit carries the native original through fresh MCP observations into the ledger", async t => {
+	const f = await fixture(t), action = stoppedHarvest(f), id = action.intent.intentId;
+	f.advance(Date.now() - 100000);
+	Object.assign(action.terminal, { failureKind: null, stalled: false, doNotRetrySameTarget: false,
+		targetObjectId: 42, requestedCount: 12, itemDeltas: [{ itemId: 9001, beforeCount: 7, afterCount: 10, delta: 3 }],
+		message: "The normal mining order stopped after the mecha had no core energy, reactor energy, current reactor item, or usable fuel for 600 game ticks." });
+	const zero = { x: 0, y: 0, z: 0 }, player = { sessionId: f.scope.sessionId, planetId: f.scope.planetId, capturedAtGameTick: 1202,
+		stateHashVersion: 1, stateHash: "sha256:" + "f".repeat(64), isAlive: true, isOnPlanet: true, isFlying: false,
+		isSailing: false, movementState: "Walk", speed: 0, inventory: [{ itemId: 9001, count: 10 }],
+		nativePhysics: { state: "observed", currentOrderPresent: false, queuedOrderCount: 0, controllerMovementStateInFrame: "Walk",
+			groundContact: { cachedWalkIsGrounded: true }, velocity: zero, walkManualVelocity: zero, walkRtsVelocity: zero, controllerVerticalSpeed: 0 } };
+	let gameTick = 1201;
+	const port = { async call(name) {
+		if (name === "spherewright_get_status") return { success: true, status: { bridgeConnected: true, protocolVersion: 1, bridgeInstanceId: f.scope.bridgeInstanceId, writesConfigured: true, writeHealth: "healthy" } };
+		if (name === "spherewright_get_action_result") return { success: true, result: action.terminal };
+		if (name === "spherewright_get_player_state") return { success: true, result: player };
+		return { success: true, result: { bridgeConnected: true, gameLoaded: true, ownedBySpherewright: true, accessRestricted: false,
+			sessionId: f.scope.sessionId, localPlanetId: f.scope.planetId, gameTick: ++gameTick, writesAllowed: true,
+			writeHealth: "healthy", peacefulMode: "confirmed_peaceful", writeBlockers: [] } };
+	} };
+	f.ledger.markUnknown(id);
+	f.ledger.db.prepare("UPDATE game_gate SET reason='NATIVE_OUTCOME_REQUIRES_AUDIT' WHERE intent_id=?").run(id);
+	f.setProofReply(request => readMcpAction(port, request));
+	const result = await f.ledger.resolveEnergyStoppedHarvest(f.authority, id, action.terminal);
+	assert.equal(result.terminal.succeeded, false);
+	assert.equal(result.terminal.auditKind, "energy_starved_harvest_v1");
 	assert.equal(f.ledger.unresolved().length, 0);
 });
 
